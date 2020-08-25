@@ -1,7 +1,7 @@
 version: automatic_{branch}_build_{build}
 branches:
   only:
-  - master
+  - minus-minus
 skip_tags: true
 configuration: Release
 environment:
@@ -28,4 +28,4 @@ deploy:
   prerelease: true
   force_update: true
   on:
-    branch: master
+    branch: minus-minus
