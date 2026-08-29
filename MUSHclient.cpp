@@ -1070,6 +1070,11 @@ void CMUSHclientApp::OnGameMinimiseprogram()
 
 BOOL CMUSHclientApp::PreTranslateMessage(MSG* pMsg)
 {
+	// A queued message can outlive its target window. Do not let MFC look up a
+	// stale permanent CWnd for a message that Windows can no longer deliver.
+	if (pMsg->hwnd != NULL && !::IsWindow(pMsg->hwnd))
+		return TRUE;
+
 	// CG: The following lines were added by the Splash Screen component.
 	if (CSplashWnd::PreTranslateAppMessage(pMsg))
 		return TRUE;
