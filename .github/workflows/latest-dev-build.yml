@@ -39,7 +39,9 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: MUSHclient_Release
-        path: WinRel/MUSHclient.exe
+        path: |
+          WinRel/MUSHclient.exe
+          WinRel/MUSHclient.pdb
 
     - name: Upload Debug artifacts
       if: matrix.configuration == 'Debug'
@@ -85,7 +87,9 @@ jobs:
         tag_name: latest_commit
         name: Latest Commit (Release)
         prerelease: true
-        files: ./release/MUSHclient.exe
+        files: |
+          ./release/MUSHclient.exe
+          ./release/MUSHclient.pdb
         body: |
           Automatic release build from latest commit.
           
