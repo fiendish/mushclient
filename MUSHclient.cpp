@@ -1006,9 +1006,9 @@ BOOL CMUSHclientApp::OnIdle(LONG lCount)
 	if (CWinApp::OnIdle(lCount))
     return 1;
 
-CWnd* wnd = Frame.GetForegroundWindow( );
+HWND hwndForeground = ::GetForegroundWindow( );
 
-  if (!wnd)
+  if (!hwndForeground)
     return 0;
 
 // update activity window if required
@@ -1027,9 +1027,9 @@ CWnd* wnd = Frame.GetForegroundWindow( );
 
 // See if the front window is our main frame
 
-	if (wnd->IsKindOf(RUNTIME_CLASS(CMainFrame)))
+	if (hwndForeground == Frame.GetSafeHwnd ())
     {
-    CMainFrame * frame = (CMainFrame *) wnd;
+    CMainFrame * frame = &Frame;
 
 // find the active view
 
