@@ -314,6 +314,8 @@ bool tLuaCOM::getConstant(lua_State* L, const char* name)
 
 bool tLuaCOM::getDISPID(const char* name, DISPID* dispid)
 {
+   checkComObject();
+
    HRESULT hr;
    wchar_t* w_name = (wchar_t*) malloc( (strlen(name) + 1) * sizeof(wchar_t));
    mbstowcs(w_name,name,strlen(name)+1);
@@ -331,6 +333,8 @@ int tLuaCOM::call(lua_State* L,
                   FUNCDESC *pfuncdesc,
                   tLuaObjList params)
 { 
+  checkComObject();
+
   tUtil::log_verbose("tLuaCOM.call", "about to call DISPID 0x%.8x", dispid);
 
    HRESULT hr             = 0;
@@ -432,6 +436,8 @@ int tLuaCOM::call(lua_State* L,
 
 DWORD tLuaCOM::addConnection(tLuaCOM *server)
 {
+  checkComObject();
+
   if(!server->hasTypeInfo())
     return false;
 
@@ -502,6 +508,8 @@ void tLuaCOM::releaseConnection()
 
 void tLuaCOM::releaseConnection(tLuaCOM* server, DWORD cookie)
 {
+  checkComObject();
+
   IConnectionPointContainer *pcpc = NULL;
 
   IConnectionPoint *connection_point;
@@ -542,6 +550,11 @@ void tLuaCOM::releaseConnections() {
     return;
 
   conn_point->Release();
+  conn_point = NULL;
+
+  if(!pdisp)
+    return;
+
   IConnectionPointContainer *pcpc;
 
   HRESULT hr = pdisp->QueryInterface(IID_IConnectionPointContainer, (void **) &pcpc);
@@ -597,6 +610,8 @@ void tLuaCOM::releaseConnections() {
 
 bool tLuaCOM::isMember(const char * name)
 {
+  checkComObject();
+
   HRESULT hr;
   DISPID dumb_dispid;
   
@@ -718,6 +733,8 @@ tLuaCOM * tLuaCOM::CreateLuaCOM(lua_State* L,
 
 ITypeInfo * tLuaCOM::GetDefaultEventsInterface()
 {
+  checkComObject();
+
   CLSID clsid = GetCLSID();
   if(clsid == IID_NULL)
     return NULL;
@@ -742,6 +759,7 @@ void tLuaCOM::ReleaseFuncDesc(FUNCDESC * pfuncdesc)
 
 IDispatch * tLuaCOM::GetIDispatch()
 {
+  checkComObject();
   return pdisp;
 }
 
@@ -763,6 +781,8 @@ CLSID tLuaCOM::GetCLSID()
 
   if(clsid != IID_NULL)
     return clsid;
+
+  checkComObject();
 
   // tries to find the CLSID using IProvideClassInfo
   tCOMPtr<ITypeInfo> coclassinfo;
@@ -812,8 +832,18 @@ bool tLuaCOM::hasTypeInfo(void)
     return false;
 }
 
-// Do an extra Release() on the COM Object. 
-// Not necessary if all works well. To circumvent buggy Software :-)
+void tLuaCOM::checkComObject() const
+{
+  if(!pdisp)
+    LUACOM_ERROR("COM object has been released.");
+}
+
+// Releases the reference owned by this wrapper. The wrapper remains valid so
+// Lua garbage collection can destroy it safely, but it cannot call COM again.
 void tLuaCOM::releaseComObject() {
-  if(pdisp) pdisp->Release();
+  if(!pdisp)
+    return;
+
+  releaseConnections();
+  pdisp.Release();
 }

@@ -107,6 +107,7 @@ protected:
 
   FuncInfo pFuncInfo[MAX_FUNCINFOS];
 private:
+  void checkComObject() const;
   long ID;
   char* objName;
 };
