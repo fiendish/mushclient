@@ -79,6 +79,17 @@ jobs:
         name: MUSHclient_Debug
         path: ./debug
 
+    - name: Verify current master commit
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        current_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq '.object.sha')
+        if [[ "$current_sha" != "$GITHUB_SHA" ]]; then
+          printf 'Refusing to replace rolling releases from stale commit %s; current master is %s.\n' "$GITHUB_SHA" "$current_sha" >&2
+          exit 1
+        fi
+
     - name: Delete tags and releases
       shell: bash
       run: |
