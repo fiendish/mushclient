@@ -540,19 +540,23 @@ long iResult = SetBaseOptionItem (iItem,
       // save current line text
       CString strLine = CString (m_pCurrentLine->text, m_pCurrentLine->len);
 
+      int iMemoryAllocated = MAX (m_pCurrentLine->len, Value);
+      if (m_bUTF_8)
+        iMemoryAllocated *= 4;
+
 #ifdef USE_REALLOC
       m_pCurrentLine->text  = (char *) 
             realloc (m_pCurrentLine->text, 
-                     MAX (m_pCurrentLine->len, Value) 
-                     * sizeof (char));  
+                     iMemoryAllocated * sizeof (char));
 #else
       delete [] m_pCurrentLine->text;
-      m_pCurrentLine->text = new char [MAX (m_pCurrentLine->len, Value)];
+      m_pCurrentLine->text = new char [iMemoryAllocated];
 #endif
 
       // put text back
       memcpy (m_pCurrentLine->text, (LPCTSTR) strLine, m_pCurrentLine->len);
       ASSERT (m_pCurrentLine->text);
+      m_pCurrentLine->iMemoryAllocated = iMemoryAllocated;
       }   // end of having a current line
     SendWindowSizes (Value);
     }
