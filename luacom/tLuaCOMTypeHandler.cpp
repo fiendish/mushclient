@@ -105,6 +105,135 @@ void pushTableVariantHeader(lua_State* L, VARTYPE vt)
   lua_pushstring(L, "Value");
 }
 
+bool parseUnsignedDecimal(const char* text, size_t length, ULONGLONG limit,
+                          ULONGLONG* result)
+{
+  if(!text || length == 0)
+    return false;
+
+  ULONGLONG value = 0;
+  for(size_t i = 0; i < length; i++)
+  {
+    if(text[i] < '0' || text[i] > '9')
+      return false;
+
+    const ULONGLONG digit = static_cast<ULONGLONG>(text[i] - '0');
+    if(value > (limit - digit) / 10)
+      return false;
+    value = value * 10 + digit;
+  }
+
+  *result = value;
+  return true;
+}
+
+bool parseSignedDecimal(const char* text, size_t length, LONGLONG* result)
+{
+  if(!text || length == 0)
+    return false;
+
+  const bool negative = text[0] == '-';
+  const size_t first_digit = negative ? 1 : 0;
+  if(first_digit == length)
+    return false;
+
+  const ULONGLONG positive_limit = 9223372036854775807ULL;
+  const ULONGLONG negative_limit = 9223372036854775808ULL;
+  ULONGLONG magnitude = 0;
+  if(!parseUnsignedDecimal(text + first_digit, length - first_digit,
+                           negative ? negative_limit : positive_limit,
+                           &magnitude))
+    return false;
+
+  if(negative)
+  {
+    if(magnitude == negative_limit)
+      *result = -9223372036854775807LL - 1;
+    else
+      *result = -static_cast<LONGLONG>(magnitude);
+  }
+  else
+    *result = static_cast<LONGLONG>(magnitude);
+
+  return true;
+}
+
+bool luaNumberToSignedInteger(lua_Number number, LONGLONG* result)
+{
+  const lua_Number exact_limit = static_cast<lua_Number>(9007199254740992.0);
+  if(number != number || number < -exact_limit || number > exact_limit)
+    return false;
+
+  const LONGLONG value = static_cast<LONGLONG>(number);
+  if(static_cast<lua_Number>(value) != number)
+    return false;
+
+  *result = value;
+  return true;
+}
+
+bool luaNumberToUnsignedInteger(lua_Number number, ULONGLONG* result)
+{
+  const lua_Number exact_limit = static_cast<lua_Number>(9007199254740992.0);
+  if(number != number || number < 0 || number > exact_limit)
+    return false;
+
+  const ULONGLONG value = static_cast<ULONGLONG>(number);
+  if(static_cast<lua_Number>(value) != number)
+    return false;
+
+  *result = value;
+  return true;
+}
+
+bool luaValueToSignedInteger(lua_State* L, int index, LONGLONG* result)
+{
+#if LUA_VERSION_NUM >= 503
+  if(lua_isinteger(L, index))
+  {
+    *result = static_cast<LONGLONG>(lua_tointeger(L, index));
+    return true;
+  }
+#endif
+  return lua_type(L, index) == LUA_TNUMBER &&
+         luaNumberToSignedInteger(lua_tonumber(L, index), result);
+}
+
+bool luaValueToUnsignedInteger(lua_State* L, int index, ULONGLONG* result)
+{
+#if LUA_VERSION_NUM >= 503
+  if(lua_isinteger(L, index))
+  {
+    const lua_Integer value = lua_tointeger(L, index);
+    if(value < 0)
+      return false;
+    *result = static_cast<ULONGLONG>(value);
+    return true;
+  }
+#endif
+  return lua_type(L, index) == LUA_TNUMBER &&
+         luaNumberToUnsignedInteger(lua_tonumber(L, index), result);
+}
+
+void pushUnsignedIntegerString(lua_State* L, ULONGLONG value, bool negative)
+{
+  char buffer[32];
+  char* end = buffer + sizeof(buffer);
+  char* current = end;
+
+  do
+  {
+    *--current = static_cast<char>('0' + value % 10);
+    value /= 10;
+  }
+  while(value != 0);
+
+  if(negative)
+    *--current = '-';
+
+  lua_pushlstring(L, current, static_cast<size_t>(end - current));
+}
+
 void pushSignedInteger(lua_State* L, LONGLONG value)
 {
 #if LUA_VERSION_NUM >= 503
@@ -115,7 +244,17 @@ void pushSignedInteger(lua_State* L, LONGLONG value)
     return;
   }
 #endif
-  lua_pushnumber(L, static_cast<lua_Number>(value));
+  if(value >= -9007199254740992LL && value <= 9007199254740992LL)
+  {
+    lua_pushnumber(L, static_cast<lua_Number>(value));
+    return;
+  }
+
+  const bool negative = value < 0;
+  const ULONGLONG magnitude = negative
+    ? static_cast<ULONGLONG>(-(value + 1)) + 1
+    : static_cast<ULONGLONG>(value);
+  pushUnsignedIntegerString(L, magnitude, negative);
 }
 
 void pushUnsignedInteger(lua_State* L, ULONGLONG value)
@@ -127,7 +266,13 @@ void pushUnsignedInteger(lua_State* L, ULONGLONG value)
     return;
   }
 #endif
-  lua_pushnumber(L, static_cast<lua_Number>(value));
+  if(value <= 9007199254740992ULL)
+  {
+    lua_pushnumber(L, static_cast<lua_Number>(value));
+    return;
+  }
+
+  pushUnsignedIntegerString(L, value, false);
 }
 
 bool pushLuaDispatchIfSameState(lua_State* L, IUnknown* object)
@@ -616,24 +761,20 @@ void tLuaCOMTypeHandler::lua2com(lua_State* L, stkIndex luaval, VARIANTARG& varg
   switch(lua_type(L, luaval))
   {
   case LUA_TNUMBER:
-#if LUA_VERSION_NUM >= 503
-    if(lua_isinteger(L, luaval))
+    if(type == VT_I8)
     {
-      const lua_Integer value = lua_tointeger(L, luaval);
-      if(type == VT_I8)
-      {
-        varg.vt = VT_I8;
-        varg.llVal = static_cast<LONGLONG>(value);
-        break;
-      }
-      if(type == VT_UI8 && value >= 0)
-      {
-        varg.vt = VT_UI8;
-        varg.ullVal = static_cast<ULONGLONG>(value);
-        break;
-      }
+      if(!luaValueToSignedInteger(L, luaval, &varg.llVal))
+        TYPECONV_ERROR("int8 numbers must be exact integers in the Lua numeric range.");
+      varg.vt = VT_I8;
+      break;
     }
-#endif
+    if(type == VT_UI8)
+    {
+      if(!luaValueToUnsignedInteger(L, luaval, &varg.ullVal))
+        TYPECONV_ERROR("uint8 numbers must be exact non-negative integers in the Lua numeric range.");
+      varg.vt = VT_UI8;
+      break;
+    }
     varg.dblVal = lua_tonumber(L, luaval);
     varg.vt = VT_R8;
     break;
@@ -641,11 +782,28 @@ void tLuaCOMTypeHandler::lua2com(lua_State* L, stkIndex luaval, VARIANTARG& varg
 
   case LUA_TSTRING:
     {
-      tStringBuffer str;
-      size_t l_len = lua_strlen(L, luaval);
-      str.copyToBuffer(lua_tostring(L, luaval), l_len);
-      varg.vt = VT_BSTR;
-      varg.bstrVal = tUtil::string2bstr(str, l_len);
+      size_t l_len = 0;
+      const char* value = lua_tolstring(L, luaval, &l_len);
+      if(type == VT_I8)
+      {
+        if(!parseSignedDecimal(value, l_len, &varg.llVal))
+          TYPECONV_ERROR("int8 strings must contain one decimal integer in range.");
+        varg.vt = VT_I8;
+      }
+      else if(type == VT_UI8)
+      {
+        if(!parseUnsignedDecimal(value, l_len, ~static_cast<ULONGLONG>(0),
+                                 &varg.ullVal))
+          TYPECONV_ERROR("uint8 strings must contain one non-negative decimal integer in range.");
+        varg.vt = VT_UI8;
+      }
+      else
+      {
+        tStringBuffer str;
+        str.copyToBuffer(value, l_len);
+        varg.vt = VT_BSTR;
+        varg.bstrVal = tUtil::string2bstr(str, l_len);
+      }
     }
     break;
 
@@ -731,20 +889,26 @@ void tLuaCOMTypeHandler::lua2com(lua_State* L, stkIndex luaval, VARIANTARG& varg
             VariantChangeType(&varg, &varg, 0, VT_DECIMAL);
           } else if(strcmp(vtype, "int8") == 0) {
             varg.vt = VT_I8;
-#if LUA_VERSION_NUM >= 503
-            if(lua_isinteger(L, -1))
-              varg.llVal = static_cast<LONGLONG>(lua_tointeger(L, -1));
-            else
-#endif
-              varg.llVal = static_cast<LONGLONG>(lua_tonumber(L, -1));
+            if(lua_type(L, -1) == LUA_TSTRING) {
+              size_t length = 0;
+              const char* value = lua_tolstring(L, -1, &length);
+              if(!parseSignedDecimal(value, length, &varg.llVal))
+                TYPECONV_ERROR("int8 strings must contain one decimal integer in range.");
+            }
+            else if(!luaValueToSignedInteger(L, -1, &varg.llVal))
+              TYPECONV_ERROR("int8 values must be exact integers or decimal strings in range.");
           } else if(strcmp(vtype, "uint8") == 0) {
             varg.vt = VT_UI8;
-#if LUA_VERSION_NUM >= 503
-            if(lua_isinteger(L, -1))
-              varg.ullVal = static_cast<ULONGLONG>(lua_tointeger(L, -1));
-            else
-#endif
-              varg.ullVal = static_cast<ULONGLONG>(lua_tonumber(L, -1));
+            if(lua_type(L, -1) == LUA_TSTRING) {
+              size_t length = 0;
+              const char* value = lua_tolstring(L, -1, &length);
+              if(!parseUnsignedDecimal(value, length,
+                                       ~static_cast<ULONGLONG>(0),
+                                       &varg.ullVal))
+                TYPECONV_ERROR("uint8 strings must contain one non-negative decimal integer in range.");
+            }
+            else if(!luaValueToUnsignedInteger(L, -1, &varg.ullVal))
+              TYPECONV_ERROR("uint8 values must be exact non-negative integers or decimal strings in range.");
           } else if(strcmp(vtype, "int4") == 0) {
             varg.vt = VT_I4;
             varg.lVal = (int)lua_tonumber(L, -1);
