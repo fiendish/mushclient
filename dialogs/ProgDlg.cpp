@@ -145,13 +145,14 @@ void CProgressDlg::PumpMessages()
     ASSERT(m_hWnd!=NULL);
 
     MSG msg;
-    // Handle dialog messages
-    while(PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+    // Use the MFC message pump so application-level pre-translation still runs.
+    while(::PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))
     {
-      if(!IsDialogMessage(&msg))
+      if(!AfxGetApp()->PumpMessage())
       {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);  
+        m_bCancel = TRUE;
+        ::PostQuitMessage((int) msg.wParam);
+        break;
       }
     }
 }
