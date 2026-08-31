@@ -1196,6 +1196,7 @@ public:
   CFont * m_input_font;
   int m_InputFontHeight,
       m_InputFontWidth; 
+  bool m_bSuppressCommandWindowAutoResize;
 
   __int64 m_nBytesIn;
   __int64 m_nBytesOut;
@@ -2554,6 +2555,8 @@ public:
 	afx_msg BSTR PushCommand();
 	afx_msg void SelectCommand();
 	afx_msg BSTR GetCommand();
+	afx_msg long GetCommandCursorPosition();
+	afx_msg long GetCommandLineCount();
 	afx_msg long AddTriggerEx(LPCTSTR TriggerName, LPCTSTR MatchText, LPCTSTR ResponseText, long Flags, short Colour, short Wildcard, LPCTSTR SoundFileName, LPCTSTR ScriptName, short SendTo, short Sequence);
 	afx_msg VARIANT GetQueue();
 	afx_msg long DeleteTemporaryTriggers();
@@ -2765,6 +2768,7 @@ public:
 	afx_msg long GetSoundStatus(short Buffer);
 	afx_msg long PlaySound(short Buffer, LPCTSTR FileName, BOOL Loop, double Volume, double Pan);
 	afx_msg long SetCommandWindowHeight(short Height);
+	afx_msg long SetCommandWindowAutoResizeSuppressed(BOOL Suppressed);
 	afx_msg long SetToolBarPosition(short Which, BOOL Float, short Side, long Top, long Left);
 	afx_msg long ShiftTabCompleteItem(LPCTSTR Item);
 	afx_msg long NotepadReadOnly(LPCTSTR Title, BOOL ReadOnly);

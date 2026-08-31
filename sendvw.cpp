@@ -513,7 +513,9 @@ void CSendView::OnKeysPrevcommand()
   if (m_HistoryPosition &&   
       !strCommand.IsEmpty () &&
       pDoc->m_bAutoRepeat && 
-      m_iHistoryStatus == eAtBottom)
+      m_iHistoryStatus == eAtBottom &&
+      !m_bChanged &&
+      strCommand == m_msgList.GetAt (m_HistoryPosition))
     m_msgList.GetPrev (m_HistoryPosition);
 
   if (m_HistoryPosition)
@@ -2900,7 +2902,8 @@ void CSendView::AdjustCommandWindowSize (void)
 	ASSERT_VALID(pDoc);
 
   // do nothing if not wanted
-  if (!pDoc->m_bAutoResizeCommandWindow)
+  if (!pDoc->m_bAutoResizeCommandWindow ||
+      pDoc->m_bSuppressCommandWindowAutoResize)
     return;
 
   // find how many lines in command window
