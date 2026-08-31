@@ -48,12 +48,14 @@ public:
   IDispatch * GetIDispatch(void);
   void ReleaseFuncDesc(FUNCDESC *pfuncdesc);
   ITypeInfo * GetDefaultEventsInterface(void);
+  const char* GetObjName() const { return objName; }
   static tLuaCOM * CreateLuaCOM(
     lua_State* L,
     IDispatch * pdisp,
     const CLSID& coclass = IID_NULL,
     ITypeInfo* typeinfo=NULL,
-    bool untyped = false
+    bool untyped = false,
+    const char* name=NULL
     );
 
   void getHelpInfo(char **ppHelpFile, DWORD *pHelpContext);
@@ -76,6 +78,7 @@ public:
    bool getFUNCDESC(const char* name, FuncInfo& funcinfo);
    bool getConstant(lua_State* L, const char* name);
    bool getDISPID(const char* name, DISPID* dispid);
+   void releaseComObject();
 
   volatile static long NEXT_ID;
 protected:
@@ -105,6 +108,7 @@ protected:
   FuncInfo pFuncInfo[MAX_FUNCINFOS];
 private:
   long ID;
+  char* objName;
 };
 
 #endif // __LUACOM_H

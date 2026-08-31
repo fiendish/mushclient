@@ -163,8 +163,24 @@ static int luacom_ShowHelp(lua_State *L)
 
   luacom->getHelpInfo(&pHelpFile, &context);
 
-  if(pHelpFile != NULL)
+  if(pHelpFile != NULL && strlen(pHelpFile) > 0)
   {
+    DWORD dwAttrib = GetFileAttributesA(pHelpFile);
+    if (dwAttrib == INVALID_FILE_ATTRIBUTES || (dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
+      {
+	char msg[2048];
+	const char* objName = luacom->GetObjName();
+	if (objName == NULL) objName = "The COM object";
+	_snprintf(msg, sizeof(msg),
+		  "The help file for '%s' was not found at the expected location:\n\n%s\n\n"
+		  "The application points to a file that is not installed on this system.", 
+		  objName, pHelpFile);
+	// safety
+	msg[sizeof(msg) - 1] = '\0';
+
+	::MessageBoxA(NULL, msg, "LuaCOM - Help File Missing", MB_OK | MB_ICONWARNING);
+	return 0;
+      }
     size_t len = strlen(pHelpFile);
     if (len >= 4 && _stricmp(pHelpFile + len - 4, ".chm") == 0)
     {
@@ -185,6 +201,14 @@ static int luacom_ShowHelp(lua_State *L)
       else
         WinHelpA(NULL, pHelpFile, HELP_FINDER, 0);
     }
+  }
+  else
+  {
+    ::MessageBoxA(NULL,
+		  "The COM object does not provide a path to a local help file (.chm).\n"
+		  "Modern applications often use online help exclusively.", 
+		  "LuaCOM - Help not found", 
+		  MB_OK | MB_ICONINFORMATION);
   }
 
   return 0;
@@ -516,7 +540,7 @@ static int luacom_CreateObject(lua_State *L)
     if(SUCCEEDED(hr))
       psi->InitNew();
 
-    lcom = tLuaCOM::CreateLuaCOM(L, pdisp, clsid, NULL, untyped);
+    lcom = tLuaCOM::CreateLuaCOM(L, pdisp, clsid, NULL, untyped, (const char*)progId);
   }
   catch(class tLuaCOMException& e)
   {
@@ -2118,11 +2142,21 @@ static int call_event(lua_State *L)
 
 static int luacom_RoundTrip(lua_State *L) {
   VARIANTARG v;
+  VariantInit(&v);
 
-  tLuaCOMTypeHandler *handler = new tLuaCOMTypeHandler(NULL);
-  handler->lua2com(L, 1, v);
-  handler->com2lua(L, v);
-  delete handler;
+  tLuaCOMTypeHandler handler(NULL);
+  try
+  {
+    handler.lua2com(L, 1, v);
+    handler.com2lua(L, v);
+  }
+  catch(...)
+  {
+    VariantClear(&v);
+    throw;
+  }
+
+  VariantClear(&v);
 
   return 1;
 }
@@ -2138,6 +2172,20 @@ static int luacom_SetCodepage(lua_State *L) {
   code_page=(UINT)luaL_checkinteger(L, 1);
   return 0;
 }
+
+
+static int luacom_ReleaseComObject(lua_State *L)
+{
+  // check parameters
+  tLuaCOM* obj = (tLuaCOM *) LuaBeans::check_tag(L, 1);
+
+  if(obj->hasTypeInfo())
+  {
+	obj->releaseComObject();
+  }
+  return 0;
+}
+
 
 ///
 /// Table of functions exported by Lua.
@@ -2178,7 +2226,8 @@ static struct luaL_Reg functions_tb []=
   {"StartMessageLoop", luacom_StartMessageLoop},
   {"RoundTrip", luacom_RoundTrip},
   {"GetCodepage", luacom_GetCodepage},	// -hg 24.9.2015
-  {"SetCodepage", luacom_SetCodepage},  
+  {"SetCodepage", luacom_SetCodepage},
+  {"ReleaseComObject", luacom_ReleaseComObject}, //hg 06.09.2022
   {NULL, NULL}
 };
   
@@ -2235,6 +2284,11 @@ LUACOM_API void luacom_open(lua_State *L)
 
   // creates LuaCOM library table
   luaL_register(L, LIBNAME, functions_tb);
+
+  // sets version
+  lua_pushstring(L, "_VERSION");
+  lua_pushstring(L, LUACOM_VERSION);
+  lua_settable(L, -3);
 
   // prepares to store configuration table in
   // library table
@@ -2301,16 +2355,26 @@ LUACOM_API void luacom_open(lua_State *L)
   luaCompat_moduleSet(L, MODULENAME, LUACOM_SHOULD_ABORT_API);
 
   /* NJG
-  // loads the lua code that implements the remaining
+  // loadls the lua code that implements the remaining
   // features of LuaCOM
-  int top1 = lua_gettop(L);
+  int status = LUA_OK;
 #ifdef LUA_DEBUGGING
-  lua_dofile(L, "luacom5.lua");
+  status = luaL_dofile(L, "luacom5.lua");
 #else
-#include "luacom5.loh"
+  #include "luacom.loh"
+  status = luaL_loadbuffer(L, (const char*)luacom5_source_bytes,
+			   luacom5_source_size, "@luacom5.lua");
+  if (status == LUA_OK) {
+    status = lua_pcall(L, 0, 0, 0);
+  }
 #endif
-  if (lua_gettop(L) > top1) lua_error(L); // failed loading
+  if (status != LUA_OK) {
+    const char* msg = lua_tostring(L, -1);
+    fprintf(stderr, "luacom.dll error: %s\n", msg ? msg : "unknown");
+    lua_error(L);
+  }
   */
+
   idxDispatch = (void*)&luacom_runningInprocess;
 
   LUASTACK_CLEAN(L, 0);

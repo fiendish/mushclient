@@ -22,6 +22,26 @@ DEFINE_GUID(IID_IProxyManager, 0x00000008, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x0
 
 volatile long tLuaCOM::NEXT_ID = 0;
 
+namespace
+{
+class ExceptionInfoStrings
+{
+public:
+  explicit ExceptionInfoStrings(EXCEPINFO& exception_info)
+    : info(exception_info) {}
+
+  ~ExceptionInfoStrings()
+  {
+    SysFreeString(info.bstrSource);
+    SysFreeString(info.bstrDescription);
+    SysFreeString(info.bstrHelpFile);
+  }
+
+private:
+  EXCEPINFO& info;
+};
+}
+
 tLuaCOM::tLuaCOM(lua_State* L,
                  IDispatch *pdisp_arg,
                  ITypeInfo *ptinfo_arg,
@@ -34,6 +54,7 @@ tLuaCOM::tLuaCOM(lua_State* L,
   clsid                   = IID_NULL;
   lock_count              = 0;
   conn_point              = NULL;
+  objName                 = NULL;
 
   pdisp.Attach(pdisp_arg);
   pdisp->AddRef(); 
@@ -125,10 +146,18 @@ tLuaCOM::~tLuaCOM()
 
       counter++;
     }
+
   }
 
-  delete typehandler;
-  typehandler = NULL;
+  if (objName) {
+    free(objName);
+    objName = NULL;
+  }
+ 
+  if( typehandler) {
+	delete typehandler;
+    typehandler = NULL;
+  }
 
   tUtil::log_verbose("tLuaCOM", "%.4d:destroyed", ID);
 }
@@ -316,6 +345,7 @@ int tLuaCOM::call(lua_State* L,
    EXCEPINFO excepinfo;
       
    VariantInit(&result);
+   ZeroMemory(&excepinfo, sizeof(excepinfo));
 
    // fills DISPPARAMS structure, converting lua arguments
    // to COM parameters
@@ -375,9 +405,17 @@ int tLuaCOM::call(lua_State* L,
    {
      // Limpa parametros
      typehandler->releaseVariants(&dispparams);
+     VariantClear(&result);
 
      if(hr == DISP_E_EXCEPTION) // excecoes
      {
+       ExceptionInfoStrings cleanup(excepinfo);
+       if(excepinfo.pfnDeferredFillIn != NULL)
+       {
+         HRESULT fill_result = excepinfo.pfnDeferredFillIn(&excepinfo);
+         CHK_COM_CODE(fill_result);
+       }
+
        if(excepinfo.bstrDescription != NULL)
          COM_EXCEPTION(tUtil::bstr2string(excepinfo.bstrDescription));
        else if(excepinfo.wCode != 0)
@@ -646,7 +684,8 @@ tLuaCOM * tLuaCOM::CreateLuaCOM(lua_State* L,
                                 IDispatch * pdisp,
                                 const CLSID& coclass,
                                 ITypeInfo* typeinfo,
-                                bool untyped
+                                bool untyped,
+				const char* name
                                 )
 {
   HRESULT hr = S_OK;
@@ -665,6 +704,10 @@ tLuaCOM * tLuaCOM::CreateLuaCOM(lua_State* L,
   tLuaCOM *lcom = 
     new tLuaCOM(L, pdisp, typeinfo, coclass);
 
+  if (name) {
+    lcom->objName = _strdup(name);
+  }
+  
   COM_RELEASE(typeinfo);
 
   // We have one reference (the pointer), so we lock the object
@@ -769,3 +812,8 @@ bool tLuaCOM::hasTypeInfo(void)
     return false;
 }
 
+// Do an extra Release() on the COM Object. 
+// Not necessary if all works well. To circumvent buggy Software :-)
+void tLuaCOM::releaseComObject() {
+  if(pdisp) pdisp->Release();
+}
