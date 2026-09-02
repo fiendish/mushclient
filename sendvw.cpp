@@ -2900,7 +2900,8 @@ void CSendView::AdjustCommandWindowSize (void)
 	ASSERT_VALID(pDoc);
 
   // do nothing if not wanted
-  if (!pDoc->m_bAutoResizeCommandWindow)
+  if (!pDoc->m_bAutoResizeCommandWindow ||
+      pDoc->m_bSuppressCommandWindowAutoResize)
     return;
 
   // find how many lines in command window

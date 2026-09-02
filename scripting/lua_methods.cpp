@@ -2782,6 +2782,26 @@ static int L_GetCommand (lua_State *L)
 
 
 //----------------------------------------
+//  world.GetCommandCursorPosition
+//----------------------------------------
+static int L_GetCommandCursorPosition (lua_State *L)
+  {
+  lua_pushnumber (L, doc (L)->GetCommandCursorPosition ());
+  return 1;  // number of result fields
+  } // end of L_GetCommandCursorPosition
+
+
+//----------------------------------------
+//  world.GetCommandLineCount
+//----------------------------------------
+static int L_GetCommandLineCount (lua_State *L)
+  {
+  lua_pushnumber (L, doc (L)->GetCommandLineCount ());
+  return 1;  // number of result fields
+  } // end of L_GetCommandLineCount
+
+
+//----------------------------------------
 //  world.GetCommandList
 //----------------------------------------
 static int L_GetCommandList (lua_State *L)
@@ -5312,6 +5332,17 @@ static int L_SetCommandWindowHeight (lua_State *L)
   } // end of L_SetCommandWindowHeight
 
 //----------------------------------------
+//  world.SetCommandWindowAutoResizeSuppressed
+//----------------------------------------
+static int L_SetCommandWindowAutoResizeSuppressed (lua_State *L)
+  {
+  CMUSHclientDoc *pDoc = doc (L);
+  lua_pushnumber (L, pDoc->SetCommandWindowAutoResizeSuppressed (
+                    optboolean (L, 1, 0)));
+  return 1;  // number of result fields
+  } // end of L_SetCommandWindowAutoResizeSuppressed
+
+//----------------------------------------
 //  world.SetCustomColourName
 //----------------------------------------
 static int L_SetCustomColourName (lua_State *L)
@@ -6872,6 +6903,8 @@ static const struct luaL_Reg worldlib [] =
   {"GetChatOption", L_GetChatOption},
   {"GetClipboard", L_GetClipboard},
   {"GetCommand", L_GetCommand},
+  {"GetCommandCursorPosition", L_GetCommandCursorPosition},
+  {"GetCommandLineCount", L_GetCommandLineCount},
   {"GetCommandList", L_GetCommandList},
   {"GetConnectDuration", L_GetConnectDuration},
   {"GetCurrentValue", L_GetCurrentValue},
@@ -7051,6 +7084,7 @@ static const struct luaL_Reg worldlib [] =
   {"SetClipboard", L_SetClipboard},
   {"SetCommand", L_SetCommand},
   {"SetCommandSelection", L_SetCommandSelection},
+  {"SetCommandWindowAutoResizeSuppressed", L_SetCommandWindowAutoResizeSuppressed},
   {"SetCommandWindowHeight", L_SetCommandWindowHeight},
   {"SetCursor", L_SetCursor},
   {"SetCustomColourName", L_SetCustomColourName},

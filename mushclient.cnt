@@ -311,6 +311,8 @@
 3 GetChatOption=FNC_GetChatOption 
 3 GetClipboard=FNC_GetClipboard 
 3 GetCommand=FNC_GetCommand 
+3 GetCommandCursorPosition=FNC_GetCommandCursorPosition
+3 GetCommandLineCount=FNC_GetCommandLineCount
 3 GetCommandList=FNC_GetCommandList 
 3 GetConnectDuration=FNC_GetConnectDuration 
 3 GetCurrentValue=FNC_GetCurrentValue 
@@ -482,6 +484,7 @@
 3 SetClipboard=FNC_SetClipboard 
 3 SetCommand=FNC_SetCommand 
 3 SetCommandSelection=FNC_SetCommandSelection
+3 SetCommandWindowAutoResizeSuppressed=FNC_SetCommandWindowAutoResizeSuppressed
 3 SetCommandWindowHeight=FNC_SetCommandWindowHeight 
 3 SetCursor=FNC_SetCursor
 3 SetCustomColourName=FNC_SetCustomColourName

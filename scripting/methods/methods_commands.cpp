@@ -16,6 +16,8 @@
 //    DoCommand
 //    Execute
 //    GetCommand
+//    GetCommandCursorPosition
+//    GetCommandLineCount
 //    GetCommandList
 //    GetInternalCommandsList
 //    GetQueue
@@ -24,11 +26,37 @@
 //    SelectCommand
 //    SetCommand
 //    SetCommandSelection
+//    SetCommandWindowAutoResizeSuppressed
 //    SetCommandWindowHeight
 //    SetInputFont
 //    ShiftTabCompleteItem
 
 extern tCommandIDMapping CommandIDs [];
+
+CSendView * CMUSHclientDoc::GetCommandView (void)
+  {
+  CSendView * pFirstCommandView = NULL;
+  CSendView * pActiveCommandView = NULL;
+  HWND hwndFocus = ::GetFocus ();
+  CMDIChildWnd * pActiveFrame = Frame.MDIGetActive ();
+
+  for (POSITION pos = GetFirstViewPosition(); pos != NULL; )
+    {
+    CView * pView = GetNextView(pos);
+    if (!pView->IsKindOf(RUNTIME_CLASS(CSendView)))
+      continue;
+
+    CSendView * pCommandView = (CSendView *) pView;
+    if (pFirstCommandView == NULL)
+      pFirstCommandView = pCommandView;
+    if (pCommandView->GetEditCtrl().GetSafeHwnd() == hwndFocus)
+      return pCommandView;
+    if (pCommandView->m_owner_frame == pActiveFrame)
+      pActiveCommandView = pCommandView;
+    }
+
+  return pActiveCommandView ? pActiveCommandView : pFirstCommandView;
+  }   // end of CMUSHclientDoc::GetCommandView
 
 // world.GetCommandList - returns a variant array which is a list of "count" recent commands
 
@@ -157,7 +185,6 @@ BSTR CMUSHclientDoc::GetCommand()
 
 	return strCommand.AllocSysString();
 }   // end of CMUSHclientDoc::GetCommand
-
 
 
 long CMUSHclientDoc::SetCommand(LPCTSTR Message) 
@@ -481,6 +508,56 @@ long iCount;
 }   // end of CMUSHclientDoc::GetQueue
 
 
+// world.GetCommandCursorPosition - gets the active end of the command selection
+// Returns a 1-relative position, or zero if the active end is unavailable.
+
+long CMUSHclientDoc::GetCommandCursorPosition()
+{
+  HWND hwndFocus = ::GetFocus ();
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView == NULL)
+    return 0;
+
+  CEdit & edit = pCommandView->GetEditCtrl();
+  int nStartChar;
+  int nEndChar;
+  edit.GetSel(nStartChar, nEndChar);
+
+  int nCursorChar = nEndChar;
+  if (nStartChar == nEndChar)
+    nCursorChar = nStartChar;
+  else
+    {
+    if (edit.GetSafeHwnd() != hwndFocus)
+      return 0;
+
+    CPoint cursorPoint;
+    if (!::GetCaretPos(&cursorPoint))
+      return 0;
+
+    CPoint start = edit.PosFromChar(nStartChar);
+    if (start.x >= 0 && start.y >= 0 &&
+        abs(cursorPoint.x - start.x) <= 1 && abs(cursorPoint.y - start.y) <= 1)
+      nCursorChar = nStartChar;
+    }
+
+  return nCursorChar + 1;
+}   // end of CMUSHclientDoc::GetCommandCursorPosition
+
+
+// world.GetCommandLineCount - gets the number of visual command lines
+// Returns zero if there is no command window.
+
+long CMUSHclientDoc::GetCommandLineCount()
+{
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView == NULL)
+    return 0;
+
+  return pCommandView->GetEditCtrl().GetLineCount ();
+}   // end of CMUSHclientDoc::GetCommandLineCount
+
+
 
 
 void CMUSHclientDoc::SetInputFont(LPCTSTR FontName, short PointSize, short Weight, BOOL Italic) 
@@ -541,6 +618,14 @@ long CMUSHclientDoc::SetCommandWindowHeight(short Height)
 
 	return eOK;
 }   // end of CMUSHclientDoc::SetCommandWindowHeight
+
+
+// suppress automatic command-window resizing without changing the world option
+long CMUSHclientDoc::SetCommandWindowAutoResizeSuppressed(BOOL Suppressed)
+{
+  m_bSuppressCommandWindowAutoResize = Suppressed != FALSE;
+  return eOK;
+}   // end of CMUSHclientDoc::SetCommandWindowAutoResizeSuppressed
 
 
 
