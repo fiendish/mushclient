@@ -566,35 +566,7 @@ long CMUSHclientDoc::SetCommandWindowHeight(short Height)
   if (pFrame == NULL)
     return eBadParameter;
 
-	CRect rectInside;
-	pFrame->m_wndSplitter.GetClientRect(rectInside);
-	rectInside.InflateRect(-9, -9); // allow for borders and splitter bar
-
-  // we have to root around like this, because recalclayout lays out the top
-  // view first, and allocates the rest (possibly nothing) to the bottom view.
-  // I don't really want this, the important thing is that you can see where
-  // you are going to type. Thus I work out how much the maxmimum top view
-  // can be.
-
-  int iRoom = rectInside.bottom - rectInside.top - Height 
-      + 7;    // 7 pixels for the splitter bar
-
-  int cyCurTop = iRoom;
-
-  if (cyCurTop < 20)
-    return eBadParameter;  // too small, want to see a line at least
-
-  // set the info for the top view
-  pFrame->m_wndSplitter.SetRowInfo (OUTPUT_PANE, cyCurTop, 20);
-
-  // set the info for the bottom view
-  pFrame->m_wndSplitter.SetRowInfo (COMMAND_PANE, Height, 9);
-
-  // recalculate it all
-  pFrame->m_wndSplitter.RecalcLayout ();
-
-
-	return eOK;
+  return pFrame->SetCommandWindowHeight (Height);
 }   // end of CMUSHclientDoc::SetCommandWindowHeight
 
 

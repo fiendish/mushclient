@@ -25,6 +25,7 @@ public:
 public:
 
   void FixUpSplitterBar (void);
+  long SetCommandWindowHeight (short Height);
 
   virtual void OnUpdateFrameMenu(BOOL bActivate, CWnd* pActivateWnd, HMENU hMenuAlt);
 

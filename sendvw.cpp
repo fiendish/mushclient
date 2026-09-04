@@ -2925,7 +2925,7 @@ void CSendView::AdjustCommandWindowSize (void)
     }
 
   // resize - seem to need an extra 4 pixels or things go a bit strange
-  pDoc->SetCommandWindowHeight (pDoc->m_InputFontHeight * iLines + 4);
+  m_owner_frame->SetCommandWindowHeight (pDoc->m_InputFontHeight * iLines + 4);
 
   }
 
