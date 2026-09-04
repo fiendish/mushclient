@@ -1575,7 +1575,7 @@ VARIANT CMUSHclientDoc::Debug(LPCTSTR Command)
     // output window info
 
     CRect r (0, 0, 0, 0);
-    CMUSHView* pmyView = GetFirstOutputWindow ();
+    CMUSHView* pmyView = GetOutputView ();
 
     if (pmyView)
         pmyView->GetClientRect(&r);

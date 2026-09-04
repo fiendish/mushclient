@@ -704,12 +704,12 @@ BSTR CMUSHclientDoc::Menu(LPCTSTR Items, LPCTSTR Default)
 }   // end of CMUSHclientDoc::Menu
 
 
-// Sets the selection in the first output window found
+// Sets the selection in the active output window
 
 void CMUSHclientDoc::SetSelection(long StartLine, long EndLine, long StartColumn, long EndColumn) 
 {
 
-  CMUSHView * pmyView = GetFirstOutputWindow ();
+  CMUSHView * pmyView = GetOutputView ();
 
   // return if unable
   if (!pmyView)

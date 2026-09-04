@@ -310,23 +310,8 @@ POSITION pos;
 
 CChildFrame * CMUSHclientDoc::GetChildFrame (void)
   {
-  CChildFrame * pFrame = NULL;
-
-  // find the child frame
-  for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
-    {
-    CView* pView = GetNextView(pos);
-
-    if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-      {
-      CSendView* pmyView = (CSendView*)pView;
-
-      pFrame = pmyView->m_owner_frame;
-      break;
-      }	  // end of being a CSendView
-    }
-  
-  return pFrame;
+  CSendView * pCommandView = GetCommandView ();
+  return pCommandView ? pCommandView->m_owner_frame : NULL;
 
   } // end of CMUSHclientDoc::GetChildFrame
 

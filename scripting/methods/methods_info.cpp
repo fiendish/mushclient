@@ -384,18 +384,33 @@ static void GetWindowHeight (CWnd * pWnd, VARIANT & vaResult, const bool client 
   }   // end of GetWindowHeight
 
 // helper function
-CMUSHView * CMUSHclientDoc::GetFirstOutputWindow ()
+CMUSHView * CMUSHclientDoc::GetOutputView ()
   {
+  CMUSHView * pFirstOutputView = NULL;
+  CMUSHView * pActiveOutputView = NULL;
+  HWND hwndFocus = ::GetFocus ();
+  CMDIChildWnd * pActiveFrame = Frame.MDIGetActive ();
+
   for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
 	  {
 	  CView* pView = GetNextView(pos);
 	  
 	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)))
-      return  (CMUSHView*)pView;
+      {
+      CMUSHView * pOutputView = (CMUSHView *) pView;
+      if (pFirstOutputView == NULL)
+        pFirstOutputView = pOutputView;
+      if (pOutputView->GetSafeHwnd() == hwndFocus ||
+          (pOutputView->m_bottomview &&
+           pOutputView->m_bottomview->GetEditCtrl().GetSafeHwnd() == hwndFocus))
+        return pOutputView;
+      if (pOutputView->m_owner_frame == pActiveFrame)
+        pActiveOutputView = pOutputView;
+      }
     }   // end of loop through views
 
-  return NULL;      // not found
-  }   // end of CMUSHclientDoc::GetFirstOutputWindow
+  return pActiveOutputView ? pActiveOutputView : pFirstOutputView;
+  }   // end of CMUSHclientDoc::GetOutputView
 
 VARIANT CMUSHclientDoc::GetInfo(long InfoType) 
 {
@@ -888,7 +903,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 280:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect;
@@ -901,7 +916,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 281:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect;
@@ -925,7 +940,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 290:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -937,7 +952,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 291:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -949,7 +964,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 292:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -961,7 +976,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 293:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -1023,7 +1038,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 296:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         CPoint pt = pmyView->GetScrollPosition ();

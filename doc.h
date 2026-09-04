@@ -1993,7 +1993,7 @@ public:
   void ShowAlphaOptions (void);
 
   CPlugin * GetPlugin (LPCTSTR PluginID);
-  CMUSHView * GetFirstOutputWindow ();
+  CMUSHView * GetOutputView ();
 
   // calls sName in all plugins
   void SendToAllPluginCallbacks (const string & sName);   // no arguments
