@@ -168,19 +168,9 @@ BSTR CMUSHclientDoc::GetCommand()
 {
 	CString strCommand;
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
-
-      // find what the command is
-      pmyView->GetEditCtrl().GetWindowText (strCommand);
-
-      }	  // end of being a CSendView
-    }   // end of loop through views
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    pmyView->GetEditCtrl().GetWindowText (strCommand);
 
 
 	return strCommand.AllocSysString();
@@ -189,14 +179,9 @@ BSTR CMUSHclientDoc::GetCommand()
 
 long CMUSHclientDoc::SetCommand(LPCTSTR Message) 
 {
-
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       CString strCurrent;
 
@@ -209,8 +194,7 @@ long CMUSHclientDoc::SetCommand(LPCTSTR Message)
         }   // end of command being empty
       else
         return eCommandNotEmpty;
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return eOK;
 }     // end of CMUSHclientDoc::SetCommand
@@ -221,13 +205,9 @@ CString strResult;
 int nStartChar,
     nEndChar;
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       CString strCurrent;
 
@@ -241,10 +221,7 @@ int nStartChar,
       // get selection if any
       if (nEndChar > nStartChar)
         strResult = strCurrent.Mid (nStartChar, nEndChar - nStartChar);
-      break;
-
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return strResult.AllocSysString();
 }   // end of CMUSHclientDoc::PasteCommand
@@ -582,7 +559,8 @@ long CMUSHclientDoc::SetCommandWindowHeight(short Height)
   if (Height < 0)
     return eBadParameter;
 
-  CChildFrame * pFrame = GetChildFrame ();
+  CSendView * pCommandView = GetCommandView ();
+  CChildFrame * pFrame = pCommandView ? pCommandView->m_owner_frame : NULL;
 
   // fail if we can't find one
   if (pFrame == NULL)
@@ -656,17 +634,9 @@ long CMUSHclientDoc::ShiftTabCompleteItem(LPCTSTR Item)
 
 long CMUSHclientDoc::SetCommandSelection(long First, long Last) 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
-      pmyView->GetEditCtrl().SetSel(First - 1, Last, FALSE);
-
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    pmyView->GetEditCtrl().SetSel(First - 1, Last, FALSE);
 
 	return eOK;
 

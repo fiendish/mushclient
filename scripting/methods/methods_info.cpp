@@ -714,36 +714,25 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 236:   // command selection start column
       {
-        for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	        {
-	        CView* pView = GetNextView(pos);
-	        
-	        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	        {
-		        CSendView* pmyView = (CSendView*)pView;
+        CSendView * pmyView = GetCommandView ();
+        if (pmyView)
+          {
             int nStartChar;
             int nEndChar;
 
               // find where cursor is
   
-            pmyView->GetEditCtrl().GetSel(nStartChar, nEndChar);	
+            pmyView->GetEditCtrl().GetSel(nStartChar, nEndChar);
             SetUpVariantLong (vaResult, nStartChar + 1);  // start column
-            break;
-  
-	          }	  // end of being a CSendView
-          }   // end of loop through views
+          }
       }
       break;
 
     case 237:   // command selection end column
       {
-        for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	        {
-	        CView* pView = GetNextView(pos);
-	        
-	        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	        {
-		        CSendView* pmyView = (CSendView*)pView;
+        CSendView * pmyView = GetCommandView ();
+        if (pmyView)
+          {
             int nStartChar;
             int nEndChar;
 
@@ -753,10 +742,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
             if (nEndChar <= nStartChar)
               nEndChar = 0;  // zero indicates no text selected
             SetUpVariantLong (vaResult, nEndChar);  // end column
-            break;
-  
-	          }	  // end of being a CSendView
-          }   // end of loop through views
+          }
       }
       break;
 
