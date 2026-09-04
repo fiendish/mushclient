@@ -110,27 +110,9 @@ long CMUSHclientDoc::SpellCheckCommand(long StartCol, long EndCol)
   if (!App.m_bSpellCheckOK)
     return -1;
 
-  CEdit * pEdit = NULL;
-  CWnd * pWnd = NULL;
-
-  // find command window
-
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
-
-      // what is the current selection?
-
-      pWnd = pmyView;
-      pEdit = & (pmyView->GetEditCtrl());
-      break;
-      
-      }	  // end of being a CSendView
-    }   // end of loop through views
+  CSendView * pmyView = GetCommandView ();
+  CEdit * pEdit = pmyView ? &pmyView->GetEditCtrl() : NULL;
+  CWnd * pWnd = pmyView;
 
   if (pEdit == NULL)
 	  return -1;    // couldn't find it

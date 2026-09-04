@@ -37,6 +37,7 @@ CSendView * CMUSHclientDoc::GetCommandView (void)
   {
   CSendView * pFirstCommandView = NULL;
   CSendView * pActiveCommandView = NULL;
+  CSendView * pFocusedCommandView = NULL;
   HWND hwndFocus = ::GetFocus ();
   CMDIChildWnd * pActiveFrame = Frame.MDIGetActive ();
 
@@ -49,12 +50,18 @@ CSendView * CMUSHclientDoc::GetCommandView (void)
     CSendView * pCommandView = (CSendView *) pView;
     if (pFirstCommandView == NULL)
       pFirstCommandView = pCommandView;
-    if (pCommandView->GetEditCtrl().GetSafeHwnd() == hwndFocus)
+    // Activation callbacks run before MFC transfers keyboard focus.
+    if (pCommandView == m_pActiveCommandView ||
+        (m_pActiveOutputView && pCommandView->m_topview == m_pActiveOutputView))
       return pCommandView;
+    if (pCommandView->GetEditCtrl().GetSafeHwnd() == hwndFocus)
+      pFocusedCommandView = pCommandView;
     if (pCommandView->m_owner_frame == pActiveFrame)
       pActiveCommandView = pCommandView;
     }
 
+  if (pFocusedCommandView)
+    return pFocusedCommandView;
   return pActiveCommandView ? pActiveCommandView : pFirstCommandView;
   }   // end of CMUSHclientDoc::GetCommandView
 
@@ -64,13 +71,9 @@ VARIANT CMUSHclientDoc::GetCommandList(long Count)
 {
   COleSafeArray sa;   // for command list
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       POSITION pos;
       long iCount;
@@ -98,8 +101,7 @@ VARIANT CMUSHclientDoc::GetCommandList(long Count)
           }      // end of looping through each command
         } // end of having at least one
 
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return sa.Detach ();
 }    // end of CMUSHclientDoc::GetCommandList
@@ -108,17 +110,13 @@ VARIANT CMUSHclientDoc::GetCommandList(long Count)
 //                     stack and then blanks it out
 //  returns command that was pushed
 
-BSTR CMUSHclientDoc::PushCommand() 
+BSTR CMUSHclientDoc::PushCommand()
 {
 	CString strCommand;
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       // find what the command is
       pmyView->GetEditCtrl().GetWindowText (strCommand);
@@ -137,8 +135,7 @@ BSTR CMUSHclientDoc::PushCommand()
       pmyView->GetEditCtrl().ReplaceSel ("", TRUE);   // blank it out
       pmyView->NotifyPluginCommandChanged ();
 
-      }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return strCommand.AllocSysString();
 }   // end of CMUSHclientDoc::PushCommand
@@ -147,18 +144,9 @@ BSTR CMUSHclientDoc::PushCommand()
 
 void CMUSHclientDoc::SelectCommand() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
-
-      pmyView->GetEditCtrl().SetSel (0, -1);   // select all
-
-      }	  // end of being a CSendView
-    }   // end of loop through views
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    pmyView->GetEditCtrl().SetSel (0, -1);   // select all
 
 }    // end of CMUSHclientDoc::SelectCommand
 

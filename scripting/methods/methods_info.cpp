@@ -388,6 +388,7 @@ CMUSHView * CMUSHclientDoc::GetOutputView ()
   {
   CMUSHView * pFirstOutputView = NULL;
   CMUSHView * pActiveOutputView = NULL;
+  CMUSHView * pFocusedOutputView = NULL;
   HWND hwndFocus = ::GetFocus ();
   CMDIChildWnd * pActiveFrame = Frame.MDIGetActive ();
 
@@ -400,15 +401,21 @@ CMUSHView * CMUSHclientDoc::GetOutputView ()
       CMUSHView * pOutputView = (CMUSHView *) pView;
       if (pFirstOutputView == NULL)
         pFirstOutputView = pOutputView;
+      // Activation callbacks run before MFC transfers keyboard focus.
+      if (pOutputView == m_pActiveOutputView ||
+          (m_pActiveCommandView && pOutputView->m_bottomview == m_pActiveCommandView))
+        return pOutputView;
       if (pOutputView->GetSafeHwnd() == hwndFocus ||
           (pOutputView->m_bottomview &&
            pOutputView->m_bottomview->GetEditCtrl().GetSafeHwnd() == hwndFocus))
-        return pOutputView;
+        pFocusedOutputView = pOutputView;
       if (pOutputView->m_owner_frame == pActiveFrame)
         pActiveOutputView = pOutputView;
       }
     }   // end of loop through views
 
+  if (pFocusedOutputView)
+    return pFocusedOutputView;
   return pActiveOutputView ? pActiveOutputView : pFirstOutputView;
   }   // end of CMUSHclientDoc::GetOutputView
 
@@ -1397,13 +1404,9 @@ COLORREF colour1,
 
 long CMUSHclientDoc::GetSelectionStartLine() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1422,8 +1425,7 @@ long CMUSHclientDoc::GetSelectionStartLine()
                    endcol > startcol)))
         return 0;
       return pmyView->m_selstart_line + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 
 	return 0;
@@ -1431,13 +1433,9 @@ long CMUSHclientDoc::GetSelectionStartLine()
 
 long CMUSHclientDoc::GetSelectionEndLine() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1457,8 +1455,7 @@ long CMUSHclientDoc::GetSelectionEndLine()
         return 0;
 
       return pmyView->m_selend_line + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 	return 0;
 }    // end of CMUSHclientDoc::GetSelectionEndLine
@@ -1467,13 +1464,9 @@ long CMUSHclientDoc::GetSelectionEndLine()
 
 long CMUSHclientDoc::GetSelectionStartColumn() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1493,21 +1486,16 @@ long CMUSHclientDoc::GetSelectionStartColumn()
         return 0;
 
       return startcol + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 	return 0;
 }  // end of CMUSHclientDoc::GetSelectionStartColumn
 
 long CMUSHclientDoc::GetSelectionEndColumn() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1527,8 +1515,7 @@ long CMUSHclientDoc::GetSelectionEndColumn()
         return 0;
 
       return endcol + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 	return 0;
 }     // end of CMUSHclientDoc::GetSelectionEndColumn

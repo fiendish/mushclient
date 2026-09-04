@@ -69,13 +69,9 @@ long CMUSHclientDoc::SendNoEcho(LPCTSTR Message)
 void CMUSHclientDoc::AddToCommandHistory (LPCTSTR Message)
   {
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       if (strlen (Message) > 0 && strcmp (Message, pmyView->m_last_command) != 0)
         {
@@ -92,9 +88,7 @@ void CMUSHclientDoc::AddToCommandHistory (LPCTSTR Message)
         pmyView->m_last_command = Message;
         } // end of different from last one
 
-      break;
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
   } // end of CMUSHclientDoc::AddToCommandHistory
 

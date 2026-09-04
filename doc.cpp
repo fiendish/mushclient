@@ -6440,8 +6440,6 @@ void CMUSHclientDoc::SendTo (
          const CString strVariable,     // what variable to set
          CString & strOutput)           // output to be displayed when finished
   {
-  POSITION pos;
-
   // empty send text does absolutely nothing :)  - in some cases :P
 
   if (iWhere != eSendToNotepad && 
@@ -6462,24 +6460,17 @@ void CMUSHclientDoc::SendTo (
     case eSendToCommand:
 
       // put trigger response into command buffer - provided it is empty
-      for (pos = GetFirstViewPosition(); pos != NULL; )
-	      {
-	      CView* pView = GetNextView(pos);
-	      
-	      if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	      {
-		      CSendView* pmyView = (CSendView*)pView;
+      {
+      CSendView * pmyView = GetCommandView ();
+      if (pmyView)
+        {
+        CString strCurrent;
 
-          CString strCurrent;
-
-          pmyView->GetEditCtrl().GetWindowText (strCurrent);
-          if (strCurrent.IsEmpty ())
-            {
-            pmyView->GetEditCtrl().ReplaceSel (strSendText, TRUE);
-            break;    // just do first view that we can use
-            }   // end of command being empty
-	        }	  // end of being a CMUSHView
-        }   // end of loop through views
+        pmyView->GetEditCtrl().GetWindowText (strCurrent);
+        if (strCurrent.IsEmpty ())
+          pmyView->GetEditCtrl().ReplaceSel (strSendText, TRUE);
+        }
+      }
       break;
 
     case eSendToWorld:
