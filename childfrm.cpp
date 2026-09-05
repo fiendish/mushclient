@@ -41,6 +41,7 @@ CChildFrame::CChildFrame()
 
   m_topview = NULL;
   m_pDoc = NULL;
+  m_iCommandWindowHeight = -1;
 	
 }
 
@@ -140,7 +141,7 @@ void CChildFrame::OnClose()
 }
 
 
-void CChildFrame::FixUpSplitterBar (void)
+void CChildFrame::FixUpSplitterBar (bool bRestoreSavedHeight)
   {
    int cyCurTop,
        cyCurBottom;
@@ -165,14 +166,20 @@ void CChildFrame::FixUpSplitterBar (void)
 
    cyCurTop = App.db_get_int("worlds", (LPCTSTR) CFormat ("%s:%s", (LPCTSTR) m_pDoc->m_mush_name, "Top Height"), 20);
 
+   // Keep the requested height during automatic layout while suppressed.
+   if (m_pDoc->m_bSuppressCommandWindowAutoResize &&
+       !bRestoreSavedHeight && m_iCommandWindowHeight >= 0)
+     cyCurBottom = m_iCommandWindowHeight;
    // if this world is existing, take command height from registry
-   if (!(m_pDoc->m_mush_name.IsEmpty ()))
+   else if (!(m_pDoc->m_mush_name.IsEmpty ()))
      cyCurBottom = App.db_get_int("worlds", (LPCTSTR) CFormat ("%s:%s", (LPCTSTR) m_pDoc->m_mush_name, "Bottom Height"), iDefaultHeight);
    else
      // otherwise, allow for a 2-line command area
     cyCurBottom = iDefaultHeight;
 
 //  TRACE1 ("Bottom height (loaded) = %i\n", cyCurBottom);
+
+   m_iCommandWindowHeight = cyCurBottom;
 
    // if height from registry is smaller, make the input font height
    // REMOVED in version 3.83
@@ -227,6 +234,8 @@ long CChildFrame::SetCommandWindowHeight (short Height)
 
   if (cyCurTop < 20)
     return eBadParameter;  // too small, want to see a line at least
+
+  m_iCommandWindowHeight = Height;
 
   // set the info for the top view
   m_wndSplitter.SetRowInfo (OUTPUT_PANE, cyCurTop, 20);

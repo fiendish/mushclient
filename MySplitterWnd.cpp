@@ -81,10 +81,11 @@ void CMySplitterWnd::OnLButtonUp(UINT nFlags, CPoint point)
 
 //    TRACE1 ("Bottom height (saved) = %i\n", cyCur);
 
+    // Apply the user's saved height even while automatic resizing is suppressed.
     if (m_pDoc->m_pActiveCommandView)
-      m_pDoc->m_pActiveCommandView->m_owner_frame->FixUpSplitterBar ();
+      m_pDoc->m_pActiveCommandView->m_owner_frame->FixUpSplitterBar (true);
     else if (m_pDoc->m_pActiveOutputView)
-      m_pDoc->m_pActiveOutputView->m_owner_frame->FixUpSplitterBar ();
+      m_pDoc->m_pActiveOutputView->m_owner_frame->FixUpSplitterBar (true);
 
 	  }
 
