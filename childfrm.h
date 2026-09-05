@@ -12,6 +12,7 @@ public:
 
 // Attributes
 protected:
+  int m_iCommandWindowHeight;  // requested height before layout reduces it
 
 public:
   
@@ -24,7 +25,8 @@ public:
 // Operations
 public:
 
-  void FixUpSplitterBar (void);
+  void FixUpSplitterBar (bool bRestoreSavedHeight = false);
+  long SetCommandWindowHeight (short Height);
 
   virtual void OnUpdateFrameMenu(BOOL bActivate, CWnd* pActivateWnd, HMENU hMenuAlt);
 

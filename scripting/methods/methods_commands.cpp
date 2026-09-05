@@ -16,6 +16,8 @@
 //    DoCommand
 //    Execute
 //    GetCommand
+//    GetCommandCursorPosition
+//    GetCommandLineCount
 //    GetCommandList
 //    GetInternalCommandsList
 //    GetQueue
@@ -24,11 +26,44 @@
 //    SelectCommand
 //    SetCommand
 //    SetCommandSelection
+//    SetCommandWindowAutoResizeSuppressed
 //    SetCommandWindowHeight
 //    SetInputFont
 //    ShiftTabCompleteItem
 
 extern tCommandIDMapping CommandIDs [];
+
+CSendView * CMUSHclientDoc::GetCommandView (void)
+  {
+  CSendView * pFirstCommandView = NULL;
+  CSendView * pActiveCommandView = NULL;
+  CSendView * pFocusedCommandView = NULL;
+  HWND hwndFocus = ::GetFocus ();
+  CMDIChildWnd * pActiveFrame = Frame.MDIGetActive ();
+
+  for (POSITION pos = GetFirstViewPosition(); pos != NULL; )
+    {
+    CView * pView = GetNextView(pos);
+    if (!pView->IsKindOf(RUNTIME_CLASS(CSendView)))
+      continue;
+
+    CSendView * pCommandView = (CSendView *) pView;
+    if (pFirstCommandView == NULL)
+      pFirstCommandView = pCommandView;
+    // Activation callbacks run before MFC transfers keyboard focus.
+    if (pCommandView == m_pActiveCommandView ||
+        (m_pActiveOutputView && pCommandView->m_topview == m_pActiveOutputView))
+      return pCommandView;
+    if (pCommandView->GetEditCtrl().GetSafeHwnd() == hwndFocus)
+      pFocusedCommandView = pCommandView;
+    if (pCommandView->m_owner_frame == pActiveFrame)
+      pActiveCommandView = pCommandView;
+    }
+
+  if (pFocusedCommandView)
+    return pFocusedCommandView;
+  return pActiveCommandView ? pActiveCommandView : pFirstCommandView;
+  }   // end of CMUSHclientDoc::GetCommandView
 
 // world.GetCommandList - returns a variant array which is a list of "count" recent commands
 
@@ -36,13 +71,9 @@ VARIANT CMUSHclientDoc::GetCommandList(long Count)
 {
   COleSafeArray sa;   // for command list
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       POSITION pos;
       long iCount;
@@ -70,8 +101,7 @@ VARIANT CMUSHclientDoc::GetCommandList(long Count)
           }      // end of looping through each command
         } // end of having at least one
 
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return sa.Detach ();
 }    // end of CMUSHclientDoc::GetCommandList
@@ -80,17 +110,13 @@ VARIANT CMUSHclientDoc::GetCommandList(long Count)
 //                     stack and then blanks it out
 //  returns command that was pushed
 
-BSTR CMUSHclientDoc::PushCommand() 
+BSTR CMUSHclientDoc::PushCommand()
 {
 	CString strCommand;
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       // find what the command is
       pmyView->GetEditCtrl().GetWindowText (strCommand);
@@ -109,8 +135,7 @@ BSTR CMUSHclientDoc::PushCommand()
       pmyView->GetEditCtrl().ReplaceSel ("", TRUE);   // blank it out
       pmyView->NotifyPluginCommandChanged ();
 
-      }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return strCommand.AllocSysString();
 }   // end of CMUSHclientDoc::PushCommand
@@ -119,18 +144,9 @@ BSTR CMUSHclientDoc::PushCommand()
 
 void CMUSHclientDoc::SelectCommand() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
-
-      pmyView->GetEditCtrl().SetSel (0, -1);   // select all
-
-      }	  // end of being a CSendView
-    }   // end of loop through views
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    pmyView->GetEditCtrl().SetSel (0, -1);   // select all
 
 }    // end of CMUSHclientDoc::SelectCommand
 
@@ -140,36 +156,20 @@ BSTR CMUSHclientDoc::GetCommand()
 {
 	CString strCommand;
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
-
-      // find what the command is
-      pmyView->GetEditCtrl().GetWindowText (strCommand);
-
-      }	  // end of being a CSendView
-    }   // end of loop through views
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    pmyView->GetEditCtrl().GetWindowText (strCommand);
 
 
 	return strCommand.AllocSysString();
 }   // end of CMUSHclientDoc::GetCommand
 
 
-
 long CMUSHclientDoc::SetCommand(LPCTSTR Message) 
 {
-
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       CString strCurrent;
 
@@ -182,8 +182,7 @@ long CMUSHclientDoc::SetCommand(LPCTSTR Message)
         }   // end of command being empty
       else
         return eCommandNotEmpty;
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return eOK;
 }     // end of CMUSHclientDoc::SetCommand
@@ -194,13 +193,9 @@ CString strResult;
 int nStartChar,
     nEndChar;
 
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    {
 
       CString strCurrent;
 
@@ -214,10 +209,7 @@ int nStartChar,
       // get selection if any
       if (nEndChar > nStartChar)
         strResult = strCurrent.Mid (nStartChar, nEndChar - nStartChar);
-      break;
-
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+    }
 
 	return strResult.AllocSysString();
 }   // end of CMUSHclientDoc::PasteCommand
@@ -481,6 +473,56 @@ long iCount;
 }   // end of CMUSHclientDoc::GetQueue
 
 
+// world.GetCommandCursorPosition - gets the active end of the command selection
+// Returns a 1-relative position, or zero if the active end is unavailable.
+
+long CMUSHclientDoc::GetCommandCursorPosition()
+{
+  HWND hwndFocus = ::GetFocus ();
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView == NULL)
+    return 0;
+
+  CEdit & edit = pCommandView->GetEditCtrl();
+  int nStartChar;
+  int nEndChar;
+  edit.GetSel(nStartChar, nEndChar);
+
+  int nCursorChar = nEndChar;
+  if (nStartChar == nEndChar)
+    nCursorChar = nStartChar;
+  else
+    {
+    if (edit.GetSafeHwnd() != hwndFocus)
+      return 0;
+
+    CPoint cursorPoint;
+    if (!::GetCaretPos(&cursorPoint))
+      return 0;
+
+    CPoint start = edit.PosFromChar(nStartChar);
+    if (start.x >= 0 && start.y >= 0 &&
+        abs(cursorPoint.x - start.x) <= 1 && abs(cursorPoint.y - start.y) <= 1)
+      nCursorChar = nStartChar;
+    }
+
+  return nCursorChar + 1;
+}   // end of CMUSHclientDoc::GetCommandCursorPosition
+
+
+// world.GetCommandLineCount - gets the number of visual command lines
+// Returns zero if there is no command window.
+
+long CMUSHclientDoc::GetCommandLineCount()
+{
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView == NULL)
+    return 0;
+
+  return pCommandView->GetEditCtrl().GetLineCount ();
+}   // end of CMUSHclientDoc::GetCommandLineCount
+
+
 
 
 void CMUSHclientDoc::SetInputFont(LPCTSTR FontName, short PointSize, short Weight, BOOL Italic) 
@@ -505,42 +547,23 @@ long CMUSHclientDoc::SetCommandWindowHeight(short Height)
   if (Height < 0)
     return eBadParameter;
 
-  CChildFrame * pFrame = GetChildFrame ();
+  CSendView * pCommandView = GetCommandView ();
+  CChildFrame * pFrame = pCommandView ? pCommandView->m_owner_frame : NULL;
 
   // fail if we can't find one
   if (pFrame == NULL)
     return eBadParameter;
 
-	CRect rectInside;
-	pFrame->m_wndSplitter.GetClientRect(rectInside);
-	rectInside.InflateRect(-9, -9); // allow for borders and splitter bar
-
-  // we have to root around like this, because recalclayout lays out the top
-  // view first, and allocates the rest (possibly nothing) to the bottom view.
-  // I don't really want this, the important thing is that you can see where
-  // you are going to type. Thus I work out how much the maxmimum top view
-  // can be.
-
-  int iRoom = rectInside.bottom - rectInside.top - Height 
-      + 7;    // 7 pixels for the splitter bar
-
-  int cyCurTop = iRoom;
-
-  if (cyCurTop < 20)
-    return eBadParameter;  // too small, want to see a line at least
-
-  // set the info for the top view
-  pFrame->m_wndSplitter.SetRowInfo (OUTPUT_PANE, cyCurTop, 20);
-
-  // set the info for the bottom view
-  pFrame->m_wndSplitter.SetRowInfo (COMMAND_PANE, Height, 9);
-
-  // recalculate it all
-  pFrame->m_wndSplitter.RecalcLayout ();
-
-
-	return eOK;
+  return pFrame->SetCommandWindowHeight (Height);
 }   // end of CMUSHclientDoc::SetCommandWindowHeight
+
+
+// suppress automatic command-window resizing without changing the world option
+long CMUSHclientDoc::SetCommandWindowAutoResizeSuppressed(BOOL Suppressed)
+{
+  m_bSuppressCommandWindowAutoResize = Suppressed != FALSE;
+  return eOK;
+}   // end of CMUSHclientDoc::SetCommandWindowAutoResizeSuppressed
 
 
 
@@ -571,17 +594,9 @@ long CMUSHclientDoc::ShiftTabCompleteItem(LPCTSTR Item)
 
 long CMUSHclientDoc::SetCommandSelection(long First, long Last) 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	  {
-		  CSendView* pmyView = (CSendView*)pView;
-      pmyView->GetEditCtrl().SetSel(First - 1, Last, FALSE);
-
-	    }	  // end of being a CSendView
-    }   // end of loop through views
+  CSendView * pmyView = GetCommandView ();
+  if (pmyView)
+    pmyView->GetEditCtrl().SetSel(First - 1, Last, FALSE);
 
 	return eOK;
 

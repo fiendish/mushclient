@@ -644,20 +644,7 @@ CString m_strFilter = Name;
 BSTR CMUSHclientDoc::Menu(LPCTSTR Items, LPCTSTR Default) 
 {
 	CString strResult;
-  CSendView* pmyView = NULL;
-
-
-  for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
-    {
-    CView* pView = GetNextView(pos);
-
-    if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-      {
-      pmyView = (CSendView*)pView;
-      break;
-
-      }	  // end of being a CSendView
-    }
+  CSendView* pmyView = GetCommandView ();
 
   if (!pmyView)
     return strResult.AllocSysString();
@@ -704,12 +691,12 @@ BSTR CMUSHclientDoc::Menu(LPCTSTR Items, LPCTSTR Default)
 }   // end of CMUSHclientDoc::Menu
 
 
-// Sets the selection in the first output window found
+// Sets the selection in the active output window
 
 void CMUSHclientDoc::SetSelection(long StartLine, long EndLine, long StartColumn, long EndColumn) 
 {
 
-  CMUSHView * pmyView = GetFirstOutputWindow ();
+  CMUSHView * pmyView = GetOutputView ();
 
   // return if unable
   if (!pmyView)

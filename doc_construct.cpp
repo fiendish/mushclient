@@ -111,6 +111,7 @@ int i;
   m_bDoNotShowOutstandingLines = false;
   m_bDoNotTranslateIACtoIACIAC = false;
   m_bAutoResizeCommandWindow = false;
+  m_bSuppressCommandWindowAutoResize = false;
   m_bLogScriptErrors = false;
   m_bOmitSavedDateFromSaveFiles = false;
   m_iAutoResizeMinimumLines = 1;   

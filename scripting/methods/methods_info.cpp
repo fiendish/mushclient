@@ -384,18 +384,40 @@ static void GetWindowHeight (CWnd * pWnd, VARIANT & vaResult, const bool client 
   }   // end of GetWindowHeight
 
 // helper function
-CMUSHView * CMUSHclientDoc::GetFirstOutputWindow ()
+CMUSHView * CMUSHclientDoc::GetOutputView ()
   {
+  CMUSHView * pFirstOutputView = NULL;
+  CMUSHView * pActiveOutputView = NULL;
+  CMUSHView * pFocusedOutputView = NULL;
+  HWND hwndFocus = ::GetFocus ();
+  CMDIChildWnd * pActiveFrame = Frame.MDIGetActive ();
+
   for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
 	  {
 	  CView* pView = GetNextView(pos);
 	  
 	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)))
-      return  (CMUSHView*)pView;
+      {
+      CMUSHView * pOutputView = (CMUSHView *) pView;
+      if (pFirstOutputView == NULL)
+        pFirstOutputView = pOutputView;
+      // Activation callbacks run before MFC transfers keyboard focus.
+      if (pOutputView == m_pActiveOutputView ||
+          (m_pActiveCommandView && pOutputView->m_bottomview == m_pActiveCommandView))
+        return pOutputView;
+      if (pOutputView->GetSafeHwnd() == hwndFocus ||
+          (pOutputView->m_bottomview &&
+           pOutputView->m_bottomview->GetEditCtrl().GetSafeHwnd() == hwndFocus))
+        pFocusedOutputView = pOutputView;
+      if (pOutputView->m_owner_frame == pActiveFrame)
+        pActiveOutputView = pOutputView;
+      }
     }   // end of loop through views
 
-  return NULL;      // not found
-  }   // end of CMUSHclientDoc::GetFirstOutputWindow
+  if (pFocusedOutputView)
+    return pFocusedOutputView;
+  return pActiveOutputView ? pActiveOutputView : pFirstOutputView;
+  }   // end of CMUSHclientDoc::GetOutputView
 
 VARIANT CMUSHclientDoc::GetInfo(long InfoType) 
 {
@@ -714,36 +736,25 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 236:   // command selection start column
       {
-        for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	        {
-	        CView* pView = GetNextView(pos);
-	        
-	        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	        {
-		        CSendView* pmyView = (CSendView*)pView;
+        CSendView * pmyView = GetCommandView ();
+        if (pmyView)
+          {
             int nStartChar;
             int nEndChar;
 
               // find where cursor is
   
-            pmyView->GetEditCtrl().GetSel(nStartChar, nEndChar);	
+            pmyView->GetEditCtrl().GetSel(nStartChar, nEndChar);
             SetUpVariantLong (vaResult, nStartChar + 1);  // start column
-            break;
-  
-	          }	  // end of being a CSendView
-          }   // end of loop through views
+          }
       }
       break;
 
     case 237:   // command selection end column
       {
-        for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	        {
-	        CView* pView = GetNextView(pos);
-	        
-	        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	        {
-		        CSendView* pmyView = (CSendView*)pView;
+        CSendView * pmyView = GetCommandView ();
+        if (pmyView)
+          {
             int nStartChar;
             int nEndChar;
 
@@ -753,33 +764,19 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
             if (nEndChar <= nStartChar)
               nEndChar = 0;  // zero indicates no text selected
             SetUpVariantLong (vaResult, nEndChar);  // end column
-            break;
-  
-	          }	  // end of being a CSendView
-          }   // end of loop through views
+          }
       }
       break;
 
     case 238:
       {
       WINDOWPLACEMENT wp;
-
-      for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
+      CChildFrame * pFrame = GetChildFrame ();
+      if (pFrame)
         {
-        CView* pView = GetNextView(pos);
-
-        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-          {
-          CSendView* pmyView = (CSendView*)pView;
-
-          pmyView->GetParentFrame ()->GetWindowPlacement(&wp); 
-          SetUpVariantLong (vaResult, wp.showCmd);  // window placement flags
-          break;
-
-          }	
+        pFrame->GetWindowPlacement(&wp);
+        SetUpVariantLong (vaResult, wp.showCmd);  // window placement flags
         }
-
-
       }
       break;
 
@@ -902,7 +899,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 280:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect;
@@ -915,7 +912,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 281:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect;
@@ -939,7 +936,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 290:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -951,7 +948,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 291:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -963,7 +960,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 292:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -975,7 +972,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 293:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         RECT rect = pmyView->GetTextRectangle ();
@@ -1037,7 +1034,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
 
     case 296:
       {
-      CMUSHView* pmyView = GetFirstOutputWindow ();
+      CMUSHView* pmyView = GetOutputView ();
       if (pmyView) 
         {
         CPoint pt = pmyView->GetScrollPosition ();
@@ -1396,13 +1393,9 @@ COLORREF colour1,
 
 long CMUSHclientDoc::GetSelectionStartLine() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1421,8 +1414,7 @@ long CMUSHclientDoc::GetSelectionStartLine()
                    endcol > startcol)))
         return 0;
       return pmyView->m_selstart_line + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 
 	return 0;
@@ -1430,13 +1422,9 @@ long CMUSHclientDoc::GetSelectionStartLine()
 
 long CMUSHclientDoc::GetSelectionEndLine() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1456,8 +1444,7 @@ long CMUSHclientDoc::GetSelectionEndLine()
         return 0;
 
       return pmyView->m_selend_line + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 	return 0;
 }    // end of CMUSHclientDoc::GetSelectionEndLine
@@ -1466,13 +1453,9 @@ long CMUSHclientDoc::GetSelectionEndLine()
 
 long CMUSHclientDoc::GetSelectionStartColumn() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1492,21 +1475,16 @@ long CMUSHclientDoc::GetSelectionStartColumn()
         return 0;
 
       return startcol + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 	return 0;
 }  // end of CMUSHclientDoc::GetSelectionStartColumn
 
 long CMUSHclientDoc::GetSelectionEndColumn() 
 {
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  CView* pView = GetNextView(pos);
-	  
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)) && m_LineList.GetCount () > 0)
-  	  {
-		  CMUSHView* pmyView = (CMUSHView*)pView;
+  CMUSHView * pmyView = GetOutputView ();
+  if (pmyView && m_LineList.GetCount () > 0)
+    {
       long startcol,
            endcol;
 
@@ -1526,8 +1504,7 @@ long CMUSHclientDoc::GetSelectionEndColumn()
         return 0;
 
       return endcol + 1;
-	    }	  // end of being a CMUSHView
-    }   // end of loop through views
+    }
 
 	return 0;
 }     // end of CMUSHclientDoc::GetSelectionEndColumn

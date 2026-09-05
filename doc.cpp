@@ -626,6 +626,9 @@ BEGIN_DISPATCH_MAP(CMUSHclientDoc, CDocument)
 	DISP_PROPERTY_PARAM(CMUSHclientDoc, "BoldColour", GetBoldColour, SetBoldColour, VT_I4, VTS_I2)
 	DISP_PROPERTY_PARAM(CMUSHclientDoc, "CustomColourText", GetCustomColourText, SetCustomColourText, VT_I4, VTS_I2)
 	DISP_PROPERTY_PARAM(CMUSHclientDoc, "CustomColourBackground", GetCustomColourBackground, SetCustomColourBackground, VT_I4, VTS_I2)
+	DISP_FUNCTION(CMUSHclientDoc, "GetCommandCursorPosition", GetCommandCursorPosition, VT_I4, VTS_NONE)
+	DISP_FUNCTION(CMUSHclientDoc, "GetCommandLineCount", GetCommandLineCount, VT_I4, VTS_NONE)
+	DISP_FUNCTION(CMUSHclientDoc, "SetCommandWindowAutoResizeSuppressed", SetCommandWindowAutoResizeSuppressed, VT_I4, VTS_BOOL)
 	//}}AFX_DISPATCH_MAP
 END_DISPATCH_MAP()
 
@@ -6437,8 +6440,6 @@ void CMUSHclientDoc::SendTo (
          const CString strVariable,     // what variable to set
          CString & strOutput)           // output to be displayed when finished
   {
-  POSITION pos;
-
   // empty send text does absolutely nothing :)  - in some cases :P
 
   if (iWhere != eSendToNotepad && 
@@ -6459,24 +6460,17 @@ void CMUSHclientDoc::SendTo (
     case eSendToCommand:
 
       // put trigger response into command buffer - provided it is empty
-      for (pos = GetFirstViewPosition(); pos != NULL; )
-	      {
-	      CView* pView = GetNextView(pos);
-	      
-	      if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-  	      {
-		      CSendView* pmyView = (CSendView*)pView;
+      {
+      CSendView * pmyView = GetCommandView ();
+      if (pmyView)
+        {
+        CString strCurrent;
 
-          CString strCurrent;
-
-          pmyView->GetEditCtrl().GetWindowText (strCurrent);
-          if (strCurrent.IsEmpty ())
-            {
-            pmyView->GetEditCtrl().ReplaceSel (strSendText, TRUE);
-            break;    // just do first view that we can use
-            }   // end of command being empty
-	        }	  // end of being a CMUSHView
-        }   // end of loop through views
+        pmyView->GetEditCtrl().GetWindowText (strCurrent);
+        if (strCurrent.IsEmpty ())
+          pmyView->GetEditCtrl().ReplaceSel (strSendText, TRUE);
+        }
+      }
       break;
 
     case eSendToWorld:

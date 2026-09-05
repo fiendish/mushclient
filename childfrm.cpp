@@ -9,6 +9,7 @@
 #include "MUSHview.h"
 #include "mainfrm.h"
 #include "sendvw.h"
+#include "scripting\errors.h"
 
 
 #include "winplace.h"
@@ -40,6 +41,7 @@ CChildFrame::CChildFrame()
 
   m_topview = NULL;
   m_pDoc = NULL;
+  m_iCommandWindowHeight = -1;
 	
 }
 
@@ -139,7 +141,7 @@ void CChildFrame::OnClose()
 }
 
 
-void CChildFrame::FixUpSplitterBar (void)
+void CChildFrame::FixUpSplitterBar (bool bRestoreSavedHeight)
   {
    int cyCurTop,
        cyCurBottom;
@@ -164,14 +166,20 @@ void CChildFrame::FixUpSplitterBar (void)
 
    cyCurTop = App.db_get_int("worlds", (LPCTSTR) CFormat ("%s:%s", (LPCTSTR) m_pDoc->m_mush_name, "Top Height"), 20);
 
+   // Keep the requested height during automatic layout while suppressed.
+   if (m_pDoc->m_bSuppressCommandWindowAutoResize &&
+       !bRestoreSavedHeight && m_iCommandWindowHeight >= 0)
+     cyCurBottom = m_iCommandWindowHeight;
    // if this world is existing, take command height from registry
-   if (!(m_pDoc->m_mush_name.IsEmpty ()))
+   else if (!(m_pDoc->m_mush_name.IsEmpty ()))
      cyCurBottom = App.db_get_int("worlds", (LPCTSTR) CFormat ("%s:%s", (LPCTSTR) m_pDoc->m_mush_name, "Bottom Height"), iDefaultHeight);
    else
      // otherwise, allow for a 2-line command area
     cyCurBottom = iDefaultHeight;
 
 //  TRACE1 ("Bottom height (loaded) = %i\n", cyCurBottom);
+
+   m_iCommandWindowHeight = cyCurBottom;
 
    // if height from registry is smaller, make the input font height
    // REMOVED in version 3.83
@@ -203,6 +211,44 @@ void CChildFrame::FixUpSplitterBar (void)
    m_wndSplitter.RecalcLayout ();
 
   }
+
+long CChildFrame::SetCommandWindowHeight (short Height)
+  {
+  if (Height < 0)
+    return eBadParameter;
+
+  CRect rectInside;
+  m_wndSplitter.GetClientRect(rectInside);
+  rectInside.InflateRect(-9, -9); // allow for borders and splitter bar
+
+  // we have to root around like this, because recalclayout lays out the top
+  // view first, and allocates the rest (possibly nothing) to the bottom view.
+  // I don't really want this, the important thing is that you can see where
+  // you are going to type. Thus I work out how much the maxmimum top view
+  // can be.
+
+  int iRoom = rectInside.bottom - rectInside.top - Height
+      + 7;    // 7 pixels for the splitter bar
+
+  int cyCurTop = iRoom;
+
+  if (cyCurTop < 20)
+    return eBadParameter;  // too small, want to see a line at least
+
+  m_iCommandWindowHeight = Height;
+
+  // set the info for the top view
+  m_wndSplitter.SetRowInfo (OUTPUT_PANE, cyCurTop, 20);
+
+  // set the info for the bottom view
+  m_wndSplitter.SetRowInfo (COMMAND_PANE, Height, 9);
+
+  // recalculate it all
+  m_wndSplitter.RecalcLayout ();
+
+  return eOK;
+  }   // end of CChildFrame::SetCommandWindowHeight
+
 
 // the tool tip messages end up here rather than in the child window, so send them on
 BOOL CChildFrame::OnToolTipNeedText(UINT id, NMHDR * pNMHDR, LRESULT * pResult)

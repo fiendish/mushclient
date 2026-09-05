@@ -310,23 +310,8 @@ POSITION pos;
 
 CChildFrame * CMUSHclientDoc::GetChildFrame (void)
   {
-  CChildFrame * pFrame = NULL;
-
-  // find the child frame
-  for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
-    {
-    CView* pView = GetNextView(pos);
-
-    if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-      {
-      CSendView* pmyView = (CSendView*)pView;
-
-      pFrame = pmyView->m_owner_frame;
-      break;
-      }	  // end of being a CSendView
-    }
-  
-  return pFrame;
+  CSendView * pCommandView = GetCommandView ();
+  return pCommandView ? pCommandView->m_owner_frame : NULL;
 
   } // end of CMUSHclientDoc::GetChildFrame
 
@@ -346,22 +331,7 @@ BOOL CMUSHclientDoc::Transparency(long Key, short Amount)
 void CMUSHclientDoc::SetWorldWindowStatus(short Parameter) 
 {
 
-CFrameWnd* pParent = NULL;
-
-  for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
-    {
-    CView* pView = GetNextView(pos);
-
-    if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-      {
-      CSendView* pmyView = (CSendView*)pView;
-
-      pParent = pmyView->GetParentFrame ();
-
-      break;
-
-      }	
-    }
+CFrameWnd* pParent = GetChildFrame ();
 
   if (pParent)
     {
@@ -741,6 +711,7 @@ long CMUSHclientDoc::SetScroll(long Position, BOOL Visible)
 CPoint pt (0, 0);
 int lastline = GetLastLine ();
 bool will_change_visibility = (Visible != m_bScrollBarWanted);
+CMUSHView * pScrollView = GetOutputView ();
 
   for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
 	  {
@@ -751,7 +722,8 @@ bool will_change_visibility = (Visible != m_bScrollBarWanted);
 		  CMUSHView* pmyView = (CMUSHView*)pView;
 
       CPoint cur_pt = pmyView->GetScrollPosition();
-      bool will_scroll = (Position != cur_pt.y) && (Position != -2); // if -2, do not change position
+      bool will_scroll = pmyView == pScrollView &&
+                         (Position != cur_pt.y) && (Position != -2); // if -2, do not change position
       int highest = (lastline * m_FontHeight) - pmyView->GetOutputWindowHeight ();
       will_scroll = will_scroll && ((Position != -1) || (cur_pt.y != highest));
 
