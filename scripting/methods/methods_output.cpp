@@ -331,22 +331,7 @@ BOOL CMUSHclientDoc::Transparency(long Key, short Amount)
 void CMUSHclientDoc::SetWorldWindowStatus(short Parameter) 
 {
 
-CFrameWnd* pParent = NULL;
-
-  for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
-    {
-    CView* pView = GetNextView(pos);
-
-    if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-      {
-      CSendView* pmyView = (CSendView*)pView;
-
-      pParent = pmyView->GetParentFrame ();
-
-      break;
-
-      }	
-    }
+CFrameWnd* pParent = GetChildFrame ();
 
   if (pParent)
     {

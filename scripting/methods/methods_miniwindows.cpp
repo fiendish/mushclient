@@ -1333,19 +1333,10 @@ BSTR CMUSHclientDoc::WindowMenu(LPCTSTR Name, long Left, long Top, LPCTSTR Items
 
   MiniWindowMapIterator it = m_MiniWindows.find (Name);
 
-	CView* pView = NULL;
-  
-  for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
-	  {
-	  pView = GetNextView(pos);
-
-	  if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)))
-      break;
-
-    }
+  CMUSHView * pView = GetOutputView ();
 
   if (pView && it != m_MiniWindows.end ())
-    strResult = it->second->Menu (Left, Top, Items, (CMUSHView *) pView);
+    strResult = it->second->Menu (Left, Top, Items, pView);
 
 	return strResult.AllocSysString();
 

@@ -771,23 +771,12 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
     case 238:
       {
       WINDOWPLACEMENT wp;
-
-      for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
+      CChildFrame * pFrame = GetChildFrame ();
+      if (pFrame)
         {
-        CView* pView = GetNextView(pos);
-
-        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-          {
-          CSendView* pmyView = (CSendView*)pView;
-
-          pmyView->GetParentFrame ()->GetWindowPlacement(&wp); 
-          SetUpVariantLong (vaResult, wp.showCmd);  // window placement flags
-          break;
-
-          }	
+        pFrame->GetWindowPlacement(&wp);
+        SetUpVariantLong (vaResult, wp.showCmd);  // window placement flags
         }
-
-
       }
       break;
 
