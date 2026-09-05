@@ -2558,6 +2558,7 @@ public:
 	afx_msg BSTR GetCommand();
 	afx_msg long GetCommandCursorPosition();
 	afx_msg long GetCommandLineCount();
+	afx_msg long GetCommandWindowDesiredHeight(long CurrentHeight);
 	afx_msg long AddTriggerEx(LPCTSTR TriggerName, LPCTSTR MatchText, LPCTSTR ResponseText, long Flags, short Colour, short Wildcard, LPCTSTR SoundFileName, LPCTSTR ScriptName, short SendTo, short Sequence);
 	afx_msg VARIANT GetQueue();
 	afx_msg long DeleteTemporaryTriggers();

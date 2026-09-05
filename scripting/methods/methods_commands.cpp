@@ -18,6 +18,7 @@
 //    GetCommand
 //    GetCommandCursorPosition
 //    GetCommandLineCount
+//    GetCommandWindowDesiredHeight
 //    GetCommandList
 //    GetInternalCommandsList
 //    GetQueue
@@ -521,6 +522,21 @@ long CMUSHclientDoc::GetCommandLineCount()
 
   return pCommandView->GetEditCtrl().GetLineCount ();
 }   // end of CMUSHclientDoc::GetCommandLineCount
+
+
+// world.GetCommandWindowDesiredHeight - applies command auto-resize policy to the supplied current height
+
+long CMUSHclientDoc::GetCommandWindowDesiredHeight(long CurrentHeight)
+{
+  if (CurrentHeight < 0)
+    return 0;
+
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView == NULL)
+    return 0;
+
+  return pCommandView->GetCommandWindowDesiredHeight (CurrentHeight);
+}   // end of CMUSHclientDoc::GetCommandWindowDesiredHeight
 
 
 

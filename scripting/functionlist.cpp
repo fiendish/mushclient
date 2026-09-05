@@ -172,6 +172,7 @@ tInternalFunctionsTable InternalFunctionsTable [] = {
 { "GetCommandCursorPosition" ,   "( )" } ,
 { "GetCommandLineCount" ,        "( )" } ,
 { "GetCommandList" ,             "( Count )" } ,
+{ "GetCommandWindowDesiredHeight" , "( CurrentHeight )" } ,
 { "GetConnectDuration" ,         "( )" } ,
 { "GetCurrentValue" ,            "( OptionName )" } ,
 { "GetCustomColourName" ,        "( WhichColour )" } ,

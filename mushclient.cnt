@@ -314,6 +314,7 @@
 3 GetCommandCursorPosition=FNC_GetCommandCursorPosition
 3 GetCommandLineCount=FNC_GetCommandLineCount
 3 GetCommandList=FNC_GetCommandList 
+3 GetCommandWindowDesiredHeight=FNC_GetCommandWindowDesiredHeight
 3 GetConnectDuration=FNC_GetConnectDuration 
 3 GetCurrentValue=FNC_GetCurrentValue 
 3 GetCustomColourName=FNC_GetCustomColourName
