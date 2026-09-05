@@ -2893,6 +2893,35 @@ void CSendView::OnSysCommand(UINT nID, LPARAM lParam)
 }
 
 
+int CSendView::GetCommandWindowDesiredHeight (const int iCurrentHeight)
+  {
+	CMUSHclientDoc* pDoc = GetDocument();
+	ASSERT_VALID(pDoc);
+
+  if (!pDoc->m_bAutoResizeCommandWindow)
+    return iCurrentHeight;
+
+  // find how many lines in command window
+  int iLines = GetEditCtrl().GetLineCount ();
+
+  // if too small, make the minimum
+  if (iLines < pDoc->m_iAutoResizeMinimumLines)
+    iLines = pDoc->m_iAutoResizeMinimumLines;
+
+  if (iLines > pDoc->m_iAutoResizeMaximumLines)
+    {
+    // if very large, let them manage it (that is, if they have already resized it to be larger than the maximum)
+    if (iCurrentHeight > (pDoc->m_InputFontHeight * pDoc->m_iAutoResizeMaximumLines + 4))
+      return iCurrentHeight;
+
+    // otherwise, take the maximum
+    iLines = pDoc->m_iAutoResizeMaximumLines;
+    }
+
+  return pDoc->m_InputFontHeight * iLines + 4;
+  }
+
+
 // auto resizing of command window based on amount of content
 void CSendView::AdjustCommandWindowSize (void)
   {
@@ -2904,29 +2933,12 @@ void CSendView::AdjustCommandWindowSize (void)
       pDoc->m_bSuppressCommandWindowAutoResize)
     return;
 
-  // find how many lines in command window
-  int iLines = GetEditCtrl().GetLineCount ();
-
-  // if too small, make the minimum
-  if (iLines < pDoc->m_iAutoResizeMinimumLines)
-    iLines = pDoc->m_iAutoResizeMinimumLines;
-
   CRect rect;
   GetClientRect (&rect);
 
-  if (iLines > pDoc->m_iAutoResizeMaximumLines)
-    {
-    // if very large, let them manage it (that is, if they have already resized it to be larger than the maximum)
-    if ((rect.bottom - rect.top) > (pDoc->m_InputFontHeight * pDoc->m_iAutoResizeMaximumLines + 4))
-      return;
-
-    // otherwise, take the maximum
-    iLines = pDoc->m_iAutoResizeMaximumLines;
-    }
-
   // resize - seem to need an extra 4 pixels or things go a bit strange
-  m_owner_frame->SetCommandWindowHeight (pDoc->m_InputFontHeight * iLines + 4);
-
+  m_owner_frame->SetCommandWindowHeight (
+      GetCommandWindowDesiredHeight (rect.bottom - rect.top));
   }
 
 // if we have a selection here, drop the selection in the output window

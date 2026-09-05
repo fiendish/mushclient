@@ -77,6 +77,7 @@ public:
 
   void AddToCommandHistory (const CString & strCommand);
 
+  int GetCommandWindowDesiredHeight (const int iCurrentHeight);
   void AdjustCommandWindowSize (void);
   void CheckForSelectionChange (void);
   void CancelSelection (void);
