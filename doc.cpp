@@ -628,6 +628,7 @@ BEGIN_DISPATCH_MAP(CMUSHclientDoc, CDocument)
 	DISP_PROPERTY_PARAM(CMUSHclientDoc, "CustomColourBackground", GetCustomColourBackground, SetCustomColourBackground, VT_I4, VTS_I2)
 	DISP_FUNCTION(CMUSHclientDoc, "GetCommandCursorPosition", GetCommandCursorPosition, VT_I4, VTS_NONE)
 	DISP_FUNCTION(CMUSHclientDoc, "GetCommandLineCount", GetCommandLineCount, VT_I4, VTS_NONE)
+	DISP_FUNCTION(CMUSHclientDoc, "GetCommandWindowDesiredHeight", GetCommandWindowDesiredHeight, VT_I4, VTS_I4)
 	DISP_FUNCTION(CMUSHclientDoc, "SetCommandWindowAutoResizeSuppressed", SetCommandWindowAutoResizeSuppressed, VT_I4, VTS_BOOL)
 	//}}AFX_DISPATCH_MAP
 END_DISPATCH_MAP()

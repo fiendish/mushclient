@@ -449,6 +449,7 @@ library MUSHclient
 			[id(419)] long GetCommandCursorPosition();
 			[id(420)] long GetCommandLineCount();
 			[id(421)] long SetCommandWindowAutoResizeSuppressed(BOOL Suppressed);
+			[id(422)] long GetCommandWindowDesiredHeight(long CurrentHeight);
 			//}}AFX_ODL_METHOD
 
 	};

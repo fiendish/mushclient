@@ -2780,6 +2780,17 @@ static int L_GetCommandLineCount (lua_State *L)
 
 
 //----------------------------------------
+//  world.GetCommandWindowDesiredHeight
+//----------------------------------------
+static int L_GetCommandWindowDesiredHeight (lua_State *L)
+  {
+  lua_pushnumber (L, doc (L)->GetCommandWindowDesiredHeight (
+                    my_checknumber (L, 1)));
+  return 1;  // number of result fields
+  } // end of L_GetCommandWindowDesiredHeight
+
+
+//----------------------------------------
 //  world.GetCommandList
 //----------------------------------------
 static int L_GetCommandList (lua_State *L)
@@ -6890,6 +6901,7 @@ static const struct luaL_Reg worldlib [] =
   {"GetCommandCursorPosition", L_GetCommandCursorPosition},
   {"GetCommandLineCount", L_GetCommandLineCount},
   {"GetCommandList", L_GetCommandList},
+  {"GetCommandWindowDesiredHeight", L_GetCommandWindowDesiredHeight},
   {"GetConnectDuration", L_GetConnectDuration},
   {"GetCurrentValue", L_GetCurrentValue},
   {"GetCustomColourName", L_GetCustomColourName},
