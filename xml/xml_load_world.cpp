@@ -9,6 +9,317 @@
 #include "..\mainfrm.h"
 #include "..\dialogs\ProgDlg.h"
 
+template <class T>
+static T * SimulateXMLLoadRollback (
+  const CString & strName,
+  T * pCurrent,
+  vector<CXMLLoadChange<T> > & changes)
+  {
+  for (int i = static_cast<int> (changes.size ()) - 1; i >= 0; i--)
+    {
+    CXMLLoadChange<T> & change = changes [i];
+    if (!change.bApplied || change.strName != strName ||
+        pCurrent != change.pNew ||
+        pCurrent->nCreationNumber != change.iNewCreationNumber)
+      continue;
+    change.bRollbackOwnsNew = true;
+    pCurrent = change.pOld;
+    }
+  return pCurrent;
+  }
+
+template <class T, class TMap>
+static void ApplyXMLLoadMapRollback (
+  TMap & objectMap,
+  vector<CXMLLoadChange<T> > & changes)
+  {
+  for (int i = static_cast<int> (changes.size ()) - 1; i >= 0; i--)
+    {
+    CXMLLoadChange<T> & change = changes [i];
+    if (!change.bApplied || !change.bRollbackOwnsNew)
+      continue;
+    if (change.pOld)
+      objectMap.SetAt (change.strName, change.pOld);
+    else
+      objectMap.RemoveKey (change.strName);
+    }
+  }
+
+static int CompareXMLRollbackTrigger (const void * pLeft,
+                                      const void * pRight)
+  {
+  CTrigger * pTriggerLeft = *static_cast<CTrigger * const *> (pLeft);
+  CTrigger * pTriggerRight = *static_cast<CTrigger * const *> (pRight);
+  if (pTriggerLeft->iSequence != pTriggerRight->iSequence)
+    return pTriggerLeft->iSequence < pTriggerRight->iSequence ? -1 : 1;
+  if (pTriggerLeft->trigger == pTriggerRight->trigger)
+    return 0;
+  return pTriggerLeft->trigger < pTriggerRight->trigger ? -1 : 1;
+  }
+
+static int CompareXMLRollbackAlias (const void * pLeft,
+                                    const void * pRight)
+  {
+  CAlias * pAliasLeft = *static_cast<CAlias * const *> (pLeft);
+  CAlias * pAliasRight = *static_cast<CAlias * const *> (pRight);
+  if (pAliasLeft->iSequence != pAliasRight->iSequence)
+    return pAliasLeft->iSequence < pAliasRight->iSequence ? -1 : 1;
+  if (pAliasLeft->name == pAliasRight->name)
+    return 0;
+  return pAliasLeft->name < pAliasRight->name ? -1 : 1;
+  }
+
+static void PrepareAndPublishXMLLoadRollback (
+  CMUSHclientDoc * pDoc,
+  CTriggerMap & objectMap,
+  vector<CXMLLoadChange<CTrigger> > & changes)
+  {
+  for (vector<CXMLLoadChange<CTrigger> >::iterator it = changes.begin ();
+       it != changes.end (); ++it)
+    it->bRollbackOwnsNew = false;
+
+  vector<CTrigger *> triggerArray;
+  CTriggerRevMap triggerRevMap;
+  triggerArray.reserve (objectMap.GetCount ());
+  CString strName;
+  CTrigger * pTrigger;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pTrigger);
+    pTrigger = SimulateXMLLoadRollback (strName, pTrigger, changes);
+    if (!pTrigger)
+      continue;
+    triggerArray.push_back (pTrigger);
+    triggerRevMap [pTrigger] = strName;
+    }
+  if (triggerArray.size () > 1)
+    qsort (&triggerArray [0], triggerArray.size (),
+           sizeof (CTrigger *), CompareXMLRollbackTrigger);
+
+  if (static_cast<int> (triggerArray.size ()) >
+      pDoc->GetTriggerArray ().GetSize ())
+    pDoc->GetTriggerArray ().SetSize (triggerArray.size ());
+
+  ApplyXMLLoadMapRollback (objectMap, changes);
+  pDoc->GetTriggerArray ().SetSize (triggerArray.size ());
+  for (size_t i = 0; i < triggerArray.size (); i++)
+    pDoc->GetTriggerArray ().SetAt (i, triggerArray [i]);
+  pDoc->GetTriggerRevMap ().swap (triggerRevMap);
+  }
+
+static void PrepareAndPublishXMLLoadRollback (
+  CMUSHclientDoc * pDoc,
+  CAliasMap & objectMap,
+  vector<CXMLLoadChange<CAlias> > & changes)
+  {
+  for (vector<CXMLLoadChange<CAlias> >::iterator it = changes.begin ();
+       it != changes.end (); ++it)
+    it->bRollbackOwnsNew = false;
+
+  vector<CAlias *> aliasArray;
+  CAliasRevMap aliasRevMap;
+  aliasArray.reserve (objectMap.GetCount ());
+  CString strName;
+  CAlias * pAlias;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pAlias);
+    pAlias = SimulateXMLLoadRollback (strName, pAlias, changes);
+    if (!pAlias)
+      continue;
+    aliasArray.push_back (pAlias);
+    aliasRevMap [pAlias] = strName;
+    }
+  if (aliasArray.size () > 1)
+    qsort (&aliasArray [0], aliasArray.size (),
+           sizeof (CAlias *), CompareXMLRollbackAlias);
+
+  if (static_cast<int> (aliasArray.size ()) >
+      pDoc->GetAliasArray ().GetSize ())
+    pDoc->GetAliasArray ().SetSize (aliasArray.size ());
+
+  ApplyXMLLoadMapRollback (objectMap, changes);
+  pDoc->GetAliasArray ().SetSize (aliasArray.size ());
+  for (size_t i = 0; i < aliasArray.size (); i++)
+    pDoc->GetAliasArray ().SetAt (i, aliasArray [i]);
+  pDoc->GetAliasRevMap ().swap (aliasRevMap);
+  }
+
+static void PrepareAndPublishXMLLoadRollback (
+  CMUSHclientDoc * pDoc,
+  CTimerMap & objectMap,
+  vector<CXMLLoadChange<CTimer> > & changes)
+  {
+  for (vector<CXMLLoadChange<CTimer> >::iterator it = changes.begin ();
+       it != changes.end (); ++it)
+    it->bRollbackOwnsNew = false;
+
+  CTimerRevMap timerRevMap;
+  CString strName;
+  CTimer * pTimer;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pTimer);
+    pTimer = SimulateXMLLoadRollback (strName, pTimer, changes);
+    if (pTimer)
+      timerRevMap [pTimer] = strName;
+    }
+
+  ApplyXMLLoadMapRollback (objectMap, changes);
+  pDoc->GetTimerRevMap ().swap (timerRevMap);
+  }
+
+template <class T>
+static void ResetXMLLoadRollbackDecisions (
+  vector<CXMLLoadChange<T> > & changes)
+  {
+  for (typename vector<CXMLLoadChange<T> >::iterator it = changes.begin ();
+       it != changes.end (); ++it)
+    it->bRollbackOwnsNew = false;
+  }
+
+static void PublishXMLLoadRollbackWithoutAllocation (
+  CMUSHclientDoc * pDoc,
+  CTriggerMap & objectMap,
+  vector<CXMLLoadChange<CTrigger> > & changes)
+  {
+  ResetXMLLoadRollbackDecisions (changes);
+  int iFinalCount = 0;
+  CString strName;
+  CTrigger * pTrigger;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pTrigger);
+    if (SimulateXMLLoadRollback (strName, pTrigger, changes))
+      iFinalCount++;
+    }
+
+  // The final rollback map cannot contain more objects than the largest
+  // successfully indexed state already published during this load.
+  pDoc->GetTriggerArray ().SetSize (iFinalCount);
+  ResetXMLLoadRollbackDecisions (changes);
+  int iTrigger = 0;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pTrigger);
+    pTrigger = SimulateXMLLoadRollback (strName, pTrigger, changes);
+    if (pTrigger)
+      pDoc->GetTriggerArray ().SetAt (iTrigger++, pTrigger);
+    }
+  if (iFinalCount > 1)
+    qsort (&pDoc->GetTriggerArray () [0], iFinalCount,
+           sizeof (CTrigger *), CompareXMLRollbackTrigger);
+
+  ApplyXMLLoadMapRollback (objectMap, changes);
+  pDoc->GetTriggerRevMap ().clear ();
+  }
+
+static void PublishXMLLoadRollbackWithoutAllocation (
+  CMUSHclientDoc * pDoc,
+  CAliasMap & objectMap,
+  vector<CXMLLoadChange<CAlias> > & changes)
+  {
+  ResetXMLLoadRollbackDecisions (changes);
+  int iFinalCount = 0;
+  CString strName;
+  CAlias * pAlias;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pAlias);
+    if (SimulateXMLLoadRollback (strName, pAlias, changes))
+      iFinalCount++;
+    }
+
+  pDoc->GetAliasArray ().SetSize (iFinalCount);
+  ResetXMLLoadRollbackDecisions (changes);
+  int iAlias = 0;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pAlias);
+    pAlias = SimulateXMLLoadRollback (strName, pAlias, changes);
+    if (pAlias)
+      pDoc->GetAliasArray ().SetAt (iAlias++, pAlias);
+    }
+  if (iFinalCount > 1)
+    qsort (&pDoc->GetAliasArray () [0], iFinalCount,
+           sizeof (CAlias *), CompareXMLRollbackAlias);
+
+  ApplyXMLLoadMapRollback (objectMap, changes);
+  pDoc->GetAliasRevMap ().clear ();
+  }
+
+static void PublishXMLLoadRollbackWithoutAllocation (
+  CMUSHclientDoc * pDoc,
+  CTimerMap & objectMap,
+  vector<CXMLLoadChange<CTimer> > & changes)
+  {
+  ResetXMLLoadRollbackDecisions (changes);
+  CString strName;
+  CTimer * pTimer;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pTimer);
+    SimulateXMLLoadRollback (strName, pTimer, changes);
+    }
+  ApplyXMLLoadMapRollback (objectMap, changes);
+  pDoc->GetTimerRevMap ().clear ();
+  }
+
+template <class T, class TMap>
+class CXMLLoadChangeGuard
+  {
+  public:
+  typedef void (CMUSHclientDoc::*RetireFunction) (T *);
+  CXMLLoadChangeGuard (CMUSHclientDoc * pDoc,
+                       TMap & objectMap,
+                       vector<CXMLLoadChange<T> > & changes,
+                       RetireFunction retire) :
+      m_pDoc (pDoc), m_ObjectMap (objectMap), m_Changes (changes),
+      m_Retire (retire), m_bCommitted (false) {}
+
+  ~CXMLLoadChangeGuard ()
+    { ASSERT (m_bCommitted); }
+
+  void Rollback ()
+    {
+    if (m_bCommitted)
+      return;
+    m_bCommitted = true;
+    try
+      {
+      PrepareAndPublishXMLLoadRollback (m_pDoc, m_ObjectMap, m_Changes);
+      }
+    catch (...)
+      {
+      PublishXMLLoadRollbackWithoutAllocation (
+        m_pDoc, m_ObjectMap, m_Changes);
+      for (typename vector<CXMLLoadChange<T> >::iterator it =
+             m_Changes.begin ();
+           it != m_Changes.end (); ++it)
+        if (it->bApplied)
+          (m_pDoc->*m_Retire)
+            (it->bRollbackOwnsNew ? it->pNew : it->pOld);
+      throw;
+      }
+
+    for (typename vector<CXMLLoadChange<T> >::iterator it =
+           m_Changes.begin ();
+         it != m_Changes.end (); ++it)
+      if (it->bApplied)
+        (m_pDoc->*m_Retire)
+          (it->bRollbackOwnsNew ? it->pNew : it->pOld);
+    }
+
+  void Commit () { m_bCommitted = true; }
+
+  private:
+  CMUSHclientDoc * m_pDoc;
+  TMap & m_ObjectMap;
+  vector<CXMLLoadChange<T> > & m_Changes;
+  RetireFunction m_Retire;
+  bool m_bCommitted;
+  };
+
 /*
 
 Basic expected document structure ...
@@ -344,6 +655,10 @@ UINT iPrinting = 0;
 
 CPlugin * pCurrentPlugin = m_CurrentPlugin;
 
+CValueStateGuard<CString> fileNameGuard (strFileName, strFileName);
+CValueStateGuard<UINT> lineGuard (iLineLastItemFound, iLineLastItemFound);
+CValueStateGuard<UINT> errorCountGuard (iErrorCount, iErrorCount);
+
 iErrorCount = 0;
 
 #if TIMER_TEST
@@ -588,12 +903,34 @@ LONGLONG iCounterFrequency = large_int_frequency.QuadPart;
   catch(CException* e)
     {
     if (m_CurrentPlugin && !pCurrentPlugin)   // *this* file had a plugin
+      {
+      PluginListIterator pit = find (m_PluginList.begin (),
+                                     m_PluginList.end (),
+                                     m_CurrentPlugin);
+      if (pit != m_PluginList.end ())
+        m_PluginList.erase (pit);
       delete m_CurrentPlugin;   // throw away plugin, if parsing problem in it
+      }
     m_CurrentPlugin = pCurrentPlugin;   
     if (iLineLastItemFound == 0)
       iLineLastItemFound = parser.m_xmlLine;
     HandleLoadException ("Cannot load", e);
     AfxThrowArchiveException (CArchiveException::badSchema);
+    }
+
+  catch (...)
+    {
+    if (m_CurrentPlugin && !pCurrentPlugin)
+      {
+      PluginListIterator pit = find (m_PluginList.begin (),
+                                     m_PluginList.end (),
+                                     m_CurrentPlugin);
+      if (pit != m_PluginList.end ())
+        m_PluginList.erase (pit);
+      delete m_CurrentPlugin;
+      }
+    m_CurrentPlugin = pCurrentPlugin;
+    throw;
     }
 
   return count;
@@ -1149,12 +1486,17 @@ void CMUSHclientDoc::Load_World_Multi_Line_Alpha_Options_XML (CXMLelement & pare
 
 
 
-UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent, 
+UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent,
                                        const unsigned long iMask,
                                        const unsigned long iFlags)
   {
   UINT count = 0;
+  vector<CXMLLoadChange<CTrigger> > changes;
+  CXMLLoadChangeGuard<CTrigger, CTriggerMap> changeGuard
+    (this, GetTriggerMap (), changes, &CMUSHclientDoc::RetireTrigger);
 
+  try
+    {
   LOAD_LOOP (parent, "triggers", pTriggers);
 
     GET_VERSION_AND_DEFAULTS (pTriggers);
@@ -1163,8 +1505,10 @@ UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent,
   
     try
       {
-      Load_One_Trigger_XML (*pElement, iMask, iVersion, bUseDefault, iFlags);
-      count++;
+      changes.push_back (CXMLLoadChange<CTrigger> ());
+      if (Load_One_Trigger_XML (*pElement, iMask, iVersion, bUseDefault,
+                                iFlags, changes.back ()))
+        count++;
       }
     catch (CException* e)
       {
@@ -1178,18 +1522,33 @@ UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent,
   END_LOAD_LOOP;
 
   SortTriggers ();
+    }
+  catch (...)
+    {
+    changeGuard.Rollback ();
+    throw;
+    }
+
+  changeGuard.Commit ();
+  for (vector<CXMLLoadChange<CTrigger> >::iterator it = changes.begin ();
+       it != changes.end (); it++)
+    if (it->bApplied)
+      RetireTrigger (it->pOld);
 
   return count;
   }   // end of CMUSHclientDoc::Load_Triggers_XML
 
 
-bool CMUSHclientDoc::Load_One_Trigger_XML (CXMLelement & node, 
+bool CMUSHclientDoc::Load_One_Trigger_XML (CXMLelement & node,
                                            const unsigned long iMask,
-                                           const long iVersion, 
-                                           bool bUseDefault, 
-                                           const unsigned long iFlags)
+                                           const long iVersion,
+                                           bool bUseDefault,
+                                           const unsigned long iFlags,
+                                           CXMLLoadChange<CTrigger> & change)
   {
-CTrigger * t = new CTrigger;
+std::unique_ptr<CTrigger> newTrigger (new CTrigger);
+CTrigger * t = newTrigger.get ();
+CTrigger * oldTrigger = NULL;
 CString strTriggerName;
 CString strVariable;
 
@@ -1322,7 +1681,7 @@ CString strVariable;
     if (GetTriggerMap ().Lookup (strTriggerName, trigger_check))
       {
       if (iMask & XML_OVERWRITE)
-        delete trigger_check;
+        oldTrigger = trigger_check;
       else
         ThrowErrorException ("Duplicate trigger label \"%s\" ", 
                              strTriggerName);
@@ -1368,7 +1727,6 @@ CString strVariable;
 
   catch(CException*)
     {
-    delete t; // get rid of trigger
     throw;
     }
 
@@ -1384,7 +1742,6 @@ CString strVariable;
       GetTriggerMap ().GetNextAssoc (pos, strExistingTriggerName, pExistingTrigger);
       if (*pExistingTrigger == *t)
         {
-        delete t;  // get rid of duplicate trigger
         return false;    // and don't add it
         }  // end of duplicate
       }    // end of for loop                      
@@ -1394,20 +1751,32 @@ CString strVariable;
   // now add to our internal trigger map
 
   t->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  t->nCreationNumber  = App.GetUniqueNumber ();
   t->strInternalName  = strTriggerName;    // for deleting one-shot triggers
-  GetTriggerMap ().SetAt (strTriggerName, t);
-
   CheckUsed (node);   // check we used all attributes
+  change.strName = strTriggerName;
+  change.pOld = oldTrigger;
+  change.pNew = t;
+  change.iNewCreationNumber = t->nCreationNumber;
+  GetTriggerMap ().SetAt (strTriggerName, t);
+  change.bApplied = true;
+  newTrigger.release ();
+
   return true;  // loaded OK
   } // end of CMUSHclientDoc::Load_One_Trigger_XML
 
 
-UINT CMUSHclientDoc::Load_Aliases_XML (CXMLelement & parent, 
+UINT CMUSHclientDoc::Load_Aliases_XML (CXMLelement & parent,
                                        const unsigned long iMask,
                                        const unsigned long iFlags)
   {
 UINT count = 0;
+vector<CXMLLoadChange<CAlias> > changes;
+CXMLLoadChangeGuard<CAlias, CAliasMap> changeGuard
+  (this, GetAliasMap (), changes, &CMUSHclientDoc::RetireAlias);
 
+  try
+    {
   LOAD_LOOP (parent, "aliases", pAliases);
 
     GET_VERSION_AND_DEFAULTS (pAliases);
@@ -1416,7 +1785,9 @@ UINT count = 0;
 
       try
         {
-        if (Load_One_Alias_XML (*pElement, iMask, iVersion, bUseDefault, iFlags))
+        changes.push_back (CXMLLoadChange<CAlias> ());
+        if (Load_One_Alias_XML (*pElement, iMask, iVersion, bUseDefault,
+                                iFlags, changes.back ()))
           count++;
         }
       catch (CException* e)
@@ -1431,18 +1802,33 @@ UINT count = 0;
   END_LOAD_LOOP;
 
   SortAliases ();
+    }
+  catch (...)
+    {
+    changeGuard.Rollback ();
+    throw;
+    }
+
+  changeGuard.Commit ();
+  for (vector<CXMLLoadChange<CAlias> >::iterator it = changes.begin ();
+       it != changes.end (); it++)
+    if (it->bApplied)
+      RetireAlias (it->pOld);
 
   return count;
   }   // end of CMUSHclientDoc::Load_Aliases_XML
 
 
-bool CMUSHclientDoc::Load_One_Alias_XML (CXMLelement & node, 
+bool CMUSHclientDoc::Load_One_Alias_XML (CXMLelement & node,
                                          const unsigned long iMask,
-                                         const long iVersion, 
-                                         bool bUseDefault, 
-                                         const unsigned long iFlags)
+                                         const long iVersion,
+                                         bool bUseDefault,
+                                         const unsigned long iFlags,
+                                         CXMLLoadChange<CAlias> & change)
   {
-CAlias * a = new CAlias;
+std::unique_ptr<CAlias> newAlias (new CAlias);
+CAlias * a = newAlias.get ();
+CAlias * oldAlias = NULL;
 CString strAliasName;
 CString strVariable;
 
@@ -1553,7 +1939,7 @@ CString strVariable;
     if (GetAliasMap ().Lookup (strAliasName, alias_check))
       {
       if (iMask & XML_OVERWRITE)
-        delete alias_check;
+        oldAlias = alias_check;
       else
         ThrowErrorException ("Duplicate alias label \"%s\" ", 
                              strAliasName);
@@ -1600,7 +1986,6 @@ CString strVariable;
 
   catch(CException*)
     {
-    delete a; // get rid of alias
     throw;
     }
 
@@ -1616,7 +2001,6 @@ CString strVariable;
       GetAliasMap ().GetNextAssoc (pos, strExistingAliasName, pExistingAlias);
       if (*pExistingAlias == *a)
         {
-        delete a;  // get rid of duplicate alias
         return false;    // and don't add it
         }  // end of duplicate
       }    // end of for loop                      
@@ -1626,20 +2010,32 @@ CString strVariable;
   // now add to our internal alias map
 
   a->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  a->nCreationNumber  = App.GetUniqueNumber ();
   a->strInternalName  = strAliasName;    // for deleting one-shot aliases
-  GetAliasMap ().SetAt (strAliasName, a);
-
   CheckUsed (node);   // check we used all attributes
+  change.strName = strAliasName;
+  change.pOld = oldAlias;
+  change.pNew = a;
+  change.iNewCreationNumber = a->nCreationNumber;
+  GetAliasMap ().SetAt (strAliasName, a);
+  change.bApplied = true;
+  newAlias.release ();
+
   return true;  // loaded OK
   } // end of CMUSHclientDoc::Load_One_Alias_XML
 
 
-UINT CMUSHclientDoc::Load_Timers_XML (CXMLelement & parent, 
+UINT CMUSHclientDoc::Load_Timers_XML (CXMLelement & parent,
                                       const unsigned long iMask,
                                        const unsigned long iFlags)
   {
 UINT count = 0;
+vector<CXMLLoadChange<CTimer> > changes;
+CXMLLoadChangeGuard<CTimer, CTimerMap> changeGuard
+  (this, GetTimerMap (), changes, &CMUSHclientDoc::RetireTimer);
 
+  try
+    {
   LOAD_LOOP (parent, "timers", pTimers);
 
     GET_VERSION_AND_DEFAULTS (pTimers);
@@ -1648,8 +2044,10 @@ UINT count = 0;
 
     try
       {
-      Load_One_Timer_XML (*pElement, iMask, iVersion, bUseDefault, iFlags);
-      count++;
+      changes.push_back (CXMLLoadChange<CTimer> ());
+      if (Load_One_Timer_XML (*pElement, iMask, iVersion, bUseDefault,
+                              iFlags, changes.back ()))
+        count++;
       }
     catch (CException* e)
       {
@@ -1663,18 +2061,33 @@ UINT count = 0;
   END_LOAD_LOOP;
 
   SortTimers ();
+    }
+  catch (...)
+    {
+    changeGuard.Rollback ();
+    throw;
+    }
+
+  changeGuard.Commit ();
+  for (vector<CXMLLoadChange<CTimer> >::iterator it = changes.begin ();
+       it != changes.end (); it++)
+    if (it->bApplied)
+      RetireTimer (it->pOld);
 
   return count;
   }   // end of CMUSHclientDoc::Load_Timers_XML
 
 
-bool CMUSHclientDoc::Load_One_Timer_XML (CXMLelement & node, 
+bool CMUSHclientDoc::Load_One_Timer_XML (CXMLelement & node,
                                          const unsigned long iMask,
-                                         const long iVersion, 
-                                         bool bUseDefault, 
-                                         const unsigned long iFlags)
+                                         const long iVersion,
+                                         bool bUseDefault,
+                                         const unsigned long iFlags,
+                                         CXMLLoadChange<CTimer> & change)
   {
-CTimer * t = new CTimer;
+std::unique_ptr<CTimer> newTimer (new CTimer);
+CTimer * t = newTimer.get ();
+CTimer * oldTimer = NULL;
 CString strTimerName,
         strVariable;
 
@@ -1793,7 +2206,7 @@ CString strTimerName,
     if (GetTimerMap ().Lookup (strTimerName, timer_check))
       {
       if (iMask & XML_OVERWRITE)
-        delete timer_check;
+        oldTimer = timer_check;
       else
         ThrowErrorException ("Duplicate timer label \"%s\" ", 
                              strTimerName);
@@ -1806,7 +2219,6 @@ CString strTimerName,
 
   catch(CException*)
     {
-    delete t; // get rid of timer
     throw;
     }
 
@@ -1822,7 +2234,6 @@ CString strTimerName,
       GetTimerMap ().GetNextAssoc (pos, strExistingTimerName, pExistingTimer);
       if (*pExistingTimer == *t)
         {
-        delete t;  // get rid of duplicate timer
         return false;    // and don't add it
         }  // end of duplicate
       }    // end of for loop                      
@@ -1832,11 +2243,17 @@ CString strTimerName,
   // now add to our internal timer map
 
   t->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
-  GetTimerMap ().SetAt (strTimerName, t);
-
+  t->nCreationNumber  = App.GetUniqueNumber ();
   ResetOneTimer (t);    // make sure it is reset
-
   CheckUsed (node);   // check we used all attributes
+  change.strName = strTimerName;
+  change.pOld = oldTimer;
+  change.pNew = t;
+  change.iNewCreationNumber = t->nCreationNumber;
+  GetTimerMap ().SetAt (strTimerName, t);
+  change.bApplied = true;
+  newTimer.release ();
+
   return true;   // loaded OK
   } // end of CMUSHclientDoc::Load_One_Timer_XML
 
@@ -1965,7 +2382,9 @@ void CMUSHclientDoc::Load_One_Variable_XML (CXMLelement & node,
                                             const unsigned long iFlags)
   {                           
 
-CVariable * v = new CVariable;
+std::unique_ptr<CVariable> newVariable (new CVariable);
+CVariable * v = newVariable.get ();
+CVariable * oldVariable = NULL;
 CString strVariableName;
 CString strNewContents;
 bool bTrim;
@@ -1996,31 +2415,29 @@ bool bTrim;
                              (LPCTSTR) strVariableName);
 
     // get rid of old variable, if any
-    CVariable * variable_item;
-    if (GetVariableMap ().Lookup (strVariableName, variable_item))
+    if (GetVariableMap ().Lookup (strVariableName, oldVariable))
       {
       // don't warn if new contents are the same :)
-      if (variable_item->strContents != strNewContents)
+      if (oldVariable->strContents != strNewContents)
         if (!(iMask & XML_OVERWRITE))
-          LoadError (strVariableName, 
+          LoadError (strVariableName,
                      "overwriting existing variable contents",
                      node.iLine);
-      delete variable_item;
       }
 
     v->strContents = strNewContents;
+    CheckUsed (node);   // check we used all attributes
 
     } // end of try
 
   catch(CException*)
     {
-    delete v; // get rid of variable
     throw;
     }
 
   GetVariableMap ().SetAt (strVariableName, v);
-
-  CheckUsed (node);   // check we used all attributes
+  newVariable.release ();
+  delete oldVariable;
 
   } // end of CMUSHclientDoc::Load_One_Variable_XML
 

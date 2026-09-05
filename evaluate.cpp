@@ -19,9 +19,8 @@ BOOL CMUSHclientDoc::EvaluateCommand (const CString & full_input,
                                             const bool bTest)
   {
 CString str;
-POSITION pos;
 CString input = full_input;
-CAliasList AliasList;
+OneShotItemMap AliasList;
   
 // get rid of any carriage returns
 
@@ -64,6 +63,7 @@ CAliasList AliasList;
 
 // --------------------------- ALIASES ------------------------------
 
+  CPluginContextGuard commandContextGuard (this, NULL);
 
   bool bEchoAlias = m_display_my_input;
   OneShotItemMap mapOneShotItems;
@@ -71,17 +71,22 @@ CAliasList AliasList;
   if (m_enable_aliases)
     {
 
-    PluginListIterator pit;
+    CPluginInstanceSnapshot negativePlugins;
+    CPluginInstanceSnapshot nonnegativePlugins;
+    GetPluginSequenceSnapshots (m_PluginList,
+                                negativePlugins,
+                                nonnegativePlugins);
 
    // Do plugins (stop if one stops trigger evaluation).
    // Do only negative sequence number plugins at this point
    // Suggested by Fiendish. Added in version 4.97.
-    for (pit = m_PluginList.begin ();
-         pit != m_PluginList.end () &&
-        (*pit)->m_iSequence < 0;
-         ++pit)
+    for (size_t iPlugin = 0; iPlugin < negativePlugins.size (); iPlugin++)
       {
-      m_CurrentPlugin = *pit;
+      m_CurrentPlugin = GetPluginInstance (
+        negativePlugins [iPlugin].m_strID,
+        negativePlugins [iPlugin].m_iPluginInstanceNumber);
+      if (!m_CurrentPlugin)
+        continue;
       if (m_CurrentPlugin->m_bEnabled)
         if (ProcessOneAliasSequence (input,
                                      bCountThem,
@@ -105,14 +110,13 @@ CAliasList AliasList;
        return true;
 
      // do plugins (stop if one stops alias evaluation)
-    for (pit = m_PluginList.begin ();
-         pit != m_PluginList.end ();
-         ++pit)
+    for (size_t iPlugin = 0; iPlugin < nonnegativePlugins.size (); iPlugin++)
       {
-      // skip past negative sequence numbers
-      if ((*pit)->m_iSequence < 0)
+      m_CurrentPlugin = GetPluginInstance (
+        nonnegativePlugins [iPlugin].m_strID,
+        nonnegativePlugins [iPlugin].m_iPluginInstanceNumber);
+      if (!m_CurrentPlugin)
          continue;
-      m_CurrentPlugin = *pit;
       if (m_CurrentPlugin->m_bEnabled)
         if (ProcessOneAliasSequence (input,
                                      bCountThem,
@@ -133,7 +137,7 @@ CAliasList AliasList;
 
   // if no alias matched at all, just send the raw command
 
-  if (AliasList.IsEmpty ())
+  if (AliasList.empty ())
     {
     // let them know if they are foolishly trying to send to a closed connection
     if (CheckConnected ())
@@ -150,63 +154,35 @@ CAliasList AliasList;
 
 // execute any scripts associated with aliases we found
 
-  bool bFoundIt;
-  CAlias * existing_alias_item;
-  CAlias * alias_item;
-  CString strAliasName;
-
-  for (pos = AliasList.GetHeadPosition (); pos; )
+  for (OneShotItemMap::const_iterator alias_it = AliasList.begin ();
+       alias_it != AliasList.end ();
+       ++alias_it)
     {
-    alias_item = AliasList.GetNext (pos);
-    bFoundIt = false;
-
-  // check that alias still exists, in case a script deleted it - and also
-  // to work out which plugin it is in
-    
-    m_CurrentPlugin = NULL;
-
-    // main aliases - if main scripting active
-    for (POSITION pos = GetAliasMap ().GetStartPosition (); !bFoundIt && pos; )
+    CPlugin * pPlugin = NULL;
+    if (!alias_it->sPluginID.empty ())
       {
-      GetAliasMap ().GetNextAssoc (pos, strAliasName, existing_alias_item);
-      if (existing_alias_item == alias_item)
-        {
-        bFoundIt = true;
-        // execute Alias script
-        ExecuteAliasScript (alias_item, input);
-        }
+      pPlugin = GetPluginInstance (alias_it->sPluginID.c_str (),
+                                   alias_it->iPluginInstanceNumber);
+      if (!pPlugin || !pPlugin->m_bEnabled)
+        continue;
+      }
 
-     }  // end of scanning main aliases
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
+    CAlias * alias_item = NULL;
+    if (!GetAliasMap ().Lookup (alias_it->sItemKey.c_str (), alias_item) ||
+        alias_item->nCreationNumber != alias_it->iCreationNumber)
+      continue;
 
-    // do plugins
-   for (PluginListIterator pit = m_PluginList.begin (); 
-         !bFoundIt && pit != m_PluginList.end (); 
-         ++pit)
-      {
-      m_CurrentPlugin = *pit;
-
-      if (m_CurrentPlugin->m_bEnabled)
-        for (POSITION pos = GetAliasMap ().GetStartPosition (); !bFoundIt && pos; )
-          {
-          GetAliasMap ().GetNextAssoc (pos, strAliasName, existing_alias_item);
-          if (existing_alias_item == alias_item)
-            {
-            bFoundIt = true;
-            // execute Alias script
-            ExecuteAliasScript (alias_item, input);
-            }
-
-          }  // end of scanning plugin aliases
-      } // end of doing plugins list
-    }       // end of list of aliass that fired
+    ExecuteAliasScript (alias_item, input);
+    }       // end of list of aliases that fired
 
 
 
-// now that we have run all scripts etc., delete one-shot aliases      
+// now that we have run all scripts etc., delete one-shot aliases
 
-  int iDeletedCount = 0;
   int iDeletedNonTemporaryCount = 0;
-  set<CPlugin *> pluginsWithDeletions;
+  typedef map<string, CAlias *> AliasDeletionMap;
+  map<CPlugin *, AliasDeletionMap> aliasDeletions;
 
   for (OneShotItemMap::const_iterator one_shot_it = mapOneShotItems.begin ();
        one_shot_it != mapOneShotItems.end ();
@@ -215,9 +191,20 @@ CAliasList AliasList;
     CAlias * alias_item;
     CString strAliasName = one_shot_it->sItemKey.c_str ();
 
-    m_CurrentPlugin = one_shot_it->pWhichPlugin;   // set back to correct plugin
+    CPlugin * pPlugin = NULL;
+    if (!one_shot_it->sPluginID.empty ())
+      {
+      pPlugin = GetPluginInstance (one_shot_it->sPluginID.c_str (),
+                                   one_shot_it->iPluginInstanceNumber);
+      if (!pPlugin)
+        continue;
+      }
+
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
 
     if (!GetAliasMap ().Lookup (strAliasName, alias_item))
+      continue;
+    if (alias_item->nCreationNumber != one_shot_it->iCreationNumber)
       continue;
 
     // can't if executing a script
@@ -227,30 +214,94 @@ CAliasList AliasList;
     if (!m_CurrentPlugin && !alias_item->bTemporary)
       iDeletedNonTemporaryCount++;
 
-    iDeletedCount++;
-
-    // the alias seems to exist - delete its pointer
-    delete alias_item;
-
-    // now delete its entry
-    GetAliasMap ().RemoveKey (strAliasName);
-
-    pluginsWithDeletions.insert (m_CurrentPlugin);
+    aliasDeletions [pPlugin] [one_shot_it->sItemKey] = alias_item;
 
     }  // end of deleting one-shot items
 
-   if (iDeletedCount > 0)
-     {
-     // make sure we sort the correct plugin(s)
-     for ( set<CPlugin *>::iterator i = pluginsWithDeletions.begin (); i != pluginsWithDeletions.end (); i++)
-       {
-       m_CurrentPlugin = *i;
-       SortAliases ();
-       }
+  struct CPreparedAliasDeletion
+    {
+    CPreparedAliasDeletion () : iOldArraySize (0), bArrayPrepared (false) { }
+    set<CAlias *> aliasesToDelete;
+    vector<CAlias *> newAliasArray;
+    CAliasRevMap newAliasRevMap;
+    int iOldArraySize;
+    bool bArrayPrepared;
+    };
+  map<CPlugin *, CPreparedAliasDeletion> preparedAliasDeletions;
 
-     if (iDeletedNonTemporaryCount > 0) // plugin mods don't really count
-       SetModifiedFlag (TRUE);   // document has changed
-     }
+  for (map<CPlugin *, AliasDeletionMap>::iterator plugin_it =
+         aliasDeletions.begin ();
+       plugin_it != aliasDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    CPreparedAliasDeletion & prepared =
+      preparedAliasDeletions [plugin_it->first];
+    for (AliasDeletionMap::const_iterator alias_it = plugin_it->second.begin ();
+         alias_it != plugin_it->second.end (); ++alias_it)
+      prepared.aliasesToDelete.insert (alias_it->second);
+    prepared.iOldArraySize = GetAliasArray ().GetSize ();
+    BuildAliasIndexes (prepared.newAliasArray,
+                       prepared.newAliasRevMap,
+                       &prepared.aliasesToDelete);
+    }
+
+  try
+    {
+    for (map<CPlugin *, CPreparedAliasDeletion>::iterator plugin_it =
+           preparedAliasDeletions.begin ();
+         plugin_it != preparedAliasDeletions.end (); ++plugin_it)
+      {
+      CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+      CPreparedAliasDeletion & prepared = plugin_it->second;
+      const int iNewSize =
+        static_cast<int> (prepared.newAliasArray.size ());
+      GetAliasArray ().SetSize (
+        prepared.iOldArraySize > iNewSize ?
+          prepared.iOldArraySize : iNewSize);
+      prepared.bArrayPrepared = true;
+      }
+    }
+  catch (...)
+    {
+    for (map<CPlugin *, CPreparedAliasDeletion>::iterator plugin_it =
+           preparedAliasDeletions.begin ();
+         plugin_it != preparedAliasDeletions.end (); ++plugin_it)
+      if (plugin_it->second.bArrayPrepared)
+        {
+        CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+        GetAliasArray ().SetSize (plugin_it->second.iOldArraySize);
+        }
+    throw;
+    }
+
+  for (map<CPlugin *, CPreparedAliasDeletion>::iterator plugin_it =
+         preparedAliasDeletions.begin ();
+       plugin_it != preparedAliasDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    CPreparedAliasDeletion & prepared = plugin_it->second;
+    GetAliasArray ().SetSize (prepared.newAliasArray.size ());
+    for (size_t i = 0; i < prepared.newAliasArray.size (); i++)
+      GetAliasArray ().SetAt (i, prepared.newAliasArray [i]);
+    GetAliasRevMap ().swap (prepared.newAliasRevMap);
+    }
+
+  for (map<CPlugin *, AliasDeletionMap>::iterator plugin_it =
+         aliasDeletions.begin ();
+       plugin_it != aliasDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    for (AliasDeletionMap::const_iterator alias_it = plugin_it->second.begin ();
+         alias_it != plugin_it->second.end ();
+         ++alias_it)
+      {
+      VERIFY (GetAliasMap ().RemoveKey (alias_it->first.c_str ()));
+      RetireAlias (alias_it->second);
+      }
+    }
+
+  if (iDeletedNonTemporaryCount > 0)
+    SetModifiedFlag (TRUE);
 
   m_CurrentPlugin = NULL;
 
@@ -295,11 +346,12 @@ string FixWildcard (const string sWildcard,       // the wildcard
   } // end of FixWildcard
 
 
-CTrigger * CMUSHclientDoc::EvaluateTrigger (const CString & input, 
+CTrigger * CMUSHclientDoc::EvaluateTrigger (const CString & input,
                                             CString & output,
                                             int & iItem,  // which one to start with
                                             int & iStartCol,
-                                            int & iEndCol)
+                                            int & iEndCol,
+                                            const CTrigger * pOnlyTrigger)
   {          
 //  timer t ("EvaluateTrigger");
 
@@ -321,6 +373,9 @@ int iCount = GetTriggerArray ().GetSize ();    // how many there are
   for ( ; iItem < iCount; iItem++)
     {
     trigger_item = GetTriggerArray () [iItem];
+
+    if (pOnlyTrigger && trigger_item != pOnlyTrigger)
+      continue;
 
     if (!trigger_item->bEnabled)
       continue;   // ignore non-enabled triggers
@@ -397,9 +452,6 @@ int iCount = GetTriggerArray ().GetSize ();    // how many there are
           iOldMatchAttempts = trigger_item->regexp->m_iMatchAttempts;
           }
 
-        delete trigger_item->regexp;    // get rid of earlier regular expression
-        trigger_item->regexp = NULL;
-
       // all triggers are now regular expressions
 
         CString strRegexp; 
@@ -409,13 +461,14 @@ int iCount = GetTriggerArray ().GetSize ();    // how many there are
         else
           strRegexp = ConvertToRegularExpression (strOutput);
 
+        std::unique_ptr<t_regexp> newRegexp;
         try
           {
-          trigger_item->regexp = regcomp (strRegexp,
-                                          (trigger_item->ignore_case  ? PCRE_CASELESS : 0) |
-                                          (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
-                                          (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                         );
+          newRegexp.reset (regcomp (strRegexp,
+                                    (trigger_item->ignore_case  ? PCRE_CASELESS : 0) |
+                                    (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
+                                    (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                   ));
           } // end of try
     	  catch(CException* e)
           {
@@ -425,11 +478,14 @@ int iCount = GetTriggerArray ().GetSize ();    // how many there are
           }   // end of catch
 
         // add back execution time
-        if (trigger_item->regexp)
+        if (newRegexp.get ())
           {
-          trigger_item->regexp->iTimeTaken += iOldTimeTaken;
-          trigger_item->regexp->m_iMatchAttempts += iOldMatchAttempts;
+          newRegexp->iTimeTaken += iOldTimeTaken;
+          newRegexp->m_iMatchAttempts += iOldMatchAttempts;
           }
+
+        delete trigger_item->regexp;
+        trigger_item->regexp = newRegexp.release ();
 
         } // end of variable substitution
 
@@ -475,7 +531,7 @@ int iCount = GetTriggerArray ().GetSize ();    // how many there are
     // get unlabelled trigger's internal name
     const char * pLabel = trigger_item->strLabel;
     if (pLabel [0] == 0)
-       pLabel = GetTriggerRevMap () [trigger_item].c_str ();
+       pLabel = trigger_item->strInternalName;
 
     output += FixSendText (::FixupEscapeSequences (trigger_item->contents), 
                             trigger_item->iSendTo,    // where it is going
@@ -548,6 +604,127 @@ BOOL Set_Up_Set_Strings (const int set_type,
                               
   } // end of CMUSHclientDoc::Set_Up_Set_Strings 
 
+template <class TObject, class TObjectMap>
+class COwnedSetMap
+  {
+  public:
+    ~COwnedSetMap ()
+      {
+      CString strName;
+      TObject * pObject;
+      for (POSITION pos = map.GetStartPosition (); pos; )
+        {
+        map.GetNextAssoc (pos, strName, pObject);
+        delete pObject;
+        }
+      map.RemoveAll ();
+      }
+
+    TObjectMap map;
+  };
+
+template <class TObject>
+class CScopedSetLoadTarget
+  {
+  public:
+    CScopedSetLoadTarget (TObject * & target, TObject * pReplacement) :
+      m_Target (target), m_pOldTarget (target)
+      { m_Target = pReplacement; }
+
+    ~CScopedSetLoadTarget ()
+      { m_Target = m_pOldTarget; }
+
+  private:
+    TObject * & m_Target;
+    TObject * m_pOldTarget;
+  };
+
+template <class TObject>
+struct CSetPublishChange
+  {
+  CString strName;
+  TObject * pNew;
+  TObject * pOld;
+  };
+
+template <class TObject, class TObjectMap>
+static void PublishLoadedSet (
+  CMUSHclientDoc * pDoc,
+  TObjectMap & liveMap,
+  TObjectMap & stagedMap,
+  void (CMUSHclientDoc::*sortObjects) (const set<TObject *> *),
+  void (CMUSHclientDoc::*retireObject) (TObject *))
+  {
+  vector<CSetPublishChange<TObject> > changes;
+  vector<pair<CString, TObject *> > removedObjects;
+  set<TObject *> excludedObjects;
+  CString strName;
+  TObject * pObject;
+
+  changes.reserve (stagedMap.GetCount ());
+  for (POSITION pos = stagedMap.GetStartPosition (); pos; )
+    {
+    stagedMap.GetNextAssoc (pos, strName, pObject);
+    CSetPublishChange<TObject> change;
+    change.strName = strName;
+    change.pNew = pObject;
+    change.pOld = NULL;
+    liveMap.Lookup (strName, change.pOld);
+    changes.push_back (change);
+    }
+
+  removedObjects.reserve (liveMap.GetCount ());
+  for (POSITION pos = liveMap.GetStartPosition (); pos; )
+    {
+    liveMap.GetNextAssoc (pos, strName, pObject);
+    TObject * pReplacement = NULL;
+    if (stagedMap.Lookup (strName, pReplacement))
+      continue;
+    removedObjects.push_back (make_pair (strName, pObject));
+    excludedObjects.insert (pObject);
+    }
+
+  size_t iApplied = 0;
+  try
+    {
+    for ( ; iApplied < changes.size (); iApplied++)
+      liveMap.SetAt (changes [iApplied].strName, changes [iApplied].pNew);
+
+    // Build all runtime indexes while removed objects are still recoverable.
+    (pDoc->*sortObjects) (&excludedObjects);
+    }
+  catch (...)
+    {
+    while (iApplied > 0)
+      {
+      iApplied--;
+      CSetPublishChange<TObject> & change = changes [iApplied];
+      if (change.pOld)
+        liveMap.SetAt (change.strName, change.pOld);
+      else
+        liveMap.RemoveKey (change.strName);
+      }
+    throw;
+    }
+
+  for (vector<pair<CString, TObject *> >::iterator it =
+         removedObjects.begin ();
+       it != removedObjects.end (); ++it)
+    {
+    liveMap.RemoveKey (it->first);
+    (pDoc->*retireObject) (it->second);
+    }
+
+  for (typename vector<CSetPublishChange<TObject> >::iterator it =
+         changes.begin ();
+       it != changes.end (); ++it)
+    if (it->pOld)
+      (pDoc->*retireObject) (it->pOld);
+
+  // Ownership of every staged object has moved to the live map.
+  stagedMap.RemoveAll ();
+  }
+
 BOOL CMUSHclientDoc::Load_Set (const int set_type, 
                                CString strFileName,
                                CWnd * parent_window)
@@ -579,15 +756,15 @@ if (strFileName.IsEmpty ())
                          parent_window);  // parent window
 
     filedlg.m_ofn.lpstrTitle = title;
-    filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
     if (App.platform == VER_PLATFORM_WIN32s)
-      strcpy (filedlg.m_ofn.lpstrFile, "");
+      SetFileDialogFileName (filedlg, filename, "");
     else
-      strcpy (filedlg.m_ofn.lpstrFile, suggested_name);
+      SetFileDialogFileName (filedlg, filename, suggested_name);
 
     ChangeToFileBrowsingDirectory ();
     int nResult = filedlg.DoModal();
     ChangeToStartupDirectory ();
+    filename.ReleaseBuffer ();
 
     if (nResult!= IDOK)
       return TRUE;    // cancelled dialog
@@ -625,30 +802,108 @@ if (strFileName.IsEmpty ())
     strFileName = filedlg.GetPathName ();
   }   // end of no filename suppliedl
 
-CFile * f = NULL;
-CArchive * ar = NULL;
+std::unique_ptr<CFile> f;
+std::unique_ptr<CArchive> ar;
+COwnedSetMap<CTrigger, CTriggerMap> stagedTriggers;
+CTriggerArray stagedTriggerArray;
+CTriggerRevMap stagedTriggerRevMap;
+COwnedSetMap<CAlias, CAliasMap> stagedAliases;
+CAliasArray stagedAliasArray;
+CAliasRevMap stagedAliasRevMap;
+COwnedSetMap<CTimer, CTimerMap> stagedTimers;
+CTimerRevMap stagedTimerRevMap;
+const bool bStagedReplacement = replace &&
+  (set_type == TRIGGER || set_type == ALIAS || set_type == TIMER);
+bool bStagedReplacementPublished = false;
 
   try
     {
-    f = new CFile (strFileName, CFile::modeRead | CFile::shareDenyWrite);
+    f.reset (new CFile (strFileName,
+                        CFile::modeRead | CFile::shareDenyWrite));
 
-    ar = new CArchive(f, CArchive::load);
+    ar.reset (new CArchive(f.get (), CArchive::load));
 
     if (IsArchiveXML (*ar))
       {
 
       switch (set_type)
         {
-        case TRIGGER: 
-          if (replace)
-            DELETE_MAP (m_TriggerMap, CTrigger);
-          Load_World_XML (*ar, XML_TRIGGERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);  
+        case TRIGGER:
+          if (!replace)
+            Load_World_XML (*ar, XML_TRIGGERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
+          else
+            {
+            bool bNotifyPluginListChanged = false;
+            BeginPluginListChangedDeferral ();
+            try
+              {
+                {
+                CScopedSetLoadTarget<CTriggerMap> mapTarget
+                  (m_pSetLoadTriggerMap, &stagedTriggers.map);
+                CScopedSetLoadTarget<CTriggerArray> arrayTarget
+                  (m_pSetLoadTriggerArray, &stagedTriggerArray);
+                CScopedSetLoadTarget<CTriggerRevMap> reverseTarget
+                  (m_pSetLoadTriggerRevMap, &stagedTriggerRevMap);
+                Load_World_XML (*ar,
+                  XML_TRIGGERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
+                }
+              PublishLoadedSet<CTrigger> (this,
+                                          m_TriggerMap,
+                                          stagedTriggers.map,
+                                          &CMUSHclientDoc::SortTriggers,
+                                          &CMUSHclientDoc::RetireTrigger);
+              bStagedReplacementPublished = true;
+              bNotifyPluginListChanged = EndPluginListChangedDeferral ();
+              }
+            catch (...)
+              {
+              bNotifyPluginListChanged = EndPluginListChangedDeferral ();
+              if (bNotifyPluginListChanged)
+                PluginListChanged ();
+              throw;
+              }
+            if (bNotifyPluginListChanged)
+              PluginListChanged ();
+            }
           break;  
 
-        case ALIAS:   
-          if (replace)
-            DELETE_MAP (m_AliasMap, CAlias);
-          Load_World_XML (*ar, XML_ALIASES | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);  
+        case ALIAS:
+          if (!replace)
+            Load_World_XML (*ar, XML_ALIASES | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
+          else
+            {
+            bool bNotifyPluginListChanged = false;
+            BeginPluginListChangedDeferral ();
+            try
+              {
+                {
+                CScopedSetLoadTarget<CAliasMap> mapTarget
+                  (m_pSetLoadAliasMap, &stagedAliases.map);
+                CScopedSetLoadTarget<CAliasArray> arrayTarget
+                  (m_pSetLoadAliasArray, &stagedAliasArray);
+                CScopedSetLoadTarget<CAliasRevMap> reverseTarget
+                  (m_pSetLoadAliasRevMap, &stagedAliasRevMap);
+                Load_World_XML (*ar,
+                  XML_ALIASES | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
+                }
+              PublishLoadedSet<CAlias> (this,
+                                        m_AliasMap,
+                                        stagedAliases.map,
+                                        &CMUSHclientDoc::SortAliases,
+                                        &CMUSHclientDoc::RetireAlias);
+              bStagedReplacementPublished = true;
+              bNotifyPluginListChanged = EndPluginListChangedDeferral ();
+              }
+            catch (...)
+              {
+              bNotifyPluginListChanged = EndPluginListChangedDeferral ();
+              if (bNotifyPluginListChanged)
+                PluginListChanged ();
+              throw;
+              }
+            if (bNotifyPluginListChanged)
+              PluginListChanged ();
+            }
           break;  
 
         case COLOUR:  
@@ -659,10 +914,41 @@ CArchive * ar = NULL;
           Load_World_XML (*ar, XML_MACROS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);  
           break;   
 
-        case TIMER:   
-          if (replace)
-            DELETE_MAP (m_TimerMap, CTimer);
-          Load_World_XML (*ar, XML_TIMERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);  
+        case TIMER:
+          if (!replace)
+            Load_World_XML (*ar, XML_TIMERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
+          else
+            {
+            bool bNotifyPluginListChanged = false;
+            BeginPluginListChangedDeferral ();
+            try
+              {
+                {
+                CScopedSetLoadTarget<CTimerMap> mapTarget
+                  (m_pSetLoadTimerMap, &stagedTimers.map);
+                CScopedSetLoadTarget<CTimerRevMap> reverseTarget
+                  (m_pSetLoadTimerRevMap, &stagedTimerRevMap);
+                Load_World_XML (*ar,
+                  XML_TIMERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
+                }
+              PublishLoadedSet<CTimer> (this,
+                                        m_TimerMap,
+                                        stagedTimers.map,
+                                        &CMUSHclientDoc::SortTimers,
+                                        &CMUSHclientDoc::RetireTimer);
+              bStagedReplacementPublished = true;
+              bNotifyPluginListChanged = EndPluginListChangedDeferral ();
+              }
+            catch (...)
+              {
+              bNotifyPluginListChanged = EndPluginListChangedDeferral ();
+              if (bNotifyPluginListChanged)
+                PluginListChanged ();
+              throw;
+              }
+            if (bNotifyPluginListChanged)
+              PluginListChanged ();
+            }
           break;  
 
         } // end of switch
@@ -700,8 +986,8 @@ CArchive * ar = NULL;
     e->Delete ();
     } // end of catching an archive exception
 
-  delete ar;      // delete archive
-  delete f;       // delete file
+  if (bStagedReplacement && !bStagedReplacementPublished)
+    return TRUE;
 
   SetModifiedFlag (TRUE);   // document has now changed
   return false;   // OK return
@@ -745,21 +1031,20 @@ CString filename;
     suggested_name = suggested_name.Left (i) + suggested_name.Mid (i + 1);
 
   filedlg.m_ofn.lpstrTitle = title;
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
   if (App.platform == VER_PLATFORM_WIN32s)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
+    SetFileDialogFileName (filedlg, filename, "");
   else
-    strcpy (filedlg.m_ofn.lpstrFile, suggested_name);
+    SetFileDialogFileName (filedlg, filename, suggested_name);
 
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return TRUE;    // cancelled dialog
 
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;   // make sure we save main triggers etc.
+  CPluginContextGuard pluginContextGuard (this, NULL); // save main triggers etc.
 
   try
     {
@@ -800,8 +1085,6 @@ CString filename;
     e->Delete ();
     } // end of catching an archive exception
 
-  m_CurrentPlugin = pSavedPlugin;
-
   delete ar;      // delete archive
   delete f;       // delete file
   return error;   // OK return
@@ -814,13 +1097,25 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
                             const bool bCountThem,
                             bool & bOmitFromLog,
                             bool & bEchoAlias,
-                            CAliasList & AliasList,
+                            OneShotItemMap & AliasList,
                             OneShotItemMap & mapOneShotItems)
   {
 
+  OneShotItemMap aliasesToEvaluate;
   for (int iAlias = 0; iAlias < GetAliasArray ().GetSize (); iAlias++)
+    aliasesToEvaluate.push_back
+      (OneShotItem (m_CurrentPlugin,
+                    (const char *) GetAliasArray () [iAlias]->strInternalName,
+                    GetAliasArray () [iAlias]->nCreationNumber));
+
+  for (OneShotItemMap::const_iterator alias_it = aliasesToEvaluate.begin ();
+       alias_it != aliasesToEvaluate.end ();
+       ++alias_it)
     {
-    CAlias * alias_item = GetAliasArray () [iAlias];
+    CAlias * alias_item = NULL;
+    if (!GetAliasMap ().Lookup (alias_it->sItemKey.c_str (), alias_item) ||
+        alias_item->nCreationNumber != alias_it->iCreationNumber)
+      continue;
 
   // ignore non-enabled aliases
 
@@ -851,14 +1146,20 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
     if (!bMatched) // no match, try next one
       continue;   
 
+    CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
+    CAliasExecutionGuard executingGuard (this, alias_item);
+    CString strAliasLabel = alias_item->strLabel;
+    if (strAliasLabel.IsEmpty ())
+      strAliasLabel = alias_item->strInternalName;
 
     m_iAliasesMatchedCount++;
     m_iAliasesMatchedThisSessionCount++;
 
     if (alias_item->bOneShot)
       mapOneShotItems.push_back (
-          OneShotItem (m_CurrentPlugin, 
-                      (const char *) alias_item->strInternalName));
+          OneShotItem (m_CurrentPlugin,
+                      (const char *) alias_item->strInternalName,
+                      alias_item->nCreationNumber));
 
     // if alias wants it, omit entire typed line from command history
     if (alias_item->bOmitFromCommandHistory)
@@ -914,9 +1215,7 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
       Trace ("Matched alias %s", (LPCTSTR) alias_item->strLabel);
   
     // get unlabelled alias's internal name
-    const char * pLabel = alias_item->strLabel;
-    if (pLabel [0] == 0)
-       pLabel = GetAliasRevMap () [alias_item].c_str ();
+    const char * pLabel = strAliasLabel;
 
     // if we have to do parameter substitution on the alias, do it now
 
@@ -945,7 +1244,10 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
       return true;
 	    }	
 
-    AliasList.AddTail (alias_item);   // add to list of aliases
+    AliasList.push_back
+      (OneShotItem (m_CurrentPlugin,
+                    (const char *) alias_item->strInternalName,
+                    alias_item->nCreationNumber));
 
     CString strExtraOutput;
 
@@ -963,7 +1265,6 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
           break;
         }
 
-    alias_item->bExecutingScript = true;     // cannot be deleted now
     SendTo (alias_item->iSendTo, 
             strSendText, 
             alias_item->bOmitFromOutput,
@@ -971,8 +1272,6 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
             TFormat ("Alias: %s", (LPCTSTR) alias_item->strLabel),
             alias_item->strVariable,
             strExtraOutput);
-    alias_item->bExecutingScript = false;     // can be deleted now
-
     // display any stuff sent to output window
 
     if (!strExtraOutput.IsEmpty ())
@@ -1005,7 +1304,7 @@ bool CMUSHclientDoc::ExecuteAliasScript (CAlias * alias_item,
     // get unlabelled alias's internal name
     const char * pLabel = alias_item->strLabel;
     if (pLabel [0] == 0)
-       pLabel = GetAliasRevMap () [alias_item].c_str ();
+       pLabel = alias_item->strInternalName;
 
     if (GetScriptEngine () && GetScriptEngine ()->IsLua ())
       {
@@ -1013,7 +1312,7 @@ bool CMUSHclientDoc::ExecuteAliasScript (CAlias * alias_item,
       list<string> sparams;
       sparams.push_back (pLabel);
       sparams.push_back ((LPCTSTR) strCurrentLine);
-      alias_item->bExecutingScript = true;     // cannot be deleted now
+      CAliasExecutionGuard executingGuard (this, alias_item);
       GetScriptEngine ()->ExecuteLua (alias_item->dispid, 
                                      alias_item->strProcedure, 
                                      eDontChangeAction,
@@ -1023,7 +1322,6 @@ bool CMUSHclientDoc::ExecuteAliasScript (CAlias * alias_item,
                                      sparams, 
                                      alias_item->nInvocationCount,
                                      alias_item->regexp); 
-      alias_item->bExecutingScript = false;     // can be deleted now
       return true;
       }   // end of Lua
 
@@ -1064,7 +1362,7 @@ bool CMUSHclientDoc::ExecuteAliasScript (CAlias * alias_item,
     sa.PutElement (&i, &v);
     args [eWildcards] = sa;
     
-    alias_item->bExecutingScript = true;     // cannot be deleted now
+    CAliasExecutionGuard executingGuard (this, alias_item);
     ExecuteScript (alias_item->dispid,  
                    alias_item->strProcedure,
                    eDontChangeAction,     // don't change current action
@@ -1072,8 +1370,6 @@ bool CMUSHclientDoc::ExecuteAliasScript (CAlias * alias_item,
                    strReason,
                    params, 
                    alias_item->nInvocationCount); 
-    alias_item->bExecutingScript = false;     // can be deleted now
-
     return true;
     }     // end of having a dispatch ID
 

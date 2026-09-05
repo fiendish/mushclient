@@ -70,37 +70,89 @@ long CMUSHclientDoc::UdpListen(LPCTSTR IP, short Port, LPCTSTR Script)
 
   // see if we already have one for this port
   map<int, UDPsocket *>::iterator it = m_UDPsocketMap.find (Port);
+  UDPsocket * pOldSocket = it == m_UDPsocketMap.end () ? NULL : it->second;
 
-  // delete existing, so we can use an empty script to achieve this
-  if (it != m_UDPsocketMap.end ())
+  // don't re-use another plugin's port
+  if (pOldSocket && pOldSocket->m_strPluginID != m_CurrentPlugin->m_strID)
+    return eBadParameter;
+
+  // no script deletes an existing listener
+  if (strlen (Script) == 0)
     {
-    // don't re-use another plugin's port
-    if (it->second->m_strPluginID != m_CurrentPlugin->m_strID)
-      return eBadParameter;
-
-    delete it->second;  // delete existing listener
-    m_UDPsocketMap.erase (it);
+    if (pOldSocket)
+      {
+      m_UDPsocketMap.erase (it);
+      if (pOldSocket->m_bInReceive)
+        {
+        pOldSocket->Close ();
+        pOldSocket->m_bDeleteWhenDone = true;
+        }
+      else
+        delete pOldSocket;
+      }
+    return eNoNameSpecified;
     }
 
-  // no script, cannot do it 
-  if (strlen (Script) == 0)
-    return eNoNameSpecified;
+  // Allocate and configure the replacement before closing the old listener.
+  std::unique_ptr<UDPsocket> pSocket (new UDPsocket (this));
+  pSocket->m_strScript = Script;
+  pSocket->m_strPluginID =  m_CurrentPlugin->m_strID;
+  pSocket->m_iPluginInstanceNumber =
+    m_CurrentPlugin->m_iPluginInstanceNumber;
 
-  // make a new listener
-  UDPsocket * pSocket = new UDPsocket (this);
+  // The old socket must be closed before the same port can be bound again.
+  CString strOldIP;
+  if (pOldSocket)
+    {
+    SOCKADDR_IN oldAddress;
+    int iOldAddressLength = sizeof oldAddress;
+    if (!pOldSocket->GetSockName ((SOCKADDR *) &oldAddress,
+                                  &iOldAddressLength))
+      return eBadParameter;
+    strOldIP = inet_ntoa (oldAddress.sin_addr);
+    pOldSocket->Close ();
+    }
 
 	if (!pSocket->Create (Port, SOCK_DGRAM, FD_READ, IP))
 	  {
-		delete pSocket;
+	  if (pOldSocket)
+	    {
+	    if (!pOldSocket->Create (Port, SOCK_DGRAM, FD_READ, strOldIP))
+	      {
+	      m_UDPsocketMap.erase (it);
+	      if (pOldSocket->m_bInReceive)
+	        pOldSocket->m_bDeleteWhenDone = true;
+	      else
+	        delete pOldSocket;
+	      }
+	    }
 		return eBadParameter;
 	  }     // end of can't create socket
 
-  // remember script to call, and which plugin it is (should be?) in
-  pSocket->m_strScript = Script;
-  pSocket->m_strPluginID =  m_CurrentPlugin->m_strID;
-
   // keep a map of them
-  m_UDPsocketMap [Port] = pSocket;
+
+  if (pOldSocket)
+    {
+    it->second = pSocket.get ();
+    pSocket.release ();
+    if (pOldSocket->m_bInReceive)
+      pOldSocket->m_bDeleteWhenDone = true;
+    else
+      delete pOldSocket;
+    }
+  else
+    {
+    try
+      {
+      m_UDPsocketMap [Port] = pSocket.get ();
+      }
+    catch (...)
+      {
+      pSocket->Close ();
+      throw;
+      }
+    pSocket.release ();
+    }
 	return eOK;
 }   // end of CMUSHclientDoc::UdpListen
 

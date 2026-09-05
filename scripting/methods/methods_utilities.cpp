@@ -355,14 +355,26 @@ long CMUSHclientDoc::ChangeDir(LPCTSTR Path)
     {
     // find the new working directory
 
-    _getdcwd (0, working_dir, sizeof (working_dir) - 1);
+    char strNewWorkingDirectory [_MAX_PATH];
+    if (!_getdcwd (0, strNewWorkingDirectory,
+                   sizeof (strNewWorkingDirectory) - 1))
+      {
+      int iError = errno;
+      if (_chdir (working_dir) != 0)
+        AfxThrowFileException (CFileException::genericException, errno,
+                               working_dir);
+      errno = iError;
+      return false;
+      }
 
     // make sure directory name ends in a slash
 
-    working_dir [sizeof (working_dir) - 2] = 0;
+    strNewWorkingDirectory [sizeof (strNewWorkingDirectory) - 2] = 0;
 
-    if (working_dir [strlen (working_dir) - 1] != '\\')
-      strcat (working_dir, "\\");
+    if (strNewWorkingDirectory [strlen (strNewWorkingDirectory) - 1] != '\\')
+      strcat (strNewWorkingDirectory, "\\");
+
+    strcpy (working_dir, strNewWorkingDirectory);
     
     return true;  // did it OK
     }
@@ -430,9 +442,8 @@ SetModifiedFlag (ChangedFlag);
 
 void CMUSHclientDoc::Simulate(LPCTSTR Text) 
 {
-  m_bDoingSimulate = true;
+  CBoolStateGuard doingSimulateGuard (m_bDoingSimulate, true);
   DisplayMsg(Text, strlen (Text), 0);
-  m_bDoingSimulate = false;
 }   // end of CMUSHclientDoc::Simulate
 
 

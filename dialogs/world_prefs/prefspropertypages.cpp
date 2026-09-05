@@ -39,6 +39,26 @@ bool NotFound (CFindInfo & FindInfo);
 
 #define NL "\r\n"
 
+class CListItemInsertGuard
+  {
+  public:
+    CListItemInsertGuard (CListCtrl & list, const int nItem, const BOOL bInsert)
+      : m_list (list), m_nItem (nItem), m_bRemove (bInsert != FALSE) { }
+
+    ~CListItemInsertGuard ()
+      {
+      if (m_bRemove && m_nItem >= 0)
+        m_list.DeleteItem (m_nItem);
+      }
+
+    void Commit () { m_bRemove = false; }
+
+  private:
+    CListCtrl & m_list;
+    int m_nItem;
+    bool m_bRemove;
+  };
+
 static inline short get_style (int style)
   {
 
@@ -215,13 +235,13 @@ BOOL CPrefsP1::OnInitDialog()
     rcSSL.right = rcSSL.left + 200;
     rcSSL.bottom = rcSSL.top + (rcSave.bottom - rcSave.top);
 
-    CButton * pCheck = new CButton;
-    pCheck->Create ("Use SSL/TLS for this connection",
-                    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                    rcSSL, this, IDC_USE_SSL);
-    pCheck->SetFont (GetFont ());
+    if (!m_ctlUseSSL.Create ("Use SSL/TLS for this connection",
+                             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                             rcSSL, this, IDC_USE_SSL))
+      AfxThrowResourceException ();
+    m_ctlUseSSL.SetFont (GetFont ());
     if (m_bUseSSL)
-      pCheck->SetCheck (BST_CHECKED);
+      m_ctlUseSSL.SetCheck (BST_CHECKED);
     }
 
   return CPropertyPage::OnInitDialog();
@@ -2699,6 +2719,20 @@ void CPrefsP7::UnloadDialog (CDialog * pDlg, CObject * pItem)
   ASSERT_VALID (alias_item);
   ASSERT( alias_item->IsKindOf( RUNTIME_CLASS( CAlias ) ) );
 
+  CString strRegexp;
+  if (dlg->m_bRegexp)
+    strRegexp = dlg->m_name;
+  else
+    strRegexp = ConvertToRegularExpression (dlg->m_name);
+
+  std::unique_ptr<t_regexp> newRegexp
+    (regcomp (strRegexp,
+              (dlg->m_bIgnoreCase ? PCRE_CASELESS : 0)
+#if ALIASES_USE_UTF8
+              | (m_pDoc->m_bUTF_8 ? PCRE_UTF8 : 0)
+#endif // ALIASES_USE_UTF8
+             ));
+
   alias_item->name            = dlg->m_name;
   alias_item->contents        = dlg->m_contents;
   alias_item->bIgnoreCase     = dlg->m_bIgnoreCase;
@@ -2721,24 +2755,8 @@ void CPrefsP7::UnloadDialog (CDialog * pDlg, CObject * pItem)
   alias_item->bEchoAlias      = dlg->m_bEchoAlias;
   alias_item->bOmitFromCommandHistory      = dlg->m_bOmitFromCommandHistory;
 
-  delete alias_item->regexp;    // get rid of earlier regular expression
-  alias_item->regexp = NULL;
-
-// all aliass are now regular expressions
-
-  CString strRegexp; 
-
-  if (alias_item->bRegexp)
-    strRegexp = alias_item->name;
-  else
-    strRegexp = ConvertToRegularExpression (alias_item->name);
-
-  alias_item->regexp = regcomp (strRegexp,
-                                  (alias_item->bIgnoreCase  ? PCRE_CASELESS : 0)
-#if ALIASES_USE_UTF8
-                                  | (m_pDoc->m_bUTF_8 ? PCRE_UTF8 : 0)
-#endif // ALIASES_USE_UTF8
-                                  );
+  delete alias_item->regexp;
+  alias_item->regexp = newRegexp.release ();
 
 // NB - also see MapDlg.cpp for alias processing
 
@@ -2928,8 +2946,6 @@ void CPrefsP7::OnAddAlias()
 
   OnAddItem (dlg);
 
-  m_doc->SortAliases ();
-
 }   // end of CPrefsP7::OnAddAlias
 
 void CPrefsP7::OnChangeAlias() 
@@ -2944,15 +2960,11 @@ if (m_ctlUseDefaultAliases.GetCheck () != 0 &&
   dlg.m_pDoc = m_doc;
 
   OnChangeItem (dlg);
-
-  m_doc->SortAliases ();
 }    // end of CPrefsP7::OnChangeAlias
 
 void CPrefsP7::OnDeleteAlias() 
 {
   OnDeleteItem ();
-
-  m_doc->SortAliases ();
 }    // end of CPrefsP7::OnDeleteAlias
 
 void CPrefsP7::OnDblclkAliasesList(NMHDR* pNMHDR, LRESULT* pResult) 
@@ -3049,19 +3061,26 @@ int nItem;
   if (insert)
     {
     nItem = m_ctlAliasList.GetItemCount ();
-  	m_ctlAliasList.InsertItem (nItem, alias_item->name);   // eColumnAlias
+    nItem = m_ctlAliasList.InsertItem (nItem, alias_item->name);   // eColumnAlias
+    if (nItem < 0)
+      return -1;
     }
   else
     {
     nItem = item_number;
-  	m_ctlAliasList.SetItemText(nItem, eColumnAlias, alias_item->name);
+    if (!m_ctlAliasList.SetItemText(nItem, eColumnAlias, alias_item->name))
+      return -1;
     }
 
-	m_ctlAliasList.SetItemText (nItem, eColumnSequence, CFormat ("%i", alias_item->iSequence));
-	m_ctlAliasList.SetItemText (nItem, eColumnContents, 
-                        Replace (alias_item->contents, ENDLINE, "\\n", true));
-	m_ctlAliasList.SetItemText (nItem, eColumnLabel, alias_item->strLabel);
-	m_ctlAliasList.SetItemText (nItem, eColumnGroup, alias_item->strGroup);
+  CListItemInsertGuard insertionGuard (m_ctlAliasList, nItem, insert);
+  if (!m_ctlAliasList.SetItemText (nItem, eColumnSequence, CFormat ("%i", alias_item->iSequence)) ||
+      !m_ctlAliasList.SetItemText (nItem, eColumnContents,
+                         Replace (alias_item->contents, ENDLINE, "\\n", true)) ||
+      !m_ctlAliasList.SetItemText (nItem, eColumnLabel, alias_item->strLabel) ||
+      !m_ctlAliasList.SetItemText (nItem, eColumnGroup, alias_item->strGroup))
+    return -1;
+
+  insertionGuard.Commit ();
 
   return nItem;
 
@@ -3172,7 +3191,15 @@ CString * pstrObjectName;
       else
         alias->iSequence = iLower; // move into lower group
 
-    m_doc->SortAliases ();
+    try
+      {
+      m_doc->SortAliases ();
+      }
+    catch (...)
+      {
+      alias->iSequence = iSeq;
+      throw;
+      }
 
 
     // They can no longer cancel the propery sheet, the document has changed
@@ -3281,7 +3308,15 @@ CString * pstrObjectName;
       else
         alias->iSequence = iHigher; // move into Higher group
 
-    m_doc->SortAliases ();
+    try
+      {
+      m_doc->SortAliases ();
+      }
+    catch (...)
+      {
+      alias->iSequence = iSeq;
+      throw;
+      }
 
 
     // They can no longer cancel the propery sheet, the document has changed
@@ -3738,6 +3773,23 @@ void CPrefsP8::UnloadDialog (CDialog * pDlg, CObject * pItem)
   ASSERT_VALID (trigger_item);
   ASSERT( trigger_item->IsKindOf( RUNTIME_CLASS( CTrigger ) ) );
 
+  LONGLONG iOldTimeTaken = 0;
+  if (trigger_item->regexp)
+    iOldTimeTaken = trigger_item->regexp->iTimeTaken;
+
+  CString strRegexp;
+  if (dlg->m_bRegexp)
+    strRegexp = dlg->m_trigger;
+  else
+    strRegexp = ConvertToRegularExpression (dlg->m_trigger);
+
+  std::unique_ptr<t_regexp> newRegexp
+    (regcomp (strRegexp,
+              (dlg->m_ignore_case ? PCRE_CASELESS : 0) |
+              (dlg->m_bMultiLine ? PCRE_MULTILINE : 0) |
+              (m_doc->m_bUTF_8 ? PCRE_UTF8 : 0)));
+  newRegexp->iTimeTaken += iOldTimeTaken;
+
   trigger_item->trigger = dlg->m_trigger;
   trigger_item->contents = dlg->m_contents;
   trigger_item->ignore_case = dlg->m_ignore_case;
@@ -3824,33 +3876,8 @@ void CPrefsP8::UnloadDialog (CDialog * pDlg, CObject * pItem)
     trigger_item->sound_to_play = dlg->m_sound_pathname;
   trigger_item->omit_from_log = dlg->m_omit_from_log;
 
-  LONGLONG iOldTimeTaken = 0;
-
-  // remember time taken to execute them
-
-  if (trigger_item->regexp)
-    iOldTimeTaken = trigger_item->regexp->iTimeTaken;
-
-  delete trigger_item->regexp;    // get rid of earlier regular expression
-  trigger_item->regexp = NULL;
-
-// all triggers are now regular expressions
-
-  CString strRegexp; 
-
-  if (trigger_item->bRegexp)
-    strRegexp = trigger_item->trigger;
-  else
-    strRegexp = ConvertToRegularExpression (trigger_item->trigger);
-
-  trigger_item->regexp = regcomp (strRegexp,
-                                  (trigger_item->ignore_case  ? PCRE_CASELESS : 0) |
-                                  (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
-                                  (m_doc->m_bUTF_8 ? PCRE_UTF8 : 0));
-
-  // add back execution time
-  if (trigger_item->regexp)
-    trigger_item->regexp->iTimeTaken += iOldTimeTaken;
+  delete trigger_item->regexp;
+  trigger_item->regexp = newRegexp.release ();
   }    // end of  CPrefsP8::UnloadDialog
 
 CString CPrefsP8::GetObjectName (CDialog * pDlg) const
@@ -4102,8 +4129,6 @@ void CPrefsP8::OnAddTrigger()
   dlg.m_bUTF_8 = m_doc->m_bUTF_8;
   OnAddItem (dlg);
 
-  m_doc->SortTriggers ();
-
 }   // end of CPrefsP8::OnAddTrigger
 
 void CPrefsP8::OnChangeTrigger() 
@@ -4126,14 +4151,11 @@ if (m_ctlUseDefaultTriggers.GetCheck () != 0 &&
   dlg.m_bUTF_8 = m_doc->m_bUTF_8;
   OnChangeItem (dlg);
 
-  m_doc->SortTriggers ();
-
 }    // end of CPrefsP8::OnChangeTrigger
 
 void CPrefsP8::OnDeleteTrigger() 
 {
   OnDeleteItem ();
-  m_doc->SortTriggers ();
 
 }    // end of CPrefsP8::OnDeleteTrigger
 
@@ -4232,19 +4254,26 @@ int nItem;
   if (insert)
     {
     nItem = m_ctlTriggerList.GetItemCount ();
-   	m_ctlTriggerList.InsertItem (nItem, trigger_item->trigger);    // eColumnTrigger
+    nItem = m_ctlTriggerList.InsertItem (nItem, trigger_item->trigger);    // eColumnTrigger
+    if (nItem < 0)
+      return -1;
     }
   else
     {
     nItem = item_number;
-  	m_ctlTriggerList.SetItemText (nItem, eColumnTrigger, trigger_item->trigger);
+    if (!m_ctlTriggerList.SetItemText (nItem, eColumnTrigger, trigger_item->trigger))
+      return -1;
     }
 
-	m_ctlTriggerList.SetItemText (nItem, eColumnSequence, CFormat ("%i", trigger_item->iSequence));
-	m_ctlTriggerList.SetItemText (nItem, eColumnContents, 
-                                Replace (trigger_item->contents, ENDLINE, "\\n", true));
-	m_ctlTriggerList.SetItemText (nItem, eColumnLabel, trigger_item->strLabel);
-	m_ctlTriggerList.SetItemText (nItem, eColumnGroup, trigger_item->strGroup);
+  CListItemInsertGuard insertionGuard (m_ctlTriggerList, nItem, insert);
+  if (!m_ctlTriggerList.SetItemText (nItem, eColumnSequence, CFormat ("%i", trigger_item->iSequence)) ||
+      !m_ctlTriggerList.SetItemText (nItem, eColumnContents,
+                                 Replace (trigger_item->contents, ENDLINE, "\\n", true)) ||
+      !m_ctlTriggerList.SetItemText (nItem, eColumnLabel, trigger_item->strLabel) ||
+      !m_ctlTriggerList.SetItemText (nItem, eColumnGroup, trigger_item->strGroup))
+    return -1;
+
+  insertionGuard.Commit ();
 
   return nItem;
 
@@ -4336,7 +4365,15 @@ CString * pstrObjectName;
       else
         trigger->iSequence = iLower; // move into lower group
 
-    m_doc->SortTriggers ();
+    try
+      {
+      m_doc->SortTriggers ();
+      }
+    catch (...)
+      {
+      trigger->iSequence = iSeq;
+      throw;
+      }
 
 
     // They can no longer cancel the propery sheet, the document has changed
@@ -4444,7 +4481,15 @@ CString * pstrObjectName;
       else
         trigger->iSequence = iHigher; // move into Higher group
 
-    m_doc->SortTriggers ();
+    try
+      {
+      m_doc->SortTriggers ();
+      }
+    catch (...)
+      {
+      trigger->iSequence = iSeq;
+      throw;
+      }
 
 
     // They can no longer cancel the propery sheet, the document has changed
@@ -5172,12 +5217,12 @@ DWORD length;
                        NULL);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "File to load notes from";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-  strcpy (filedlg.m_ofn.lpstrFile, "");
+  SetFileDialogFileName (filedlg, filename, "");
 
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
@@ -5242,15 +5287,15 @@ CString str;
                        NULL);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "File to save notes into";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
   if (App.platform == VER_PLATFORM_WIN32s)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
+    SetFileDialogFileName (filedlg, filename, "");
   else
-    strcpy (filedlg.m_ofn.lpstrFile, suggested_name);
+    SetFileDialogFileName (filedlg, filename, suggested_name);
 
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
@@ -6069,13 +6114,12 @@ CString filename;
                        this);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "Select sound to play";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-
-  strcpy (filedlg.m_ofn.lpstrFile, m_strBeepSound);
+  SetFileDialogFileName (filedlg, filename, m_strBeepSound);
     
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
@@ -6603,7 +6647,6 @@ void CPrefsP16::OnAddTimer()
   dlg.m_pDoc = m_doc;
 
   OnAddItem (dlg);
-  m_doc->SortTimers ();
 
 }   // end of CPrefsP16::OnAddTimer
 
@@ -6619,14 +6662,12 @@ void CPrefsP16::OnChangeTimer()
   dlg.m_pDoc = m_doc;
 
   OnChangeItem (dlg);
-  m_doc->SortTimers ();
 
 }    // end of CPrefsP16::OnChangeTimer
 
 void CPrefsP16::OnDeleteTimer() 
 {
-  OnDeleteItem (); 
-  m_doc->SortTimers ();
+  OnDeleteItem ();
 
 }    // end of CPrefsP16::OnDeleteTimer
 
@@ -6806,20 +6847,24 @@ CString strWhen;
   if (insert)
     {
     nItem = m_ctlTimerList.GetItemCount ();
-  	m_ctlTimerList.InsertItem (nItem, strType);  // eColumnType
+    nItem = m_ctlTimerList.InsertItem (nItem, strType);  // eColumnType
+    if (nItem < 0)
+      return -1;
     }
   else
     {
     nItem = item_number;
-  	m_ctlTimerList.SetItemText(nItem, eColumnType, strType);
+    if (!m_ctlTimerList.SetItemText(nItem, eColumnType, strType))
+      return -1;
     }
 
-   
-  m_ctlTimerList.SetItemText(nItem, eColumnWhen, strWhen);
-  m_ctlTimerList.SetItemText(nItem, eColumnContents, 
-                  Replace (timer_item->strContents, ENDLINE, "\\n", true));
-	m_ctlTimerList.SetItemText (nItem, eColumnLabel, timer_item->strLabel);
-	m_ctlTimerList.SetItemText (nItem, eColumnGroup, timer_item->strGroup);
+  CListItemInsertGuard insertionGuard (m_ctlTimerList, nItem, insert);
+  if (!m_ctlTimerList.SetItemText(nItem, eColumnWhen, strWhen) ||
+      !m_ctlTimerList.SetItemText(nItem, eColumnContents,
+                   Replace (timer_item->strContents, ENDLINE, "\\n", true)) ||
+      !m_ctlTimerList.SetItemText (nItem, eColumnLabel, timer_item->strLabel) ||
+      !m_ctlTimerList.SetItemText (nItem, eColumnGroup, timer_item->strGroup))
+    return -1;
 
 
   CString strDuration;
@@ -6843,7 +6888,10 @@ CString strWhen;
           strDuration = CFormat ("%.f s", floor (ts.GetTotalSeconds ()));
     } // not time passed
 
-	m_ctlTimerList.SetItemText (nItem, eColumnNext, strDuration);
+  if (!m_ctlTimerList.SetItemText (nItem, eColumnNext, strDuration))
+    return -1;
+
+  insertionGuard.Commit ();
 
   return nItem;
 
@@ -7779,20 +7827,28 @@ int nItem;
   if (insert)
     {
     nItem = m_ctlVariableList.GetItemCount ();
-  	m_ctlVariableList.InsertItem (nItem, variable_item->strLabel);   // eColumnName
+    nItem = m_ctlVariableList.InsertItem (nItem, variable_item->strLabel);   // eColumnName
+    if (nItem < 0)
+      return -1;
     }
   else
     {
     nItem = item_number;
-  	m_ctlVariableList.SetItemText(nItem, eColumnName, variable_item->strLabel);
+    if (!m_ctlVariableList.SetItemText(nItem, eColumnName, variable_item->strLabel))
+      return -1;
     }
+
+  CListItemInsertGuard insertionGuard (m_ctlVariableList, nItem, insert);
 
   // first get rid of carriage-returns
   CString strContents = Replace (variable_item->strContents, "\r", "", true);
   // now show newlines as \n
   strContents = Replace (strContents, "\n", "\\n", true);
 
-	m_ctlVariableList.SetItemText(nItem, eColumnContents, strContents);
+  if (!m_ctlVariableList.SetItemText(nItem, eColumnContents, strContents))
+    return -1;
+
+  insertionGuard.Commit ();
 
   return nItem;
 
@@ -7971,8 +8027,8 @@ int iCount = m_doc->m_VariableMap.GetCount ();
 CFile * f = NULL;
 CArchive * ar = NULL;
 
-  CPlugin * pSavedPlugin = m_doc->m_CurrentPlugin;
-  m_doc->m_CurrentPlugin = NULL;   // make sure we save main triggers etc.
+  {
+  CPluginContextGuard pluginContextGuard (m_doc, NULL); // save main triggers etc.
 
 	try
 	  {
@@ -8005,11 +8061,9 @@ CArchive * ar = NULL;
 		e->ReportError();
 		e->Delete();
 	  }   // end of catch
-
-  m_doc->m_CurrentPlugin = pSavedPlugin;
-
   delete ar;      // delete archive
   delete f;       // delete file
+  }
 
   ::UMessageBox (TFormat ("Saved %i variable%s.", PLURAL (iCount)),
                    MB_ICONINFORMATION);
@@ -9004,19 +9058,15 @@ CString filename;
                        this);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "Select sound to play";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-
-  if (App.platform == VER_PLATFORM_WIN32s)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
-  else
-    strcpy (filedlg.m_ofn.lpstrFile, m_sound_pathname);
-
-  if (m_sound_pathname == NOSOUNDLIT)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
+  CString strInitialSound = m_sound_pathname;
+  if (App.platform == VER_PLATFORM_WIN32s || m_sound_pathname == NOSOUNDLIT)
+    strInitialSound.Empty ();
+  SetFileDialogFileName (filedlg, filename, strInitialSound);
     
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
@@ -9057,12 +9107,23 @@ CalculateMemoryUsage ();
 void CPrefsP15::CalculateMemoryUsage ()
   {
 
-  CProgressDlg * pProgressDlg = NULL;
+  class CStatusLineGuard
+    {
+    public:
+      CStatusLineGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc) { }
+      ~CStatusLineGuard () { m_pDoc->ShowStatusLine (); }
+
+    private:
+      CMUSHclientDoc * m_pDoc;
+    } statusLineGuard (m_doc);
+
+  std::unique_ptr<CProgressDlg> pProgressDlg;
 
   if (m_doc->m_LineList.GetCount () > 1000)
     {
-    pProgressDlg = new CProgressDlg; 
-    pProgressDlg->Create ();                           
+    pProgressDlg.reset (new CProgressDlg);
+    if (!pProgressDlg->Create ())
+      AfxThrowResourceException ();
     pProgressDlg->SetStatus (Translate ("Calculating memory usage..."));               
     pProgressDlg->SetRange (0, m_doc->m_LineList.GetCount ());
     pProgressDlg->SetWindowText (Translate ("Memory used by output buffer"));                              
@@ -9086,10 +9147,7 @@ void CPrefsP15::CalculateMemoryUsage ()
         pProgressDlg->SetPos (iCount); 
 
       if (pProgressDlg->CheckCancelButton())     // abort if user cancels
-        {
-        delete pProgressDlg;
         return;
-        }
       }
 
     CLine * pLine = m_doc->m_LineList.GetNext (pos);
@@ -9125,13 +9183,7 @@ void CPrefsP15::CalculateMemoryUsage ()
     strMemory.Format ("%s", (LPCTSTR) strKb);
 
 	SetDlgItemText(IDC_OUTPUT_MEMORY, strMemory);
-
-  m_doc->ShowStatusLine ();
-	
   GetDlgItem (IDC_CALCULATE_MEMORY)->EnableWindow (FALSE);  // only do it once
-
-
-  delete pProgressDlg;
 
   } // end of  CPrefsP15::CalculateMemoryUsage 
 

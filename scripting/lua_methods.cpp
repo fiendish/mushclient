@@ -1121,19 +1121,8 @@ static int L_CallPlugin (lua_State *L)
         } // end of for each argument
       }   // end of not calling ourselves
 
-    unsigned short iOldStyle = pDoc->m_iNoteStyle;
-    pDoc->m_iNoteStyle = NORMAL;    // back to default style
-
-    CString strOldCallingPluginID = pPlugin->m_strCallingPluginID;
-
-    pPlugin->m_strCallingPluginID.Empty ();
-    
-    if (pDoc->m_CurrentPlugin)
-      pPlugin->m_strCallingPluginID = pDoc->m_CurrentPlugin->m_strID;
-
-    // do this so plugin can find its own state (eg. with GetPluginID)
-    CPlugin * pSavedPlugin = pDoc->m_CurrentPlugin; 
-    pDoc->m_CurrentPlugin = pPlugin;  
+    CPluginCallGuard callGuard (pPlugin);
+    CPluginContextGuard contextGuard (pDoc, pPlugin, true, true);
     
     // now call the routine in the plugin
 
@@ -1153,10 +1142,6 @@ static int L_CallPlugin (lua_State *L)
       // this will display the error, and the error context
       LuaError (pL, "Run-time error", sRoutine, strType, strReason, pDoc);
 
-      // back to who *we* are (had to wait until after LuaError)
-      pDoc->m_CurrentPlugin = pSavedPlugin;
-      pDoc->m_iNoteStyle = iOldStyle;
-
       lua_settop (pL, 0);     // clean stack up
 
       // the error code for the caller (result value 1)
@@ -1172,15 +1157,8 @@ static int L_CallPlugin (lua_State *L)
       // what the exact Lua error message was (result value 3)
       lua_pushstring (L, strLuaError);
 
-      pPlugin->m_strCallingPluginID = strOldCallingPluginID;
-
       return 3;  // ie. eErrorCallingPluginRoutine, explanation, Lua error message
       }
-
-    // back to who *we* are (if no error)
-    pDoc->m_CurrentPlugin = pSavedPlugin;
-    pDoc->m_iNoteStyle = iOldStyle;
-    pPlugin->m_strCallingPluginID = strOldCallingPluginID;
 
     int ret_n = lua_gettop(pL);  // number of returned values (might be zero)
 
@@ -3538,15 +3516,10 @@ static int L_GetPluginVariableList (lua_State *L)
     if (!pPlugin)             
 	    return 0;   // no results - non-empty plugin not found     
     }                         
-  // save current plugin
-  CPlugin * pOldPlugin = pDoc->m_CurrentPlugin;  
-  pDoc->m_CurrentPlugin = pPlugin;               
+  CPluginContextGuard contextGuard (pDoc, pPlugin);
                       
   // now get the variable list 
   GetVariableListHelper (L, pDoc);                   
-
-  // restore current plugin
-  pDoc->m_CurrentPlugin = pOldPlugin;            
 
   return 1;     // one result (one table)
 
@@ -5072,12 +5045,23 @@ static int L_Save (lua_State *L)
   CMUSHclientDoc *pDoc = doc (L);
   CString strOldName = pDoc->GetPathName ();
   bool bSaveAs = optboolean (L, 2, 0);  // Save-As flag
-  if (bSaveAs) 
-    lua_pushboolean (L, pDoc->Save (my_checkstring (L, 1)));
-  else
-    lua_pushboolean (L, pDoc->Save (my_optstring (L, 1, "")));
+  bool bSaved = false;
+  try
+    {
+    if (bSaveAs)
+      bSaved = pDoc->Save (my_checkstring (L, 1));
+    else
+      bSaved = pDoc->Save (my_optstring (L, 1, ""));
+    }
+  catch (...)
+    {
+    if (bSaveAs)
+      pDoc->SetPathName (strOldName, FALSE);
+    throw;
+    }
   if (bSaveAs)
     pDoc->SetPathName (strOldName, FALSE);
+  lua_pushboolean (L, bSaved);
   return 1;  // number of result fields
   } // end of L_Save
 

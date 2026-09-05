@@ -36,6 +36,56 @@
 
 // gets our own plugin id
 
+static PluginListIterator FindPluginInstanceInList (
+  CPluginList & plugins,
+  const CString & strID,
+  const __int64 iInstanceNumber)
+  {
+  for (PluginListIterator it = plugins.begin (); it != plugins.end (); ++it)
+    if ((*it)->m_iPluginInstanceNumber == iInstanceNumber &&
+        (*it)->m_strID.CompareNoCase (strID) == 0)
+      return it;
+  return plugins.end ();
+  }
+
+static void RestoreReloadPlugin (
+  CPluginList & plugins,
+  CPluginList & heldPlugin,
+  CPlugin * pPlugin,
+  const bool bHavePrevious,
+  const CString & strPreviousID,
+  const __int64 iPreviousInstanceNumber,
+  const bool bHaveNext,
+  const CString & strNextID,
+  const __int64 iNextInstanceNumber)
+  {
+  PluginListIterator restorePosition = plugins.end ();
+  if (bHaveNext)
+    restorePosition = FindPluginInstanceInList (plugins,
+                                                strNextID,
+                                                iNextInstanceNumber);
+  if (restorePosition == plugins.end () && bHavePrevious)
+    {
+    PluginListIterator previous =
+      FindPluginInstanceInList (plugins,
+                                strPreviousID,
+                                iPreviousInstanceNumber);
+    if (previous != plugins.end ())
+      {
+      restorePosition = previous;
+      ++restorePosition;
+      }
+    }
+  if (restorePosition == plugins.end ())
+    for (restorePosition = plugins.begin ();
+         restorePosition != plugins.end () &&
+           pPlugin->m_iSequence >= (*restorePosition)->m_iSequence;
+         ++restorePosition)
+      { }
+
+  plugins.splice (restorePosition, heldPlugin, heldPlugin.begin ());
+  }
+
 BSTR CMUSHclientDoc::GetPluginID() 
 {
 	CString strResult;
@@ -176,31 +226,27 @@ VARIANT CMUSHclientDoc::GetPluginInfo(LPCTSTR PluginID, short InfoType)
 
 long CMUSHclientDoc::LoadPlugin(LPCTSTR FileName) 
 {
+  {
+  CPluginContextGuard pluginContextGuard (this, NULL); // load outside the calling plugin
 
-  CPlugin * pCurrentPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;   // otherwise plugin won't load if done from another one
+    try
+      {
+      // load it
+      InternalLoadPlugin (FileName);
+      } // end of try block
 
-  try
-    {
-    // load it
-    InternalLoadPlugin (FileName);
-    } // end of try block
+    catch (CFileException * e)
+      {
+      e->Delete ();
+      return ePluginFileNotFound;
+      } // end of catching a file exception
 
-  catch (CFileException * e)
-    {
-    e->Delete ();
-    m_CurrentPlugin = pCurrentPlugin;
-    return ePluginFileNotFound;
-    } // end of catching a file exception
-
-  catch (CArchiveException* e) 
-    {
-    e->Delete ();
-    m_CurrentPlugin = pCurrentPlugin;
-    return eProblemsLoadingPlugin;
-    }
-
-  m_CurrentPlugin = pCurrentPlugin;
+    catch (CArchiveException* e)
+      {
+      e->Delete ();
+      return eProblemsLoadingPlugin;
+      }
+  }
 
   PluginListChanged ();
 
@@ -229,7 +275,7 @@ CPlugin * pPlugin = GetPlugin (PluginID);
     return eNoSuchPlugin;
 
   // cannot reload  ourselves
-  if (pPlugin == m_CurrentPlugin)
+  if (pPlugin == m_CurrentPlugin || pPlugin->m_iActiveScriptCalls > 0)
     return eBadParameter;
 
   PluginListIterator pit = find (m_PluginList.begin (), 
@@ -240,33 +286,88 @@ CPlugin * pPlugin = GetPlugin (PluginID);
     return eNoSuchPlugin;
 
   CString strName = pPlugin->m_strSource;
-  m_PluginList.erase (pit);  // remove from list
-  delete pPlugin;   // delete the plugin
-
-  CPlugin * pCurrentPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;   // otherwise plugin won't load if done from another one
-
-  try
+  bool bHavePrevious = false;
+  CString strPreviousID;
+  __int64 iPreviousInstanceNumber = 0;
+  if (pit != m_PluginList.begin ())
     {
-    // now reload it
-    InternalLoadPlugin (strName);
-    } // end of try block
-
-  catch (CFileException * e)
+    PluginListIterator previous = pit;
+    --previous;
+    bHavePrevious = true;
+    strPreviousID = (*previous)->m_strID;
+    iPreviousInstanceNumber = (*previous)->m_iPluginInstanceNumber;
+    }
+  bool bHaveNext = false;
+  CString strNextID;
+  __int64 iNextInstanceNumber = 0;
+  PluginListIterator next = pit;
+  ++next;
+  if (next != m_PluginList.end ())
     {
-    e->Delete ();
-    m_CurrentPlugin = pCurrentPlugin;
-    return ePluginFileNotFound;
-    } // end of catching a file exception
-
-  catch (CArchiveException* e) 
-    {
-    e->Delete ();
-    m_CurrentPlugin = pCurrentPlugin;
-    return eProblemsLoadingPlugin;
+    bHaveNext = true;
+    strNextID = (*next)->m_strID;
+    iNextInstanceNumber = (*next)->m_iPluginInstanceNumber;
     }
 
-  m_CurrentPlugin = pCurrentPlugin;
+  CPluginList heldPlugin;
+  heldPlugin.splice (heldPlugin.begin (), m_PluginList, pit);
+
+  {
+  CPluginContextGuard pluginContextGuard (this, NULL); // reload outside the calling plugin
+
+    try
+      {
+      // now reload it
+      InternalLoadPlugin (strName);
+      } // end of try block
+
+    catch (CFileException * e)
+      {
+      RestoreReloadPlugin (m_PluginList,
+                           heldPlugin,
+                           pPlugin,
+                           bHavePrevious,
+                           strPreviousID,
+                           iPreviousInstanceNumber,
+                           bHaveNext,
+                           strNextID,
+                           iNextInstanceNumber);
+      e->Delete ();
+      return ePluginFileNotFound;
+      } // end of catching a file exception
+
+    catch (CArchiveException* e)
+      {
+      RestoreReloadPlugin (m_PluginList,
+                           heldPlugin,
+                           pPlugin,
+                           bHavePrevious,
+                           strPreviousID,
+                           iPreviousInstanceNumber,
+                           bHaveNext,
+                           strNextID,
+                           iNextInstanceNumber);
+      e->Delete ();
+      return eProblemsLoadingPlugin;
+      }
+
+    catch (...)
+      {
+      RestoreReloadPlugin (m_PluginList,
+                           heldPlugin,
+                           pPlugin,
+                           bHavePrevious,
+                           strPreviousID,
+                           iPreviousInstanceNumber,
+                           bHaveNext,
+                           strNextID,
+                           iNextInstanceNumber);
+      throw;
+      }
+  }
+
+  heldPlugin.pop_front ();
+  delete pPlugin;
 
   PluginListChanged ();
 
@@ -299,6 +400,18 @@ CPlugin * CMUSHclientDoc::GetPlugin (LPCTSTR PluginID)
 
   } // end of CMUSHclientDoc::GetPlugin
 
+CPlugin * CMUSHclientDoc::GetPluginInstance
+  (LPCTSTR PluginID, __int64 iPluginInstanceNumber)
+  {
+  for (PluginListIterator pit = m_PluginList.begin ();
+       pit != m_PluginList.end (); ++pit)
+    if ((*pit)->m_iPluginInstanceNumber == iPluginInstanceNumber &&
+        (*pit)->m_strID.CompareNoCase (PluginID) == 0)
+      return *pit;
+
+  return NULL;
+  } // end of CMUSHclientDoc::GetPluginInstance
+
 // Helper routine for getting stuff for other plugins.
 //  NB - if PluginID is the null string, use global things
 
@@ -313,10 +426,8 @@ CPlugin * CMUSHclientDoc::GetPlugin (LPCTSTR PluginID)
     if (!pPlugin)             \
 	    return vaResult;        \
     }                         \
-  CPlugin * pOldPlugin = m_CurrentPlugin;  \
-  m_CurrentPlugin = pPlugin;               \
+  CPluginContextGuard contextGuard (this, pPlugin); \
   vaResult = what_to_do;                   \
-  m_CurrentPlugin = pOldPlugin;            \
 	return vaResult;                       
 
 
@@ -400,16 +511,8 @@ DISPID iDispid = pPlugin->m_ScriptEngine->GetDispid (Routine);
 
 long nInvocationCount = 0;
 
-  CString strOldCallingPluginID = pPlugin->m_strCallingPluginID;
-
-  pPlugin->m_strCallingPluginID.Empty ();
-  
-  if (m_CurrentPlugin)
-    pPlugin->m_strCallingPluginID = m_CurrentPlugin->m_strID;
-
-  // do this so plugin can find its own state (eg. with GetPluginID)
-  CPlugin * pSavedPlugin = m_CurrentPlugin; 
-  m_CurrentPlugin = pPlugin;   
+  CPluginCallGuard callGuard (pPlugin);
+  CPluginContextGuard contextGuard (this, pPlugin, true);
 
   CString strType = TFormat ("Plugin %s", (LPCTSTR) pPlugin->m_strName); 
   CString strReason = TFormat ("Executing plugin %s sub %s", 
@@ -455,10 +558,6 @@ long nInvocationCount = 0;
                              nInvocationCount, 
                              NULL);
     } // not Lua
-
-  m_CurrentPlugin = pSavedPlugin;
-
-  pPlugin->m_strCallingPluginID = strOldCallingPluginID;
 
   if (iDispid == DISPID_UNKNOWN)
     return eErrorCallingPluginRoutine;
@@ -530,10 +629,7 @@ CPlugin * pPlugin = GetPlugin (PluginID);
 
   pPlugin->m_bEnabled = Enabled != 0;
 
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-
-  // otherwise plugin won't know who itself is
-  m_CurrentPlugin = pPlugin;
+  CPluginContextGuard contextGuard (this, pPlugin);
 
   if (pPlugin->m_bEnabled)
     {
@@ -546,8 +642,6 @@ CPlugin * pPlugin = GetPlugin (PluginID);
     pPlugin->ExecutePluginScript (callinfo); 
     }
   
-  m_CurrentPlugin = pSavedPlugin;
-
   return eOK;
 }   // end of CMUSHclientDoc::EnablePlugin
 
@@ -582,12 +676,18 @@ long CMUSHclientDoc::BroadcastPlugin(long Message, LPCTSTR Text)
      strCurrentName = pSavedPlugin->m_strName;
     }
 
+  CPluginInstanceSnapshot snapshot;
+  GetPluginInstanceSnapshot (m_PluginList, snapshot);
+
   // tell a plugin the message
-  for (PluginListIterator pit = m_PluginList.begin (); 
-       pit != m_PluginList.end (); 
-       ++pit)
+  for (size_t iPlugin = 0; iPlugin < snapshot.size (); iPlugin++)
     {
-    CPlugin * pPlugin = *pit;
+    CPlugin * pPlugin = GetPluginInstance
+      (snapshot [iPlugin].m_strID,
+       snapshot [iPlugin].m_iPluginInstanceNumber);
+
+    if (!pPlugin)
+      continue;
 
     if (!(pPlugin->m_bEnabled))   // ignore disabled plugins
       continue;
@@ -597,7 +697,7 @@ long CMUSHclientDoc::BroadcastPlugin(long Message, LPCTSTR Text)
       continue;
 
     CScriptCallInfo callinfo (ON_PLUGIN_BROADCAST, pPlugin->m_PluginCallbacks [ON_PLUGIN_BROADCAST]);
-    m_CurrentPlugin = pPlugin;
+    CPluginContextGuard contextGuard (this, pPlugin);
 
     // see what the plugin makes of this,
     pPlugin->ExecutePluginScript (callinfo,
@@ -610,8 +710,6 @@ long CMUSHclientDoc::BroadcastPlugin(long Message, LPCTSTR Text)
       iCount++;
 
     }   // end of doing each plugin
-
-  m_CurrentPlugin = pSavedPlugin;
 
 	return iCount;
 }  // end of CMUSHclientDoc::BroadcastPlugin
@@ -638,7 +736,7 @@ CPlugin * pPlugin = GetPlugin (PluginID);
     return eNoSuchPlugin;
 
   // cannot delete  ourselves
-  if (pPlugin == m_CurrentPlugin)
+  if (pPlugin == m_CurrentPlugin || pPlugin->m_iActiveScriptCalls > 0)
     return eBadParameter;
 
   PluginListIterator pit = find (m_PluginList.begin (), 

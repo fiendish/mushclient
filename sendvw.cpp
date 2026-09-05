@@ -262,6 +262,7 @@ CSendView::CSendView()
   m_HistoryFindInfo.m_strTitle = "Find in command history...";
   m_iHistoryStatus = eAtBottom;
   m_backbr = NULL;
+  m_bNotifyingPluginCommandChanged = false;
 }
 
 CSendView::~CSendView()
@@ -319,8 +320,8 @@ ASSERT_VALID(pDoc);
 
 	if (nChar == VK_RETURN)
   	{
-
-    pDoc->m_iCurrentActionSource = eUserTyping;
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (pDoc->m_iCurrentActionSource, eUserTyping);
 
 		CString strText;
 		GetEditCtrl().GetWindowText(strText);
@@ -368,7 +369,6 @@ ASSERT_VALID(pDoc);
 // cancel any previous message on the status line
     pDoc->ShowStatusLine ();
 
-    pDoc->m_iCurrentActionSource = eUnknownActionSource;
     return;
 
   	} // end of return key
@@ -513,7 +513,9 @@ void CSendView::OnKeysPrevcommand()
   if (m_HistoryPosition &&   
       !strCommand.IsEmpty () &&
       pDoc->m_bAutoRepeat && 
-      m_iHistoryStatus == eAtBottom)
+      m_iHistoryStatus == eAtBottom &&
+      !m_bChanged &&
+      strCommand == m_msgList.GetAt (m_HistoryPosition))
     m_msgList.GetPrev (m_HistoryPosition);
 
   if (m_HistoryPosition)
@@ -654,11 +656,10 @@ void CSendView::SendCommand (const CString strOriginalCommand,
     // break up auto-say string into a list, terminated by newlines
     CStringList strList;
     StringToList (strFullCommand, ENDLINE, strList);
-    pDoc->m_bEnableAutoSay = false; // disable to prevent loop
-
-    // disable command stacking
-    unsigned short bSaveCommandStack = pDoc->m_enable_command_stack;
-    pDoc->m_enable_command_stack = false;
+    CValueStateGuard<unsigned short> autoSayGuard
+      (pDoc->m_bEnableAutoSay, false); // disable to prevent loop
+    CValueStateGuard<unsigned short> commandStackGuard
+      (pDoc->m_enable_command_stack, false);
 
     for (POSITION command_pos = strList.GetHeadPosition (); command_pos; )
       {
@@ -668,7 +669,8 @@ void CSendView::SendCommand (const CString strOriginalCommand,
         {
         // evaluate aliases, speed walking, command stacking etc.
 
-        pDoc->m_iExecutionDepth = 0;    // hand-typed command, assume depth zero
+        CValueStateGuard<int> executionDepthGuard
+          (pDoc->m_iExecutionDepth, 0); // hand-typed command
 
         // execution is now done separately :)
 
@@ -690,16 +692,14 @@ void CSendView::SendCommand (const CString strOriginalCommand,
         }
       }
 
-    pDoc->m_bEnableAutoSay = true; // re-enable it
-    pDoc->m_enable_command_stack = bSaveCommandStack; // re-enable it
-
     } // end of auto say
   else
     {  // not auto-say
 
     // evaluate aliases, speed walking, command stacking etc.
 
-    pDoc->m_iExecutionDepth = 0;    // hand-typed command, assume depth zero
+    CValueStateGuard<int> executionDepthGuard
+      (pDoc->m_iExecutionDepth, 0); // hand-typed command
 
     // execution is now done separately :)
 
@@ -751,8 +751,8 @@ void CSendView::SendMacro (int whichone)
 
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
-  BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
-  pDoc->m_bEnableAutoSay = FALSE;
+  CValueStateGuard<unsigned short> autoSayGuard
+    (pDoc->m_bEnableAutoSay, FALSE);
 
 // send the command in the appropriate way
 
@@ -772,9 +772,11 @@ void CSendView::SendMacro (int whichone)
 
   case SEND_NOW:        
 
-        pDoc->m_iCurrentActionSource = eUserMacro;
+        {
+        CValueStateGuard<unsigned short> actionSourceGuard
+          (pDoc->m_iCurrentActionSource, eUserMacro);
         SendCommand (pDoc->m_macros [whichone], TRUE, ! pDoc->m_bDoNotAddMacrosToCommandHistory);
-        pDoc->m_iCurrentActionSource = eUnknownActionSource;
+        }
         break;
 
   case ADD_TO_COMMAND:  
@@ -785,10 +787,6 @@ void CSendView::SendMacro (int whichone)
   default:              
         break;  // do nothing
   } // end of switch
-
-// restore auto-say
-
-  pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   } // end of SendMacro
 
@@ -859,6 +857,8 @@ CCmdHistory dlg;
   dlg.m_sendview = this;
   dlg.m_pHistoryFindInfo = &m_HistoryFindInfo;    // for finding
   dlg.m_pDoc = pDoc;            // for confirming replacement of typing
+  dlg.m_iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+  dlg.m_hSendView = GetSafeHwnd ();
 
   dlg.DoModal ();
 
@@ -1036,8 +1036,8 @@ ASSERT_VALID(pDoc);
 
 // turn auto-say off, they obviously don't want to say west, examine, etc.
 
-  BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
-  pDoc->m_bEnableAutoSay = FALSE;
+  CValueStateGuard<unsigned short> autoSayGuard
+    (pDoc->m_bEnableAutoSay, FALSE);
 
 const char * sValues [eKeypad_Max_Items] =
   {
@@ -1092,17 +1092,13 @@ int iIndex = -1;
     {
     if (pDoc->m_keypad_enable)
       {
-      pDoc->m_iCurrentActionSource = eUserKeypad;
+      CValueStateGuard<unsigned short> actionSourceGuard
+        (pDoc->m_iCurrentActionSource, eUserKeypad);
       SendCommand (pDoc->m_keypad [iIndex], TRUE, FALSE);    // do not keep in history window
-      pDoc->m_iCurrentActionSource = eUnknownActionSource;
       }
     else
       GetEditCtrl().ReplaceSel (sValues [iIndex], TRUE);
     }
-
-// restore auto-say
-
-  pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   return TRUE;
 
@@ -1137,10 +1133,16 @@ CRect rect;
   // recreate background colour if necessary  
   if (m_backcolour != pDoc->m_input_background_colour)
     {
+    CBrush * pNewBrush = new CBrush (pDoc->m_input_background_colour);
+    if (!pNewBrush->GetSafeHandle ())
+      {
+      delete pNewBrush;
+      AfxThrowResourceException ();
+      }
     if (m_backbr)
       m_backbr->DeleteObject ();
     delete m_backbr;
-    m_backbr = new CBrush (pDoc->m_input_background_colour);
+    m_backbr = pNewBrush;
     m_backcolour = pDoc->m_input_background_colour;
     }
 
@@ -1189,15 +1191,21 @@ void CSendView::NotifyPluginCommandChanged ()
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
 
-  static bool doing_change = false;
-
   // tell each plugin the edit window has changed. Hello, Worstje!
 
-  if (!doing_change)      // don't recurse
+  if (!m_bNotifyingPluginCommandChanged)      // don't recurse
     {
-    doing_change = true;
-    pDoc->SendToAllPluginCallbacks (ON_PLUGIN_COMMAND_CHANGED);
-    doing_change = false;
+    m_bNotifyingPluginCommandChanged = true;
+    try
+      {
+      pDoc->SendToAllPluginCallbacks (ON_PLUGIN_COMMAND_CHANGED);
+      }
+    catch (...)
+      {
+      m_bNotifyingPluginCommandChanged = false;
+      throw;
+      }
+    m_bNotifyingPluginCommandChanged = false;
     }
 
   }  // end of CSendView::NotifyPluginCommandChanged
@@ -1220,10 +1228,16 @@ void CSendView::OnInitialUpdate()
 
   m_owner_frame->FixUpSplitterBar ();
   
+  CBrush * pNewBrush = new CBrush (pDoc->m_input_background_colour);
+  if (!pNewBrush->GetSafeHandle ())
+    {
+    delete pNewBrush;
+    AfxThrowResourceException ();
+    }
   if (m_backbr)
     m_backbr->DeleteObject ();
   delete m_backbr;
-  m_backbr = new CBrush (pDoc->m_input_background_colour);
+  m_backbr = pNewBrush;
   m_backcolour = pDoc->m_input_background_colour;
 
   // if they want auto-command size, put back to 1
@@ -1347,20 +1361,7 @@ CString strCurrent;
 
   // do not record null commands, or ones identical to the previous one
 
-    if (!str.IsEmpty () && str != m_last_command)
-      {
-      if (m_inputcount >= pDoc->m_nHistoryLines)
-        {
-        m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
-        m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
-        if (m_HistoryFindInfo.m_nCurrentLine < 0)
-          m_HistoryFindInfo.m_nCurrentLine = 0;
-        }
-      else
-        m_inputcount++;
-      m_msgList.AddTail (str);
-      m_last_command = str;
-      }  // end command different
+    AddToCommandHistory (str, false);
     }     // end if save deleted command
 
   return false;
@@ -1634,20 +1635,7 @@ ASSERT_VALID(pDoc);
 
     // do not record null commands, or ones identical to the previous one
 
-      if (!str.IsEmpty () && str != m_last_command)
-        {
-        if (m_inputcount >= pDoc->m_nHistoryLines)
-          {
-          m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
-          m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
-          if (m_HistoryFindInfo.m_nCurrentLine < 0)
-            m_HistoryFindInfo.m_nCurrentLine = 0;
-          }
-        else
-          m_inputcount++;
-        m_msgList.AddTail (str);
-        m_last_command = str;
-        }
+      AddToCommandHistory (str, false);
       }
 
   	GetEditCtrl().SetWindowText ("");
@@ -2051,6 +2039,8 @@ CString strCurrent;
 
 //save old config
 bool old_bTabCompletionSpace = pDoc->m_bTabCompletionSpace;
+CValueStateGuard<unsigned short> tabCompletionSpaceGuard
+  (pDoc->m_bTabCompletionSpace, pDoc->m_bTabCompletionSpace);
 
   // find where cursor is
   
@@ -2158,6 +2148,7 @@ void CSendView::OnDisplayClearCommandHistory()
   // OK, do it ...
 	m_msgList.RemoveAll ();
   m_HistoryPosition = NULL;
+  m_iHistoryStatus = eAtBottom;
   m_inputcount = 0;
   m_HistoryFindInfo.m_pFindPosition = NULL;
   m_HistoryFindInfo.m_nCurrentLine = 0;
@@ -2408,7 +2399,8 @@ ASSERT_VALID(pDoc);
 }   // end of CSendView::OnEditCtrlZ
 
 
-void CSendView::AddToCommandHistory (const CString & strCommand)
+void CSendView::AddToCommandHistory (const CString & strCommand,
+                                     const bool bRespectNoEcho)
   {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
@@ -2418,7 +2410,8 @@ ASSERT_VALID(pDoc);
 
   if (!strCommand.IsEmpty () && 
       strCommand != m_last_command &&
-      !(pDoc->m_bNoEcho && !pDoc->m_bAlwaysRecordCommandHistory)) 
+      (!bRespectNoEcho ||
+       !(pDoc->m_bNoEcho && !pDoc->m_bAlwaysRecordCommandHistory)))
     {
     if (m_inputcount >= pDoc->m_nHistoryLines)
       {
@@ -2564,11 +2557,28 @@ void CSendView::OnAcceleratorCommand (UINT nID)
 
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
-  BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
-  pDoc->m_bEnableAutoSay = FALSE;
+  CValueStateGuard<unsigned short> autoSayGuard
+    (pDoc->m_bEnableAutoSay, FALSE);
 
 
-  pDoc->m_iCurrentActionSource = eUserAccelerator;
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (pDoc->m_iCurrentActionSource, eUserAccelerator);
+
+  const string sPluginID = pDoc->m_CommandToPluginMap [nID];
+  CPlugin * pPlugin = NULL;
+
+  if (!sPluginID.empty ())
+    {
+    map<WORD, __int64>::const_iterator instanceIt =
+      pDoc->m_CommandToPluginInstanceMap.find (nID);
+    if (instanceIt == pDoc->m_CommandToPluginInstanceMap.end ())
+      return;
+
+    pPlugin = pDoc->GetPluginInstance (sPluginID.c_str (),
+                                       instanceIt->second);
+    if (!pPlugin)
+      return;
+    }
 
   // for backwards compatability, call the same thing as before
   if (pDoc->m_CommandToSendToMap [nID] == eSendToExecute)
@@ -2590,15 +2600,12 @@ void CSendView::OnAcceleratorCommand (UINT nID)
       key = KeyCodeToString (it->first >> 16, it->first);
 
     CString strExtraOutput;
-    pDoc->m_iCurrentActionSource = eUserAccelerator;  
-
-    CPlugin * pSavedPlugin = pDoc->m_CurrentPlugin;
-
     // which plugin wanted it
-    pDoc->m_CurrentPlugin = pDoc->GetPlugin (pDoc->m_CommandToPluginMap [nID].c_str ());
+    CPluginContextGuard pluginContextGuard (pDoc, pPlugin);
+    CPluginCallGuard pluginCallGuard (pPlugin, true);
 
     if (pDoc->m_CurrentPlugin != NULL ||
-        pDoc->m_CommandToPluginMap [nID].empty ())
+        sPluginID.empty ())
       {
       // ok let's do it now
       pDoc->SendTo (pDoc->m_CommandToSendToMap [nID], 
@@ -2611,20 +2618,12 @@ void CSendView::OnAcceleratorCommand (UINT nID)
               );
       }
 
-    pDoc->m_CurrentPlugin = pSavedPlugin;
-
     // display any stuff sent to output window
 
     if (!strExtraOutput.IsEmpty ())
        pDoc->DisplayMsg (strExtraOutput, strExtraOutput.GetLength (), COMMENT);
 
   }
-
-  pDoc->m_iCurrentActionSource = eUnknownActionSource;
-
-// restore auto-say
-
-  pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   }
 

@@ -447,20 +447,20 @@ assemble the full text of the original line.
 //   *previous* line (the prompt line).
 //  So, we save and restore the current plugin pointer.
 
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;
+  CPluginContextGuard pluginContextGuard (this, NULL);
 
   // triggers might set these
   bool bNoLog = !m_bLogOutput;
   m_bLineOmittedFromOutput = false;
   bool bChangedColour = false;
 
-  m_iCurrentActionSource = eInputFromServer;
+  {
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (m_iCurrentActionSource, eInputFromServer);
 
   if (!SendToAllPluginCallbacks (ON_PLUGIN_LINE_RECEIVED, strCurrentLine))
     m_bLineOmittedFromOutput = true;
-
-  m_iCurrentActionSource = eUnknownActionSource;
+  }
 
 // next! see if we have a "mapping failure" line. If so, remove from map list
 
@@ -551,7 +551,7 @@ assemble the full text of the original line.
   CString strResponse;
   CTrigger * trigger_item;
 
-  CTriggerList triggerList;
+  OneShotItemMap triggerList;
   CString strExtraOutput;   // for sending to output
   ScriptItemMap mapDeferredScripts;
   OneShotItemMap mapOneShotItems;
@@ -587,18 +587,25 @@ assemble the full text of the original line.
     // allow trigger evaluation for the moment
     m_iStopTriggerEvaluation = eKeepEvaluatingTriggers;
 
-   PluginListIterator pit;
+   CPluginInstanceSnapshot negativePlugins;
+   CPluginInstanceSnapshot nonnegativePlugins;
+   GetPluginSequenceSnapshots (m_PluginList,
+                               negativePlugins,
+                               nonnegativePlugins);
 
    // Do plugins (stop if one stops trigger evaluation).
    // Do only negative sequence number plugins at this point
    // Suggested by Fiendish. Added in version 4.97.
-   for (pit = m_PluginList.begin ();
-        pit != m_PluginList.end () &&
-        (*pit)->m_iSequence < 0 &&
+   for (size_t iPlugin = 0;
+        iPlugin < negativePlugins.size () &&
         m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
-        ++pit)
-      {
-      m_CurrentPlugin = *pit;
+        iPlugin++)
+     {
+      m_CurrentPlugin = GetPluginInstance (
+        negativePlugins [iPlugin].m_strID,
+        negativePlugins [iPlugin].m_iPluginInstanceNumber);
+      if (!m_CurrentPlugin)
+        continue;
       // allow trigger evaluation for the moment (ie. the next plugin)
       m_iStopTriggerEvaluation = eKeepEvaluatingTriggers;
       if (m_CurrentPlugin->m_bEnabled)
@@ -635,15 +642,16 @@ assemble the full text of the original line.
       } // end of trigger evaluation not stopped
 
    // do plugins (stop if one stops trigger evaluation, or if it was stopped by the main world triggers)
-   for (pit = m_PluginList.begin ();
-        pit != m_PluginList.end () &&
-         m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
-         ++pit)
-      {
-      // skip past negative sequence numbers
-      if ((*pit)->m_iSequence < 0)
+   for (size_t iPlugin = 0;
+        iPlugin < nonnegativePlugins.size () &&
+        m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
+        iPlugin++)
+     {
+      m_CurrentPlugin = GetPluginInstance (
+        nonnegativePlugins [iPlugin].m_strID,
+        nonnegativePlugins [iPlugin].m_iPluginInstanceNumber);
+      if (!m_CurrentPlugin)
          continue;
-      m_CurrentPlugin = *pit;
       // allow trigger evaluation for the moment (ie. the next plugin)
       m_iStopTriggerEvaluation = eKeepEvaluatingTriggers;
       if (m_CurrentPlugin->m_bEnabled)
@@ -737,94 +745,103 @@ assemble the full text of the original line.
 
   if (m_bLineOmittedFromOutput)
     {
-
-  // delete all lines in this set
-    for (pos = m_LineList.GetTailPosition (); pos; )
-     {
-     // if this particular line was added to the line positions array, then make it null
-      if (m_LineList.GetCount () % JUMP_SIZE == 1)
-            m_pLinePositions [m_LineList.GetCount () / JUMP_SIZE] = NULL;
-
-      // version 4.54 - keep notes, even if omitted from output ;)
-      // version 4.72 - also player input
-
-      // we have to push_front because we are going through the lines backwards
-      // this means the newline goes first. Also we process the styles in reverse order.
-
-      CLine* pLine = m_LineList.GetTail ();
+    vector<POSITION> linesToDelete;
+    list<CPaneStyle> stagedOutstandingLines;
+    int iRecentLinesToRemove = 0;
+    POSITION scan = m_LineList.GetTailPosition ();
+    while (scan)
+      {
+      POSITION current = scan;
+      CLine * pLine = m_LineList.GetPrev (scan);
+      linesToDelete.push_back (current);
 
       if (pLine->flags & NOTE_OR_COMMAND)
         {
-       CString strLine = CString (pLine->text, pLine->len);
-       int iCol = 0;
+        CString strLine (pLine->text, pLine->len);
+        int iCol = 0;
+        if (pLine->hard_return)
+          stagedOutstandingLines.push_front (CPaneStyle (ENDLINE, 0, 0, 0));
 
-       // throw in the newline if required
-       if (pLine->hard_return)
-         m_OutstandingLines.push_front (CPaneStyle (ENDLINE, 0, 0, 0));
-
-       for (POSITION stylepos = pLine->styleList.GetTailPosition(); stylepos; )
-         {
-         CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
-
-         COLORREF cText,
-                  cBack;
-
-         // find actual RGB colour of style
-         GetStyleRGB (pStyle, cText, cBack); 
-                          
-         m_OutstandingLines.push_front (CPaneStyle ((const char *)
-                              strLine.Mid (pLine->len -  pStyle->iLength - iCol, pStyle->iLength), 
-                              cText, cBack, pStyle->iFlags & 7));
-         iCol += pStyle->iLength; // new column
-         }     // end of each style
-
-
-        }  // end of coming across a note or command line
-      else
-        {  // must be an output line
-        // consider that this line is no longer a "recent line"
-        // if a trigger stopped all trigger evaluation.
-        // Suggested by Fiendish - version 5.06
-        if (m_iStopTriggerEvaluation == eStopEvaluatingTriggersInAllPlugins)
-          if (!m_sRecentLines.empty ())  // if sane to do so
-            m_sRecentLines.pop_back ();
+        for (POSITION stylepos = pLine->styleList.GetTailPosition ();
+             stylepos; )
+          {
+          CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
+          COLORREF cText,
+                   cBack;
+          GetStyleRGB (pStyle, cText, cBack);
+          stagedOutstandingLines.push_front (
+            CPaneStyle ((const char *)
+              strLine.Mid (pLine->len - pStyle->iLength - iCol,
+                           pStyle->iLength),
+              cText,
+              cBack,
+              pStyle->iFlags & 7));
+          iCol += pStyle->iLength;
+          }
         }
+      else if (m_iStopTriggerEvaluation ==
+               eStopEvaluatingTriggersInAllPlugins)
+        iRecentLinesToRemove++;
 
-      delete pLine; // delete contents of tail iten -- version 3.85
-      m_LineList.RemoveTail ();   // get rid of the line
-      m_total_lines--;            // don't count as received
-
-      // if this was the first line, we have done enough
-      if (pos == prevpos)
-        break;    
-     m_LineList.GetPrev (pos);
-     }
-
-    // try to allow world.tells to span omitted lines
-    if (!m_LineList.IsEmpty ())
-      {
-      m_pCurrentLine = m_LineList.GetTail ();
-      if (((m_pCurrentLine->flags & COMMENT) == 0) ||
-          m_pCurrentLine->hard_return)
-          m_pCurrentLine = NULL;
+      if (current == prevpos)
+        break;
       }
+
+    CLine * pSurvivingCurrentLine = scan ? m_LineList.GetAt (scan) : NULL;
+    if (pSurvivingCurrentLine &&
+        (((pSurvivingCurrentLine->flags & COMMENT) == 0) ||
+         pSurvivingCurrentLine->hard_return))
+      pSurvivingCurrentLine = NULL;
+
+    std::unique_ptr<CLine> pNewLine;
+    if (!pSurvivingCurrentLine)
+      {
+      pNewLine.reset (new CLine (m_total_lines -
+                                 static_cast<long> (linesToDelete.size ()) + 1,
+                                 m_nWrapColumn,
+                                 m_iFlags,
+                                 m_iForeColour,
+                                 m_iBackColour,
+                                 m_bUTF_8));
+      m_LineList.AddTail (pNewLine.get ());
+      }
+
+    m_iOutputGeneration++;
+    for (vector<POSITION>::const_iterator it = linesToDelete.begin ();
+         it != linesToDelete.end (); ++it)
+      {
+      CLine * pLine = m_LineList.GetAt (*it);
+      m_LineList.RemoveAt (*it);
+      delete pLine;
+      m_total_lines--;
+      }
+
+    while (iRecentLinesToRemove-- > 0 && !m_sRecentLines.empty ())
+      m_sRecentLines.pop_back ();
+
+    if (pSurvivingCurrentLine)
+      m_pCurrentLine = pSurvivingCurrentLine;
     else
-      m_pCurrentLine = NULL;
-
-    if (!m_pCurrentLine)
       {
-      // restart with a blank line at the end of the list
-      m_pCurrentLine = new CLine (++m_total_lines, 
-                                  m_nWrapColumn,
-                                  m_iFlags,
-                                  m_iForeColour,
-                                  m_iBackColour,
-                                  m_bUTF_8);
-      pos = m_LineList.AddTail (m_pCurrentLine);
-
-      if (m_LineList.GetCount () % JUMP_SIZE == 1)
-        m_pLinePositions [m_LineList.GetCount () / JUMP_SIZE] = pos;
+      m_pCurrentLine = pNewLine.release ();
+      m_total_lines++;
       }
+
+    for (int i = 0; i <= m_maxlines / JUMP_SIZE; i++)
+      m_pLinePositions [i] = NULL;
+    int iLine = 0;
+    for (pos = m_LineList.GetHeadPosition (); pos; iLine++)
+      {
+      POSITION current = pos;
+      m_LineList.GetNext (pos);
+      if (iLine % JUMP_SIZE == 0)
+        m_pLinePositions [iLine / JUMP_SIZE] = current;
+      }
+
+    m_OutstandingLines.splice (m_OutstandingLines.begin (),
+                               stagedOutstandingLines);
+
+    RefreshMXPMissingTagAnchors ();
 
     }
   else
@@ -840,7 +857,8 @@ assemble the full text of the original line.
 
   // execute scripts now *after* we have done our omitting from output
 
-  m_bInSendToScript = false;   // they can do DeleteLines here
+  {
+  CBoolStateGuard sendToScriptGuard (m_bInSendToScript, false); // allow DeleteLines
 
 // now that lines have been omitted run scripts now that wanted to be deferred      
 
@@ -848,10 +866,20 @@ assemble the full text of the original line.
        deferred_it != mapDeferredScripts.end ();
        deferred_it++)
    {
-    int iSavedDepth = m_iExecutionDepth;
-    m_iExecutionDepth = 0;    // no execution depth yet
-    m_iCurrentActionSource = eTriggerFired;
-    m_CurrentPlugin = deferred_it->pWhichPlugin;   // set back to correct plugin
+    CValueStateGuard<int> depthGuard (m_iExecutionDepth, 0);
+    CValueStateGuard<unsigned short> actionGuard
+      (m_iCurrentActionSource, eTriggerFired);
+
+    CPlugin * pPlugin = NULL;
+    if (!deferred_it->sPluginID.empty ())
+      {
+      pPlugin = GetPluginInstance (deferred_it->sPluginID.c_str (),
+                                   deferred_it->iPluginInstanceNumber);
+      if (!pPlugin)
+        continue;
+      }
+
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
     
     // if Lua, add style info to script space
     if (GetScriptEngine () && GetScriptEngine ()->L)
@@ -885,62 +913,41 @@ assemble the full text of the original line.
             "",            // variable to set
             strExtraOutput // won't use this anyway
             );
-
-    m_iCurrentActionSource = eUnknownActionSource;
-    m_iExecutionDepth =  iSavedDepth;
    }    // end of doing each deferred script
 
 // now do scripts in the script file (ie. script name in the "script" box)
 
   m_CurrentPlugin = NULL;
     
-  bool bFoundIt;
-  int iItem;
-  for (pos = triggerList.GetHeadPosition (); pos; )
+  for (OneShotItemMap::const_iterator trigger_it = triggerList.begin ();
+       trigger_it != triggerList.end ();
+       ++trigger_it)
     {
-    trigger_item = triggerList.GetNext (pos);
-    bFoundIt = false;
-
-    // check that trigger still exists, in case a script deleted it - and also
-    // to work out which plugin it is in
-
-    m_CurrentPlugin = NULL;
-    // main triggers
-    for (iItem = 0; !bFoundIt && iItem < GetTriggerArray ().GetSize (); iItem++)
-      if (GetTriggerArray () [iItem] == trigger_item)
-        {
-        bFoundIt = true;
-        // execute trigger script
-        ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
-        }
-
-    // do plugins
-    for (PluginListIterator pit = m_PluginList.begin (); 
-         !bFoundIt && pit != m_PluginList.end (); 
-          ++pit)
+    CPlugin * pPlugin = NULL;
+    if (!trigger_it->sPluginID.empty ())
       {
-      m_CurrentPlugin = *pit;
+      pPlugin = GetPluginInstance (trigger_it->sPluginID.c_str (),
+                                   trigger_it->iPluginInstanceNumber);
+      if (!pPlugin || !pPlugin->m_bEnabled)
+        continue;
+      }
 
-      if (m_CurrentPlugin->m_bEnabled)
-        for (iItem = 0; !bFoundIt && iItem < GetTriggerArray ().GetSize (); iItem++)
-          if (GetTriggerArray () [iItem] == trigger_item)
-            {
-            bFoundIt = true;
-            // execute trigger script
-            ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
-            }
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
+    trigger_item = NULL;
+    if (!GetTriggerMap ().Lookup (trigger_it->sItemKey.c_str (), trigger_item) ||
+        trigger_item->nCreationNumber != trigger_it->iCreationNumber)
+      continue;
 
-      } // end of doing each plugin
-
+    ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
     }  // end of doing each trigger that had a script
 
-  m_bInSendToScript = true;
+  }
 
-// now that we have run all scripts etc., delete one-shot triggers      
+// now that we have run all scripts etc., delete one-shot triggers
 
-  int iDeletedCount = 0;
   int iDeletedNonTemporaryCount = 0;
-  set<CPlugin *> pluginsWithDeletions;
+  typedef map<string, CTrigger *> TriggerDeletionMap;
+  map<CPlugin *, TriggerDeletionMap> triggerDeletions;
 
   for (OneShotItemMap::const_iterator one_shot_it = mapOneShotItems.begin ();
        one_shot_it != mapOneShotItems.end ();
@@ -949,9 +956,20 @@ assemble the full text of the original line.
     CTrigger * trigger_item;
     CString strTriggerName = one_shot_it->sItemKey.c_str ();
 
-    m_CurrentPlugin = one_shot_it->pWhichPlugin;   // set back to correct plugin
+    CPlugin * pPlugin = NULL;
+    if (!one_shot_it->sPluginID.empty ())
+      {
+      pPlugin = GetPluginInstance (one_shot_it->sPluginID.c_str (),
+                                   one_shot_it->iPluginInstanceNumber);
+      if (!pPlugin)
+        continue;
+      }
+
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
 
     if (!GetTriggerMap ().Lookup (strTriggerName, trigger_item))
+      continue;
+    if (trigger_item->nCreationNumber != one_shot_it->iCreationNumber)
       continue;
 
     // can't if executing a script
@@ -961,34 +979,94 @@ assemble the full text of the original line.
     if (!m_CurrentPlugin && !trigger_item->bTemporary)
       iDeletedNonTemporaryCount++;
 
-    iDeletedCount++;
-
-    // the trigger seems to exist - delete its pointer
-    delete trigger_item;
-
-    // now delete its entry
-    GetTriggerMap ().RemoveKey (strTriggerName);
-
-    pluginsWithDeletions.insert (m_CurrentPlugin);
+    triggerDeletions [pPlugin] [one_shot_it->sItemKey] = trigger_item;
 
    }  // end of deleting one-shot items
 
-   if (iDeletedCount > 0)
-     {
-     // make sure we sort the correct plugin(s)
-     for ( set<CPlugin *>::iterator i = pluginsWithDeletions.begin (); i != pluginsWithDeletions.end (); i++)
-       {
-       m_CurrentPlugin = *i;
-       SortTriggers ();
-       }
+  struct CPreparedTriggerDeletion
+    {
+    CPreparedTriggerDeletion () : iOldArraySize (0), bArrayPrepared (false) { }
+    set<CTrigger *> triggersToDelete;
+    vector<CTrigger *> newTriggerArray;
+    CTriggerRevMap newTriggerRevMap;
+    int iOldArraySize;
+    bool bArrayPrepared;
+    };
+  map<CPlugin *, CPreparedTriggerDeletion> preparedTriggerDeletions;
 
-     if (iDeletedNonTemporaryCount > 0) // plugin mods don't really count
-       SetModifiedFlag (TRUE);   // document has changed
-     }
+  for (map<CPlugin *, TriggerDeletionMap>::iterator plugin_it =
+         triggerDeletions.begin ();
+       plugin_it != triggerDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    CPreparedTriggerDeletion & prepared =
+      preparedTriggerDeletions [plugin_it->first];
+    for (TriggerDeletionMap::const_iterator trigger_it = plugin_it->second.begin ();
+         trigger_it != plugin_it->second.end (); ++trigger_it)
+      prepared.triggersToDelete.insert (trigger_it->second);
+    prepared.iOldArraySize = GetTriggerArray ().GetSize ();
+    BuildTriggerIndexes (prepared.newTriggerArray,
+                         prepared.newTriggerRevMap,
+                         &prepared.triggersToDelete);
+    }
 
-// go back to current plugin
+  try
+    {
+    for (map<CPlugin *, CPreparedTriggerDeletion>::iterator plugin_it =
+           preparedTriggerDeletions.begin ();
+         plugin_it != preparedTriggerDeletions.end (); ++plugin_it)
+      {
+      CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+      CPreparedTriggerDeletion & prepared = plugin_it->second;
+      const int iNewSize =
+        static_cast<int> (prepared.newTriggerArray.size ());
+      GetTriggerArray ().SetSize (
+        prepared.iOldArraySize > iNewSize ?
+          prepared.iOldArraySize : iNewSize);
+      prepared.bArrayPrepared = true;
+      }
+    }
+  catch (...)
+    {
+    for (map<CPlugin *, CPreparedTriggerDeletion>::iterator plugin_it =
+           preparedTriggerDeletions.begin ();
+         plugin_it != preparedTriggerDeletions.end (); ++plugin_it)
+      if (plugin_it->second.bArrayPrepared)
+        {
+        CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+        GetTriggerArray ().SetSize (plugin_it->second.iOldArraySize);
+        }
+    throw;
+    }
 
-  m_CurrentPlugin = pSavedPlugin;
+  for (map<CPlugin *, CPreparedTriggerDeletion>::iterator plugin_it =
+         preparedTriggerDeletions.begin ();
+       plugin_it != preparedTriggerDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    CPreparedTriggerDeletion & prepared = plugin_it->second;
+    GetTriggerArray ().SetSize (prepared.newTriggerArray.size ());
+    for (size_t i = 0; i < prepared.newTriggerArray.size (); i++)
+      GetTriggerArray ().SetAt (i, prepared.newTriggerArray [i]);
+    GetTriggerRevMap ().swap (prepared.newTriggerRevMap);
+    }
+
+  for (map<CPlugin *, TriggerDeletionMap>::iterator plugin_it =
+         triggerDeletions.begin ();
+       plugin_it != triggerDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    for (TriggerDeletionMap::const_iterator trigger_it = plugin_it->second.begin ();
+         trigger_it != plugin_it->second.end ();
+         ++trigger_it)
+      {
+      VERIFY (GetTriggerMap ().RemoveKey (trigger_it->first.c_str ()));
+      RetireTrigger (trigger_it->second);
+      }
+    }
+
+  if (iDeletedNonTemporaryCount > 0)
+    SetModifiedFlag (TRUE);
 
   // check memory still OK
 //  _ASSERTE( _CrtCheckMemory( ) );
@@ -1005,7 +1083,7 @@ void CMUSHclientDoc::ProcessOneTriggerSequence (CString & strCurrentLine,
                                           bool & bNoLog,
                                           bool & bNoOutput,
                                           bool & bChangedColour,
-                                          CTriggerList & triggerList,
+                                          OneShotItemMap & triggerList,
                                           CString & strExtraOutput,
                                           ScriptItemMap & mapDeferredScripts,
                                           OneShotItemMap & mapOneShotItems)
@@ -1018,13 +1096,34 @@ int iStartCol,
     iEndCol;
 POSITION pos;
 
-  for (iItem = 0; iItem < GetTriggerArray ().GetSize (); iItem++)
+  OneShotItemMap triggersToEvaluate;
+  for (int iTrigger = 0; iTrigger < GetTriggerArray ().GetSize (); iTrigger++)
+    triggersToEvaluate.push_back
+      (OneShotItem (m_CurrentPlugin,
+                    (const char *) GetTriggerArray () [iTrigger]->strInternalName,
+                    GetTriggerArray () [iTrigger]->nCreationNumber));
+
+  for (OneShotItemMap::const_iterator trigger_it = triggersToEvaluate.begin ();
+       trigger_it != triggersToEvaluate.end ();
+       ++trigger_it)
     {
-    trigger_item = EvaluateTrigger (strCurrentLine, 
+    trigger_item = NULL;
+    if (!GetTriggerMap ().Lookup (trigger_it->sItemKey.c_str (), trigger_item) ||
+        trigger_item->nCreationNumber != trigger_it->iCreationNumber)
+      continue;
+
+    for (iItem = 0; iItem < GetTriggerArray ().GetSize (); iItem++)
+      if (GetTriggerArray () [iItem] == trigger_item)
+        break;
+    if (iItem >= GetTriggerArray ().GetSize ())
+      continue;
+
+    trigger_item = EvaluateTrigger (strCurrentLine,
                                         strResponse,
                                         iItem,
                                         iStartCol,
-                                        iEndCol);
+                                        iEndCol,
+                                        trigger_item);
     if (trigger_item)
       {  
 
@@ -1099,6 +1198,9 @@ POSITION pos;
 
         } // end of some matching wanted
 
+      CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
+      CTriggerExecutionGuard executingGuard (this, trigger_item);
+      __int64 iOutputGeneration = m_iOutputGeneration;
 
     // copy the wildcard contents to the clipboard, if required
 
@@ -1144,8 +1246,9 @@ POSITION pos;
 
       if (trigger_item->bOneShot)
         mapOneShotItems.push_back (
-            OneShotItem (m_CurrentPlugin, 
-                        (const char *) trigger_item->strInternalName));
+            OneShotItem (m_CurrentPlugin,
+                        (const char *) trigger_item->strInternalName,
+                        trigger_item->nCreationNumber));
 
 
       trigger_item->nMatched++;   // count trigger matches
@@ -1163,8 +1266,7 @@ POSITION pos;
         }
       else
         {
-        int iSavedDepth = m_iExecutionDepth;
-        m_iExecutionDepth = 0;    // no execution depth yet
+        CValueStateGuard<int> executionDepthGuard (m_iExecutionDepth, 0);
 
   #ifdef PANE
         /*
@@ -1175,8 +1277,8 @@ POSITION pos;
         */
   #endif  // PANE
           {
-          trigger_item->bExecutingScript = true;     // cannot be deleted now
-          m_iCurrentActionSource = eTriggerFired;
+          CValueStateGuard<unsigned short> actionSourceGuard
+            (m_iCurrentActionSource, eTriggerFired);
           SendTo (trigger_item->iSendTo, 
                   strResponse, 
                   trigger_item->bOmitFromOutput,
@@ -1185,15 +1287,12 @@ POSITION pos;
                   trigger_item->strVariable,
                   strExtraOutput
                   );
-          m_iCurrentActionSource = eUnknownActionSource;
-          trigger_item->bExecutingScript = false;     // can be deleted now
           }
-      
-        m_iExecutionDepth =  iSavedDepth;
         }    // not doing after the omitting
 
       // if colouring wanted, work our way through all lines to do it
-      if ((trigger_item->colour != SAMECOLOUR || 
+      if (iOutputGeneration == m_iOutputGeneration &&
+          (trigger_item->colour != SAMECOLOUR ||
           trigger_item->iStyle != NORMAL) &&
           !trigger_item->bMultiLine)  // multi-line won't change colours
         {
@@ -1257,18 +1356,23 @@ POSITION pos;
                else
                  {
                  int iDiff = iCol - ThisCol;  // amount we overshot
-                 CStyle * pNewStyle = NEWSTYLE;  // make another
+                 std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);  // make another
                  pNewStyle->iLength = iDiff;
                  pNewStyle->iFlags = pStyle->iFlags & STYLE_BITS;
                  pNewStyle->iForeColour = pStyle->iForeColour;
                  pNewStyle->iBackColour = pStyle->iBackColour ;
                  pNewStyle->pAction = pStyle->pAction;
+                 pNewStyle->nRangeCreationNumber =
+                   pStyle->nRangeCreationNumber;
+                 pNewStyle->nOutputAppendCreationNumber =
+                   pStyle->nOutputAppendCreationNumber;
                  if (pNewStyle->pAction)
                    pNewStyle->pAction->AddRef ();
 
-                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  // add to list
-                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle); // insert
+                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle.get ()); // insert
+                 pNewStyle.release ();
+                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  }
                } // end of shared style
 
@@ -1283,17 +1387,22 @@ POSITION pos;
                if (pStyle->iLength > iCount)
                  {
                  int iDiff = pStyle->iLength - iCount;  // amount we overshot
-                 CStyle * pNewStyle = NEWSTYLE;  // make another
+                 std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);  // make another
                  pNewStyle->iLength = iDiff;
                  pNewStyle->iFlags = pStyle->iFlags & STYLE_BITS;
                  pNewStyle->iForeColour = pStyle->iForeColour;
                  pNewStyle->iBackColour = pStyle->iBackColour ;
                  pNewStyle->pAction = pStyle->pAction;
+                 pNewStyle->nRangeCreationNumber =
+                   pStyle->nRangeCreationNumber;
+                 pNewStyle->nOutputAppendCreationNumber =
+                   pStyle->nOutputAppendCreationNumber;
                  if (pNewStyle->pAction)
                    pNewStyle->pAction->AddRef ();
-                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  // add to list
-                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle); // insert
+                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle.get ()); // insert
+                 pNewStyle.release ();
+                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  }
 
                // colour change wanted? switch to custom colour specified
@@ -1384,21 +1493,27 @@ POSITION pos;
                    // if the change starts past the first column of the style we need to split into before and after
                    if (iStartCol > iStyleCol)
                      {
-                     CPaneStyle * pNewStyle = new CPaneStyle (*pStyle);   // make a new style
-                     pNewStyle->m_sText = sText.substr (0, iStartCol - iStyleCol);    // put front part in new style run
-                     pStyle->m_sText = pStyle->m_sText.substr (iStartCol - iStyleCol);  // trim front of original style run
-                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle);   // add new style run before this one
+                     string sBefore = sText.substr (0, iStartCol - iStyleCol);
+                     string sAfter = pStyle->m_sText.substr (iStartCol - iStyleCol);
+                     std::unique_ptr<CPaneStyle> pNewStyle (new CPaneStyle (*pStyle));
+                     pNewStyle->m_sText.swap (sBefore);    // put front part in new style run
+                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle.get ());   // add new style run before this one
+                     pNewStyle.release ();
                      style_it++;  // advance past newly inserted item
+                     pStyle->m_sText.swap (sAfter);  // trim front of original style run
                      }  // end if we need to split before the matching text
 
                    // if the change ends before the last column of the style we need to split into before and after
                    if (iEndCol < (iStyleEndCol - 1))
                      {
-                     CPaneStyle * pNewStyle = new CPaneStyle (*pStyle);  // make a new style
-                     pNewStyle->m_sText = sText.substr (iStyleLength - (iStyleEndCol - iEndCol));    // put back part in new style run
-                     pStyle->m_sText = pStyle->m_sText.substr (0, pStyle->m_sText.size () - (iStyleEndCol - iEndCol)); // trim back part
+                     string sAfter = sText.substr (iStyleLength - (iStyleEndCol - iEndCol));
+                     string sBefore = pStyle->m_sText.substr (0, pStyle->m_sText.size () - (iStyleEndCol - iEndCol));
+                     std::unique_ptr<CPaneStyle> pNewStyle (new CPaneStyle (*pStyle));
+                     pNewStyle->m_sText.swap (sAfter);    // put back part in new style run
                      style_it++;  // add new style run after this one
-                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle);  // insert it
+                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle.get ());  // insert it
+                     pNewStyle.release ();
+                     pStyle->m_sText.swap (sBefore); // trim back part
                      }  // end if we need to split after the matching text
 
                    // Right, we have now split up the style if necessary into another two pieces
@@ -1457,7 +1572,10 @@ POSITION pos;
         bNoOutput = true;
 
       if (!trigger_item->strProcedure.IsEmpty ())        // if we have a script routine
-         triggerList.AddTail (trigger_item);
+         triggerList.push_back
+           (OneShotItem (m_CurrentPlugin,
+                         (const char *) trigger_item->strInternalName,
+                         trigger_item->nCreationNumber));
 
       if (!trigger_item->bKeepEvaluating) // exit loop if no more evaluation wanted
         break;

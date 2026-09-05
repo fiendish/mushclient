@@ -11,6 +11,7 @@
 
 #include "ActivityDoc.h"
 #include "ActivityView.h"
+#include "TextDocument.h"
 #include "childfrm.h"
 
 #include "winplace.h"
@@ -206,6 +207,11 @@ BEGIN_MESSAGE_MAP(CMainFrame, CMDIFrameWnd)
 	ON_WM_SYSCOMMAND()
 	//}}AFX_MSG_MAP
   ON_MESSAGE(MM_MCINOTIFY, OnMCINotify)
+  ON_MESSAGE(WM_USER_SCRIPT_FILE_CONTENTS_CHANGED, OnScriptFileContentsChanged)
+  ON_MESSAGE(WM_USER_FILE_CONTENTS_CHANGED, OnTextFileContentsChanged)
+  ON_MESSAGE(WM_USER_HOST_NAME_RESOLVED, OnHostNameResolved)
+  ON_MESSAGE(WM_USER_SHOW_TIPS, OnShowTips)
+  ON_MESSAGE(WM_USER_SSL_FALLBACK_PROMPT, OnSSLFallbackPrompt)
   ON_UPDATE_COMMAND_UI(ID_VIEW_TOOLBAR, CMDIFrameWnd::OnUpdateControlBarMenu)
   ON_UPDATE_COMMAND_UI(ID_VIEW_STATUS_BAR, CMDIFrameWnd::OnUpdateControlBarMenu)
   ON_UPDATE_COMMAND_UI(ID_VIEW_GAME_TOOLBAR, CMDIFrameWnd::OnUpdateControlBarMenu)
@@ -939,119 +945,260 @@ void CMainFrame::FixUpTitleBar (void)
 
   } // end of FixUpTitleBar
 
-// should get a WM_USER when a host name lookup completes
-
-BOOL CMainFrame::PreTranslateMessage(MSG* pMsg) 
+LRESULT CMainFrame::OnScriptFileContentsChanged(WPARAM wParam, LPARAM)
 {
+  // A window handler receives this message even from nested modal loops.
+  // OnIdle performs the reload after the current message stack unwinds.
+  CFileChangeNotification * pNotification =
+    (CFileChangeNotification *) wParam;
+  if (!pNotification)
+    return 0;
+
+  __int64 iDocumentNumber = pNotification->m_iDocumentNumber;
+  delete pNotification;
+
+  POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CMUSHclientDoc* pDoc =
+      (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+      {
+      pDoc->m_bScriptFileChangedPending = true;
+      break;
+      }
+    }
+
+  return 0;
+}
+
+LRESULT CMainFrame::OnTextFileContentsChanged(WPARAM wParam, LPARAM)
+{
+  CFileChangeNotification * pNotification =
+    (CFileChangeNotification *) wParam;
+  if (!pNotification)
+    return 0;
+
+  __int64 iDocumentNumber = pNotification->m_iDocumentNumber;
+  delete pNotification;
+
+  POSITION pos = App.m_pNormalDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CTextDocument* pDoc =
+      (CTextDocument*) App.m_pNormalDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_iTextDocumentNumber == iDocumentNumber)
+      {
+      pDoc->m_bFileChangedPending = true;
+      break;
+      }
+    }
+
+  return 0;
+}
+
+static void DeferMainFrameMessage(UINT message, WPARAM wParam, LPARAM lParam)
+{
+  MSG msg;
+  ZeroMemory (&msg, sizeof msg);
+  msg.hwnd = Frame.GetSafeHwnd ();
+  msg.message = message;
+  msg.wParam = wParam;
+  msg.lParam = lParam;
+  App.DeferMessageUntilIdle (msg);
+}
+
+LRESULT CMainFrame::OnHostNameResolved(WPARAM wParam, LPARAM lParam)
+{
+  if (wParam == 0)
+    return 0;
+
+  POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_hNameLookup == (HANDLE) wParam)
+      {
+      MSG msg;
+      ZeroMemory (&msg, sizeof msg);
+      msg.hwnd = Frame.GetSafeHwnd ();
+      msg.message = WM_USER_HOST_NAME_RESOLVED;
+      msg.lParam = lParam;
+      App.DeferMessageUntilIdle
+        (msg, pDoc->m_iUniqueDocumentNumber, (HANDLE) wParam,
+         pDoc->m_iNameLookupGeneration);
+      return 0;
+      }
+
+    for (POSITION chatpos = pDoc->m_ChatList.GetHeadPosition (); chatpos; )
+      {
+      CChatSocket * pSocket = pDoc->m_ChatList.GetNext (chatpos);
+      if (pSocket->m_hNameLookup == (HANDLE) wParam)
+        {
+        MSG msg;
+        ZeroMemory (&msg, sizeof msg);
+        msg.hwnd = Frame.GetSafeHwnd ();
+        msg.message = WM_USER_HOST_NAME_RESOLVED;
+        msg.lParam = lParam;
+        App.DeferMessageUntilIdle
+          (msg, pDoc->m_iUniqueDocumentNumber, (HANDLE) wParam,
+           pSocket->m_iNameLookupGeneration, pSocket->m_iChatID);
+        return 0;
+        }
+      }
+    }
+
+  return 0;
+}
+
+LRESULT CMainFrame::OnShowTips(WPARAM wParam, LPARAM lParam)
+{
+  DeferMainFrameMessage (WM_USER_SHOW_TIPS, wParam, lParam);
+  return 0;
+}
+
+LRESULT CMainFrame::OnSSLFallbackPrompt(WPARAM wParam, LPARAM lParam)
+{
+  CTLSFallbackNotification * pNotification =
+    (CTLSFallbackNotification *) wParam;
+  if (!pNotification)
+    return 0;
+
+  MSG msg;
+  ZeroMemory (&msg, sizeof msg);
+  msg.hwnd = Frame.GetSafeHwnd ();
+  msg.message = WM_USER_SSL_FALLBACK_PROMPT;
+  App.DeferMessageUntilIdle
+    (msg, pNotification->m_iDocumentNumber, NULL,
+     pNotification->m_iConnectionAttemptNumber);
+  delete pNotification;
+  return 0;
+}
+
+void CMainFrame::ProcessDeferredMessage(const CDeferredMessage & deferred)
+{
+  const MSG & msg = deferred.m_msg;
+
+  if (msg.message == WM_COMMAND)
+    {
+    // Keep the normal active-window, frame, and application command route.
+    SendMessage (WM_COMMAND, msg.wParam, msg.lParam);
+    return;
+    }
 
 // ******************* DOMAIN NAME resolution ********************
 
-  if (pMsg->message == WM_USER_HOST_NAME_RESOLVED && pMsg->wParam != 0)
+  if (msg.message == WM_USER_HOST_NAME_RESOLVED)
     {
 
-// find which world this message was for
-
- 	  POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition();
+    POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition();
     CMUSHclientDoc* pDoc = NULL;
 
-	  while (pos)
-	  {
-       pDoc = (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
+    while (pos)
+      {
+      pDoc = (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
 
-      if (pDoc->m_hNameLookup == (char *) pMsg->wParam)
-        break;
-
-      for (POSITION chatpos = pDoc->m_ChatList.GetHeadPosition (); chatpos; )
-        {
-        CChatSocket * pSocket = pDoc->m_ChatList.GetNext (chatpos);
-        if (pSocket->m_hNameLookup == (char *) pMsg->wParam)
-          {
-          pSocket->HostNameResolved (pMsg->wParam, pMsg->lParam);
-          return TRUE;    // message handled
-          }   // end of found a chat socket that was resolving a host name
-        }  // end of checking chat sockets
-
-      pDoc = NULL;
-
-     }  // end of checking documents
-
-    if (pDoc)
-      pDoc->HostNameResolved (pMsg->wParam, pMsg->lParam);
-
-    return TRUE;    // message was handled
-    }
-
-// ******************* SCRIPT FILE contents have changed ********************
-
-  if (pMsg->message == WM_USER_SCRIPT_FILE_CONTENTS_CHANGED && pMsg->wParam != 0)
-    {
-
-// find which world this message was for
-
- 	  POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition();
-    CMUSHclientDoc* pDoc = NULL;
-
-	  while (pos)
-	  {
-       pDoc = (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
-
-      if (pDoc == (CMUSHclientDoc *) pMsg->wParam)
+      if (pDoc->m_iUniqueDocumentNumber == deferred.m_iDocumentNumber)
         break;
       else
         pDoc = NULL;
-
-     }
+      }
 
     if (pDoc)
-      pDoc->OnScriptFileChanged ();
+      {
+      HANDLE hLookup = deferred.m_hLookup;
+      if (deferred.m_iChatID != 0)
+        {
+        for (POSITION chatpos = pDoc->m_ChatList.GetHeadPosition (); chatpos; )
+          {
+          CChatSocket * pSocket = pDoc->m_ChatList.GetNext (chatpos);
+          if (pSocket->m_iChatID == deferred.m_iChatID &&
+              pSocket->m_hNameLookup == hLookup &&
+              pSocket->m_iNameLookupGeneration == deferred.m_iGeneration)
+            {
+            pSocket->HostNameResolved ((WPARAM) hLookup, msg.lParam);
+            break;
+            }
+          }
+        }
+      else if (pDoc->m_hNameLookup == hLookup &&
+               pDoc->m_iNameLookupGeneration == deferred.m_iGeneration)
+        pDoc->HostNameResolved ((WPARAM) hLookup, msg.lParam);
+      }
 
-    return TRUE;    // message was handled
+    return;
     }
 
+// ******************* Tips dialog after unregistered delay ********************
 
- // ******************* Tips dialog after unregistered delay ********************
-
- if (pMsg->message == WM_USER_SHOW_TIPS)
-   {
-   OnHelpTipoftheday ();
-   return TRUE;   // message was handled
-   }
+  if (msg.message == WM_USER_SHOW_TIPS)
+    {
+    OnHelpTipoftheday ();
+    return;
+    }
 
 // ******************* TLS fallback prompt (deferred from socket callback) ********************
 
- if (pMsg->message == WM_USER_SSL_FALLBACK_PROMPT && pMsg->wParam != 0)
-   {
-   // find which world this message was for (verify pointer is still valid)
-   POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition();
-   CMUSHclientDoc* pDoc = NULL;
+  if (msg.message == WM_USER_SSL_FALLBACK_PROMPT)
+    {
+    POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition();
+    CMUSHclientDoc* pDoc = NULL;
 
-   while (pos)
-     {
-     pDoc = (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
-     if (pDoc == (CMUSHclientDoc *) pMsg->wParam)
-       break;
-     else
-       pDoc = NULL;
-     }
+    while (pos)
+      {
+      pDoc = (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
+      if (pDoc->m_iUniqueDocumentNumber == deferred.m_iDocumentNumber)
+        break;
+      else
+        pDoc = NULL;
+      }
 
-   if (pDoc)
-     {
-     CString strPrompt;
-     strPrompt.Format ("TLS connection to \"%s\" failed.\n\n%s\n\n"
-                       "Connect without encryption?",
-                       (LPCTSTR) pDoc->m_mush_name,
-                       (LPCTSTR) pDoc->m_strSSLLastError);
+    if (pDoc &&
+        pDoc->m_iConnectionAttemptNumber == deferred.m_iGeneration)
+      {
+      CString strPrompt;
+      strPrompt.Format ("TLS connection to \"%s\" failed.\n\n%s\n\n"
+                        "Connect without encryption?",
+                        (LPCTSTR) pDoc->m_mush_name,
+                        (LPCTSTR) pDoc->m_strSSLLastError);
 
-     if (UMessageBox (strPrompt, MB_YESNO | MB_ICONQUESTION) == IDYES)
-       {
-       pDoc->m_bUseSSL = false;
-       pDoc->ConnectSocket ();
-       }
-     }
+      if (UMessageBox (strPrompt, MB_YESNO | MB_ICONQUESTION) == IDYES)
+        {
+        pDoc->m_bUseSSL = false;
+        pDoc->ConnectSocket ();
+        }
+      }
+    }
+}
 
-   return TRUE;   // message was handled
-   }
+// should get a WM_USER when a host name lookup completes
 
+BOOL CMainFrame::PreTranslateMessage(MSG* pMsg)
+{
+  if (pMsg->message == WM_USER_HOST_NAME_RESOLVED)
+    {
+    OnHostNameResolved (pMsg->wParam, pMsg->lParam);
+    return TRUE;
+    }
+
+  if (pMsg->message == WM_USER_SSL_FALLBACK_PROMPT)
+    {
+    OnSSLFallbackPrompt (pMsg->wParam, pMsg->lParam);
+    return TRUE;
+    }
+
+  if (pMsg->message == WM_USER_SHOW_TIPS)
+    {
+    App.DeferMessageUntilIdle (*pMsg);
+    return TRUE;
+    }
 
  return CMDIFrameWnd::PreTranslateMessage(pMsg);
 
@@ -1752,7 +1899,7 @@ void CMainFrame::DoFileOpen (void)
                  NULL);        // parent window
 
 	dlgFile.m_ofn.lpstrTitle = title;
-	dlgFile.m_ofn.lpstrFile = fileName.GetBuffer(_MAX_PATH);
+	SetFileDialogFileName (dlgFile, fileName, strSuggestedName);
 
   // use default world file directory
   dlgFile.m_ofn.lpstrInitialDir = Make_Absolute_Path (App.m_strDefaultWorldFileDirectory);

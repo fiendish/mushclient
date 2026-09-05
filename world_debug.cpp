@@ -1773,8 +1773,7 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
 
   CString strPluginID;
 
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;
+  CPluginContextGuard pluginContextGuard (this, NULL);
 
   // if the argument starts with _<plugin_id>_
   // eg. _584f2e481b30ea09e4a32537_triggerlist
@@ -1794,7 +1793,6 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
     if (!m_CurrentPlugin)
       {
       Note (TFormat ("Plugin ID %s does not exist.", (LPCTSTR) strPluginID.Mid (1, PLUGIN_UNIQUE_ID_LENGTH)));
-      m_CurrentPlugin = pSavedPlugin;
       return;
       }    // if not found
 
@@ -1845,7 +1843,7 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
       // get unlabelled trigger's internal name
       const char * pLabel = pTrigger->strLabel;
       if (pLabel [0] == 0)
-         pLabel = GetTriggerRevMap () [pTrigger].c_str ();
+         pLabel = pTrigger->strInternalName;
 
 
       const char * pType = "Normal";
@@ -1906,7 +1904,7 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
       // get unlabelled alias's internal name
       const char * pLabel = pAlias->strLabel;
       if (pLabel [0] == 0)
-         pLabel = GetAliasRevMap () [pAlias].c_str ();
+         pLabel = pAlias->strInternalName;
 
 
       const char * pType = "Normal";
@@ -1989,9 +1987,22 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
       CTimer * pTimer = it->second;
 
       // get unlabelled timer's internal name
+      CString strTimerName;
       const char * pLabel = pTimer->strLabel;
       if (pLabel [0] == 0)
-         pLabel = GetTimerRevMap () [pTimer].c_str ();
+        {
+        CTimer * pMappedTimer;
+        for (POSITION timerpos = GetTimerMap ().GetStartPosition ();
+             timerpos; )
+          {
+          GetTimerMap ().GetNextAssoc (
+            timerpos, strTimerName, pMappedTimer);
+          if (pMappedTimer == pTimer)
+            break;
+          strTimerName.Empty ();
+          }
+        pLabel = strTimerName;
+        }
 
 
       CString strColour = enabledFore;
@@ -2519,9 +2530,6 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
 
   else
     Note (TFormat ("DebugHelper: %s, %s", (LPCTSTR) strAction,(LPCTSTR) strArgument));
-
-  // put current plugin back
-  m_CurrentPlugin = pSavedPlugin;
 
   } // end of CMUSHclientDoc::DebugHelper
 

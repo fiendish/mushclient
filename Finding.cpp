@@ -85,20 +85,46 @@ CFindDlg dlg (FindInfo.m_strFindStringList);
     if (dlg.DoModal () != IDOK)
       return false;
 
-    FindInfo.m_bMatchCase    = dlg.m_bMatchCase;
-    FindInfo.m_bForwards     = dlg.m_bForwards;
-    FindInfo.m_bRegexp       = dlg.m_bRegexp;
+    // Validate and compile before changing the live find state.
+    std::unique_ptr<t_regexp> newRegexp;
+    if (dlg.m_bRegexp)
+      {
+      CString strRegexp = dlg.m_strFindText;
+      if (strRegexp.IsEmpty () && !FindInfo.m_strFindStringList.IsEmpty ())
+        strRegexp = FindInfo.m_strFindStringList.GetHead ();
+      newRegexp.reset (regcomp (strRegexp,
+        (dlg.m_bMatchCase ? 0 : PCRE_CASELESS) | (FindInfo.m_bUTF8 ? PCRE_UTF8 : 0)));
+      }
 
-    // re-initiate the search - this will set up the POSITION parameter, if it wants to
-    // we need to do it here to get the current line number for subsequent calculations
+    CFindInfo stagedFindInfo;
+    stagedFindInfo.m_bMatchCase = dlg.m_bMatchCase;
+    stagedFindInfo.m_bForwards = dlg.m_bForwards;
+    stagedFindInfo.m_bRegexp = dlg.m_bRegexp;
+    stagedFindInfo.m_bAgain = FindInfo.m_bAgain;
+    stagedFindInfo.m_bUTF8 = FindInfo.m_bUTF8;
+    stagedFindInfo.m_iStartColumn = -1;
+    stagedFindInfo.m_iEndColumn = FindInfo.m_iEndColumn;
+    stagedFindInfo.m_nTotalLines = FindInfo.m_nTotalLines;
+    stagedFindInfo.m_nCurrentLine = FindInfo.m_nCurrentLine;
+    stagedFindInfo.m_pFindPosition = FindInfo.m_pFindPosition;
+    stagedFindInfo.m_iControlColumns = FindInfo.m_iControlColumns;
 
-    (*pInitiateSearch) (pObject, FindInfo);
+    // Prepare the new search position without changing the live find state.
+    (*pInitiateSearch) (pObject, stagedFindInfo);
 
     // add find string to head of list, provided it is not empty, and not the same as before
     if (!dlg.m_strFindText.IsEmpty () &&
         (FindInfo.m_strFindStringList.IsEmpty () ||
         FindInfo.m_strFindStringList.GetHead () != dlg.m_strFindText))
       FindInfo.m_strFindStringList.AddHead (dlg.m_strFindText);
+
+    FindInfo.m_bMatchCase = stagedFindInfo.m_bMatchCase;
+    FindInfo.m_bForwards = stagedFindInfo.m_bForwards;
+    FindInfo.m_bRegexp = stagedFindInfo.m_bRegexp;
+    FindInfo.m_iStartColumn = stagedFindInfo.m_iStartColumn;
+    FindInfo.m_iEndColumn = stagedFindInfo.m_iEndColumn;
+    FindInfo.m_nTotalLines = stagedFindInfo.m_nTotalLines;
+    FindInfo.m_pFindPosition = stagedFindInfo.m_pFindPosition;
 
     if (FindInfo.m_bForwards)
        FindInfo.m_nCurrentLine = 0;
@@ -108,13 +134,8 @@ CFindDlg dlg (FindInfo.m_strFindStringList);
     FindInfo.m_bAgain = false;
     FindInfo.m_MatchesOnLine.clear ();
 
-    delete FindInfo.m_regexp;    // get rid of earlier regular expression
-    FindInfo.m_regexp = NULL;
-
-    // compile regular expression if needed
-    if (FindInfo.m_bRegexp )
-      FindInfo.m_regexp = regcomp (FindInfo.m_strFindStringList.GetHead (),
-      (FindInfo.m_bMatchCase ? 0 :  PCRE_CASELESS) | (FindInfo.m_bUTF8 ? PCRE_UTF8 : 0));
+    delete FindInfo.m_regexp;
+    FindInfo.m_regexp = newRegexp.release ();
 
     }   // end of not starting a new find
   else
@@ -166,20 +187,29 @@ CString strStatus = TFormat ("Finding: %s", (LPCTSTR) FindInfo.m_strFindStringLi
 
   if (nToGo > 500)
     {
-    FindInfo.m_pProgressDlg = new CProgressDlg;
-    FindInfo.m_pProgressDlg->Create ();
-    FindInfo.m_pProgressDlg->SetStatus (strStatus);
-    FindInfo.m_pProgressDlg->SetRange (0, FindInfo.m_nTotalLines);     
-    FindInfo.m_pProgressDlg->SetWindowText (Translate ("Finding..."));                              
+    try
+      {
+      std::unique_ptr<CProgressDlg> progressDlg (new CProgressDlg);
+      if (!progressDlg->Create ())
+        AfxThrowResourceException ();
+      progressDlg->SetStatus (strStatus);
+      progressDlg->SetRange (0, FindInfo.m_nTotalLines);
+      progressDlg->SetWindowText (Translate ("Finding..."));
+      FindInfo.m_pProgressDlg = progressDlg.release ();
+      }
+    catch (...)
+      {
+      Frame.SetStatusNormal ();
+      throw;
+      }
     }   // end of having enough lines to warrant a progress bar
-
-// if case-insensitive search wanted, force "text to find" to lower case
-
-  if (!FindInfo.m_bMatchCase)
-    strFindString.MakeLower ();
 
   try
     {
+    // if case-insensitive search wanted, force "text to find" to lower case
+    if (!FindInfo.m_bMatchCase)
+      strFindString.MakeLower ();
+
     int iMilestone = 0;
 
     while (true)     // until match
@@ -309,6 +339,11 @@ CString strStatus = TFormat ("Finding: %s", (LPCTSTR) FindInfo.m_strFindStringLi
       e->ReportError ();
       e->Delete ();
       return NotFound (FindInfo);
+      }
+    catch (...)
+      {
+      WrapUpFind (FindInfo);
+      throw;
       }
 
   } // end of FindRoutine

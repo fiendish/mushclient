@@ -233,10 +233,11 @@ void CScriptEngine::OpenLuaDelayed ()
   "Check function");
 
   // preliminary sand-box stuff
-  m_pDoc->m_iCurrentActionSource = eLuaSandbox;
+  {
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (m_pDoc->m_iCurrentActionSource, eLuaSandbox);
   ParseLua (App.m_strLuaScript, "Sandbox");
-
-  m_pDoc->m_iCurrentActionSource = eUnknownActionSource;
+  }
 
   lua_settop(L, 0);   // clear stack
 
@@ -261,6 +262,7 @@ void CScriptEngine::CloseLua ()
 // send some code to Lua to be parsed
 bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
   {
+  CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // safety check ;)
   if (!L)
@@ -470,6 +472,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
 
 
   {
+  CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // safety check ;)
   if (!L)
@@ -497,8 +500,10 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
     finish.QuadPart = 0;
     }
              
-  unsigned short iOldStyle = m_pDoc->m_iNoteStyle;
-  m_pDoc->m_iNoteStyle = NORMAL;    // back to default style
+  int error;
+  {
+  CValueStateGuard<unsigned short> noteStyleGuard
+    (m_pDoc->m_iNoteStyle, NORMAL);    // back to default style
 
   if (!GetNestedFunction (L, szProcedure, true))
     {
@@ -631,17 +636,16 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
 
     }   // end of having an optional style run thingo
 
-  if (iReason != eDontChangeAction)
-    m_pDoc->m_iCurrentActionSource = iReason;
+  {
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (m_pDoc->m_iCurrentActionSource,
+     iReason == eDontChangeAction ? m_pDoc->m_iCurrentActionSource : iReason);
 
-  int error = CallLuaWithTraceBack (L, paramCount, LUA_MULTRET);
-
-  if (iReason != eDontChangeAction)
-    m_pDoc->m_iCurrentActionSource = eUnknownActionSource;
+  error = CallLuaWithTraceBack (L, paramCount, LUA_MULTRET);
+  }
+  }
 
 // -----------------
-
-  m_pDoc->m_iNoteStyle = iOldStyle;
 
   if (error)
     {
@@ -691,6 +695,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
                                long & nInvocationCount,  // count of invocations
                                CString & result)         // where to put result
   {
+  CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // safety check ;)
   if (!L)
@@ -718,8 +723,10 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
     finish.QuadPart = 0;
     }
              
-  unsigned short iOldStyle = m_pDoc->m_iNoteStyle;
-  m_pDoc->m_iNoteStyle = NORMAL;    // back to default style
+  int error;
+  {
+  CValueStateGuard<unsigned short> noteStyleGuard
+    (m_pDoc->m_iNoteStyle, NORMAL);    // back to default style
 
   if (!GetNestedFunction (L, szProcedure, true))
     {
@@ -729,15 +736,14 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
 
   lua_pushlstring (L, strParam, strParam.GetLength ());    // the solitary argument
 
-  if (iReason != eDontChangeAction)
-    m_pDoc->m_iCurrentActionSource = iReason;
+  {
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (m_pDoc->m_iCurrentActionSource,
+     iReason == eDontChangeAction ? m_pDoc->m_iCurrentActionSource : iReason);
 
-  int error = CallLuaWithTraceBack (L, 1, LUA_MULTRET);
-
-  if (iReason != eDontChangeAction)
-    m_pDoc->m_iCurrentActionSource = eUnknownActionSource;
-
-  m_pDoc->m_iNoteStyle = iOldStyle;
+  error = CallLuaWithTraceBack (L, 1, LUA_MULTRET);
+  }
+  }
 
   if (error)
     {

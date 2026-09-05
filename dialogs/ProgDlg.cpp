@@ -2,6 +2,7 @@
 // CG: This file was added by the Progress Dialog component
 
 #include "stdafx.h"
+#include "..\MUSHclient.h"
 #include "..\resource.h"
 #include "ProgDlg.h"
 
@@ -145,15 +146,32 @@ void CProgressDlg::PumpMessages()
     ASSERT(m_hWnd!=NULL);
 
     MSG msg;
-    // Handle dialog messages
-    while(PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+    // Preserve a request to terminate the application.
+    if(::PeekMessage(&msg, NULL, WM_QUIT, WM_QUIT, PM_REMOVE))
     {
+      m_bCancel = TRUE;
+      ::PostQuitMessage((int) msg.wParam);
+      return;
+    }
+
+    // Process only this dialog and its child controls. Leave all other
+    // application messages queued until the owning operation returns.
+    while(::PeekMessage(&msg, m_hWnd, 0, 0, PM_REMOVE))
+    {
+      if(msg.message == WM_QUIT)
+      {
+        m_bCancel = TRUE;
+        ::PostQuitMessage((int) msg.wParam);
+        return;
+      }
+
       if(!IsDialogMessage(&msg))
       {
         TranslateMessage(&msg);
-        DispatchMessage(&msg);  
+        DispatchMessage(&msg);
       }
     }
+
 }
 
 BOOL CProgressDlg::CheckCancelButton()

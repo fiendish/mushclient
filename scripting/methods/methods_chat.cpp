@@ -96,7 +96,7 @@ long CMUSHclientDoc::ChatCallGeneral (LPCTSTR Server, long Port, const bool zCha
   if (Port == 0)
     Port = DEFAULT_CHAT_PORT;
 
-CChatSocket * pSocket = new CChatSocket (this);
+  std::unique_ptr<CChatSocket> pSocket (new CChatSocket (this));
 
   if (zChat)
     {
@@ -111,7 +111,6 @@ CChatSocket * pSocket = new CChatSocket (this);
                          FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE,
                          NULL))
 	  {
-		delete pSocket;
 		return eCannotCreateChatSocket;
 	  }     // end of can't create socket
 
@@ -127,28 +126,37 @@ CChatSocket * pSocket = new CChatSocket (this);
 
 	if (pSocket->m_ServerAddr.sin_addr.s_addr == INADDR_NONE)
 	 {
-    pSocket->m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
+    try
+      {
+      pSocket->m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
+      }
+    catch (...)
+      {
+      throw;
+      }
 
     if (!pSocket->m_pGetHostStruct)
       {
-  		delete pSocket;
       return eCannotLookupDomainName;
       }
 
     if (Frame.GetSafeHwnd ())   // forget it if we don't have a window yet
+      {
+      pSocket->m_iNameLookupGeneration++;
       pSocket->m_hNameLookup = WSAAsyncGetHostByName (Frame.GetSafeHwnd (),
                                                      WM_USER_HOST_NAME_RESOLVED,
                                                      Server,
                                                      pSocket->m_pGetHostStruct,
                                                      MAXGETHOSTSTRUCT);
+      }
 
    if (!pSocket->m_hNameLookup)
      {
-		  delete pSocket;
       return eCannotLookupDomainName;
      }
 
-    m_ChatList.AddTail (pSocket);
+    m_ChatList.AddTail (pSocket.get ());
+    pSocket.release ();
   	return eOK;
 
 	 }   // end of address not being an IP address
@@ -156,9 +164,10 @@ CChatSocket * pSocket = new CChatSocket (this);
 
 // the name was a dotted IP address - just make the connection
 
-  m_ChatList.AddTail (pSocket);
+  m_ChatList.AddTail (pSocket.get ());
+  CChatSocket * pPublishedSocket = pSocket.release ();
 
-  pSocket->MakeCall ();
+  pPublishedSocket->MakeCall ();
   return eOK;   // OK for now, eh?
 
   }   // end of CMUSHclientDoc::ChatCallGeneral
@@ -471,6 +480,9 @@ void CMUSHclientDoc::ChatNote(short NoteType, LPCTSTR Message)
 bool bOldNotesInRGB = m_bNotesInRGB;
 COLORREF iOldNoteColourFore = m_iNoteColourFore;
 COLORREF iOldNoteColourBack = m_iNoteColourBack;
+CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
 
   if (m_cChatForegroundColour == m_cChatBackgroundColour) 
     NoteColourRGB (RGB (255, 0, 0), RGB (0, 0, 0));
@@ -516,19 +528,33 @@ long CMUSHclientDoc::ChatAcceptCalls(short Port)
    m_bAcceptIncomingChatConnections = true;
    }
 
+ class CChatStatusGuard
+   {
+   public:
+     CChatStatusGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc), m_bKeepStatus (false) { }
+     ~CChatStatusGuard ()
+       {
+       if (!m_bKeepStatus)
+         m_pDoc->ShowStatusLine (true);
+       }
+     void KeepStatus () { m_bKeepStatus = true; }
+
+   private:
+     CMUSHclientDoc * m_pDoc;
+     bool m_bKeepStatus;
+   } statusGuard (this);
+
  Frame.SetStatusMessageNow (TFormat ("Accepting chat calls on port %d",
                               m_IncomingChatPort));
 
- m_pChatListenSocket = new CChatListenSocket (this);
+ std::unique_ptr<CChatListenSocket> pChatListenSocket (new CChatListenSocket (this));
 
-	if (!m_pChatListenSocket->Create (m_IncomingChatPort,
+	if (!pChatListenSocket->Create (m_IncomingChatPort,
                          SOCK_STREAM,
                          FD_ACCEPT | FD_CLOSE ,
                          NULL))
 	  {
     int nError = GetLastError ();
-		delete m_pChatListenSocket;
-    m_pChatListenSocket = NULL;
     ChatNote (eChatConnection,
               TFormat (
               "Cannot accept calls on port %i, code = %i (%s)", 
@@ -538,7 +564,20 @@ long CMUSHclientDoc::ChatAcceptCalls(short Port)
 		return eCannotCreateChatSocket;
 	  }     // end of can't create socket
 
-  m_pChatListenSocket->Listen ();
+  if (!pChatListenSocket->Listen ())
+    {
+    int nError = GetLastError ();
+    ChatNote (eChatConnection,
+              TFormat (
+              "Cannot listen for calls on port %i, code = %i (%s)",
+                    m_IncomingChatPort,
+                    nError,
+                    GetSocketError (nError)));
+    return eCannotCreateChatSocket;
+    }
+
+  m_pChatListenSocket = pChatListenSocket.release ();
+  statusGuard.KeepStatus ();
 
   ChatNote (eChatConnection,
             TFormat (
@@ -1180,11 +1219,14 @@ long CMUSHclientDoc::ChatSendFile(long ID, LPCTSTR FileName)
   pSocket->m_strOurFileName = strName;
 
          
+  CFile * pNewFile = NULL;
+  unsigned char * pNewFileBuffer = NULL;
+  long iNewFileSize = 0;
   try
     {
-    pSocket->m_pFile = new CFile (strName, CFile::modeRead | CFile::shareDenyWrite); // open file
-    pSocket->m_pFileBuffer = new unsigned char [pSocket->m_iFileBlockSize]; // get buffer    
-    pSocket->m_iFileSize = pSocket->m_pFile->GetLength ();
+    pNewFile = new CFile (strName, CFile::modeRead | CFile::shareDenyWrite); // open file
+    pNewFileBuffer = new unsigned char [pSocket->m_iFileBlockSize]; // get buffer
+    iNewFileSize = pNewFile->GetLength ();
     
     } // end of try block
 
@@ -1192,15 +1234,29 @@ long CMUSHclientDoc::ChatSendFile(long ID, LPCTSTR FileName)
     {
     ChatNote (eChatFile, TFormat ("File %s cannot be opened.", (LPCTSTR) strName));
     e->Delete ();
-    // reset the two fields we changed so far
+    // reset the fields changed before opening the file
     pSocket->m_strOurFileName.Empty ();
     pSocket->m_iFileSize = 0;
 
-    delete pSocket->m_pFile;    // in case it was set up
-    delete [] pSocket->m_pFileBuffer;  // and get rid of buffer
+    delete pNewFile;
+    delete [] pNewFileBuffer;
 
     return eFileNotFound;
     } // end of catching a file exception
+  catch (...)
+    {
+    delete pNewFile;
+    delete [] pNewFileBuffer;
+    pSocket->m_strOurFileName.Empty ();
+    pSocket->m_iFileSize = 0;
+    throw;
+    }
+
+  delete pSocket->m_pFile;
+  delete [] pSocket->m_pFileBuffer;
+  pSocket->m_pFile = pNewFile;
+  pSocket->m_pFileBuffer = pNewFileBuffer;
+  pSocket->m_iFileSize = iNewFileSize;
 
   // find last part of file name (ie. actual file name, not full path)
   pSocket->m_strSenderFileName = pSocket->m_pFile->GetFileName ();

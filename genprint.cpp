@@ -16,6 +16,68 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 #endif
   
 BOOL bAborted = FALSE;
+static CMyPrintingDialog * pActivePrintingDialog = NULL;
+
+class CPrintStartGuard
+  {
+  public:
+    CPrintStartGuard (t_print_control_block & pcb)
+      : m_pcb (pcb), m_bDocumentStarted (false),
+        m_bFrameDisabled (false), m_bCommitted (false) { }
+
+    ~CPrintStartGuard ()
+      {
+      if (m_bCommitted)
+        return;
+
+      if (m_bDocumentStarted && m_pcb.hDC)
+        AbortDoc (m_pcb.hDC);
+
+      if (m_pcb.hDC)
+        {
+        DeleteDC (m_pcb.hDC);
+        m_pcb.hDC = NULL;
+        }
+
+      for (int i = 0; i < 8; i++)
+        if (m_pcb.font [i])
+          {
+          DeleteObject (m_pcb.font [i]);
+          m_pcb.font [i] = NULL;
+          }
+
+      pActivePrintingDialog = NULL;
+      if (m_pcb.dlgPrintStatus)
+        {
+        if (m_pcb.dlgPrintStatus->GetSafeHwnd ())
+          m_pcb.dlgPrintStatus->DestroyWindow ();
+        delete m_pcb.dlgPrintStatus;
+        m_pcb.dlgPrintStatus = NULL;
+        }
+
+      delete m_pcb.pd;
+      m_pcb.pd = NULL;
+
+      if (m_bFrameDisabled)
+        {
+        Frame.EnableWindow (TRUE);
+        Frame.SetFocus ();
+        }
+
+      m_pcb.initialised = FALSE;
+      m_pcb.ok = FALSE;
+      }
+
+    void DocumentStarted () { m_bDocumentStarted = true; }
+    void FrameDisabled () { m_bFrameDisabled = true; }
+    void Commit () { m_bCommitted = true; }
+
+  private:
+    t_print_control_block & m_pcb;
+    bool m_bDocumentStarted;
+    bool m_bFrameDisabled;
+    bool m_bCommitted;
+  };
 
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++ */
 /*                                                     */
@@ -42,8 +104,10 @@ BOOL print_start_document (t_print_control_block & pcb,
 int err;
 DWORD flags;
 int i;
+CFont fontSpacing;
 
   ZeroMemory (&pcb, sizeof pcb);
+  CPrintStartGuard startGuard (pcb);
 
   pcb.hwnd = Frame.GetSafeHwnd ();
 
@@ -52,7 +116,8 @@ int i;
   pcb.lines_per_page   = lines_per_page;
   pcb.point_size       = point_size; 
   pcb.printer_spacing  = printer_spacing;
-  strcpy (pcb.printer_font, printer_font);
+  strncpy (pcb.printer_font, printer_font, sizeof pcb.printer_font - 1);
+  pcb.printer_font [sizeof pcb.printer_font - 1] = 0;
   
   //
   // Initialize a PRINTDLG struct and call PrintDlg to allow user to
@@ -75,10 +140,7 @@ int i;
   pcb.pd->m_pd.nMaxPage = pcb.pd->m_pd.nToPage 	 = last_page;
 
   if (AfxGetApp ()->DoPrintDialog (pcb.pd) != IDOK)
-   	{
-	  delete pcb.pd;
     return TRUE;
-	  }
 
   if (last_page == 0)
     {
@@ -88,8 +150,7 @@ int i;
 
 // set up the DOCINFO field
   
-  strcpy (pcb.docname, docname);
-  pcb.di.lpszDocName = pcb.docname;
+  pcb.di.lpszDocName = docname;
   pcb.di.lpszOutput = NULL;
   pcb.di.cbSize = sizeof (pcb.di);
 
@@ -101,31 +162,29 @@ int i;
 // set up an abort procedure so they can cancel the printing
 
   if (SetAbortProc (pcb.hDC, PrintingAbortProc) == SP_ERROR)
-    {
-  	delete pcb.pd;
     return TRUE;
-    };
 
 // start the document
 
   err = StartDoc  (pcb.hDC, &pcb.di);
 
-  if (err == SP_ERROR)
-    {
-  	delete pcb.pd;
-    pcb.pd = NULL;
+  if (err <= 0)
     return TRUE;
-    }
+  startGuard.DocumentStarted ();
 
 // disable main window while printing & init printing status dialog
 
   Frame.EnableWindow (FALSE);
+  startGuard.FrameDisabled ();
 
 // set up a progress dialog
 
   pcb.dlgPrintStatus = new CMyPrintingDialog (&Frame);
+  if (!pcb.dlgPrintStatus->GetSafeHwnd ())
+    AfxThrowResourceException ();
+  pActivePrintingDialog = pcb.dlgPrintStatus;
 
-  pcb.dlgPrintStatus->SetDlgItemText(AFX_IDC_PRINT_DOCNAME, pcb.docname);
+  pcb.dlgPrintStatus->SetDlgItemText(AFX_IDC_PRINT_DOCNAME, docname);
 
   pcb.dlgPrintStatus->SetDlgItemText(AFX_IDC_PRINT_PRINTERNAME, pcb.pd->GetDeviceName());
 
@@ -172,6 +231,7 @@ double top = pcb.top_margin / 25.4 * pcb.logpelsY;
 double height = pcb.point_size / 72.0 * double (pcb.logpelsY);
 
 LOGFONT lf;
+  ZeroMemory (&lf, sizeof lf);
                                                                         
   lf.lfHeight         =  (long) height;	// logical height of font    
   lf.lfWidth          =  0;	// logical average character width         
@@ -186,7 +246,8 @@ LOGFONT lf;
   lf.lfClipPrecision  =  CLIP_DEFAULT_PRECIS;	// clipping precision    
   lf.lfQuality        =  DEFAULT_QUALITY;	// output quality            
   lf.lfPitchAndFamily =  MUSHCLIENT_FONT_FAMILY;	// pitch and family              
-  strcpy (lf.lfFaceName, pcb.printer_font); 	// address of typeface name string       
+  strncpy (lf.lfFaceName, pcb.printer_font, sizeof lf.lfFaceName - 1);
+  lf.lfFaceName [sizeof lf.lfFaceName - 1] = 0;
 
 
 // create 8 fonts (all possible combinations of bold, italic and underline)
@@ -209,26 +270,38 @@ LOGFONT lf;
     }
 
 	// Calc line spacing height
-	CFont	fontSpacing;
 	lf.lfHeight = -MulDiv(pcb.printer_spacing, pcb.logpelsY, 72);
 	lf.lfWeight = FW_NORMAL;
 	lf.lfItalic = FALSE;
 	lf.lfUnderline = FALSE;
   lf.lfPitchAndFamily =  MUSHCLIENT_FONT_FAMILY;	// pitch and family              
-	fontSpacing.CreateFontIndirect(&lf);
-	::SelectObject(pcb.hDC, fontSpacing.GetSafeHandle());
+	if (!fontSpacing.CreateFontIndirect(&lf))
+    return TRUE;
+	HGDIOBJ hOldSpacingFont = ::SelectObject(pcb.hDC, fontSpacing.GetSafeHandle());
+	if (!hOldSpacingFont)
+    return TRUE;
 	TEXTMETRIC	tmSpacing;
-	::GetTextMetrics(pcb.hDC, &tmSpacing);
+	if (!::GetTextMetrics(pcb.hDC, &tmSpacing))
+    {
+    ::SelectObject (pcb.hDC, hOldSpacingFont);
+    return TRUE;
+    }
 	pcb.m_nLineSpacing = tmSpacing.tmHeight + tmSpacing.tmExternalLeading;
+  if (!::SelectObject (pcb.hDC, hOldSpacingFont))
+    return TRUE;
 
 	// Select normal font     
-  	SelectObject (pcb.hDC, pcb.font [FONT_NORMAL]);
+	if (!SelectObject (pcb.hDC, pcb.font [FONT_NORMAL]))
+      return TRUE;
   	pcb.current_font = &pcb.font [FONT_NORMAL];
 
-  GetTextMetrics (pcb.hDC, &pcb.tm);
+  if (!GetTextMetrics (pcb.hDC, &pcb.tm))
+    return TRUE;
   pcb.ok = TRUE;
 
   bAborted = FALSE;
+
+  startGuard.Commit ();
 
   return FALSE; // OK exit
   }   // end of print_start_document
@@ -304,7 +377,7 @@ int err;
 /*                                                     */
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++ */
 
-static char printline_buff [MAX_LINE_WIDTH];
+static char printline_buff [MAX_LINE_WIDTH + 1];
 
 BOOL print_printline (t_print_control_block & pcb, int skip, const char * theline, ...)
   {
@@ -326,8 +399,9 @@ va_list arglist;
 /* print the message as if it was a PRINTF type message */
 
   va_start (arglist, theline);
-  _vsnprintf (printline_buff, sizeof (printline_buff), theline, arglist);
+  _vsnprintf (printline_buff, MAX_LINE_WIDTH, theline, arglist);
   va_end (arglist);
+  printline_buff [MAX_LINE_WIDTH] = 0;
 
   TextOut (pcb.hDC, pcb.left, pcb.top, printline_buff, strlen (printline_buff));
 
@@ -394,40 +468,64 @@ int err;
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++ */
 
 
-BOOL print_end_document (t_print_control_block & pcb)
+static void print_cleanup_document (t_print_control_block & pcb)
   {
-int err;
 int i;
 
+// delete our device context before its selected fonts
+  if (pcb.hDC)
+    {
+    DeleteDC (pcb.hDC);
+    pcb.hDC = NULL;
+    }
+
+  for (i = 0; i < 8; i++)
+    if (pcb.font [i])
+      {
+      DeleteObject (pcb.font [i]);
+      pcb.font [i] = NULL;
+      }
+
+  pActivePrintingDialog = NULL;
+  if (pcb.dlgPrintStatus)
+    {
+    if (pcb.dlgPrintStatus->GetSafeHwnd ())
+      pcb.dlgPrintStatus->DestroyWindow ();
+    delete pcb.dlgPrintStatus;
+    pcb.dlgPrintStatus = NULL;
+    }
+  
+  delete pcb.pd;
+  pcb.pd = NULL;
+  
+  Frame.EnableWindow (TRUE);   
+  Frame.SetFocus ();           // so keyboard input works
+
+  pcb.initialised = FALSE;
+  pcb.ok = FALSE;
+  }
+
+BOOL print_end_document (t_print_control_block & pcb)
+  {
   if (pcb.initialised)
     {
-    err = EndDoc (pcb.hDC);
+    int err = EndDoc (pcb.hDC);
 
     if (err <= 0)
       ::TMessageBox ("Error occurred closing printer");
 
     } // end of having started the document
 
-// delete our fonts and device contexts etc.
-
-  for (i = 0; i < 8; i++)
-    if (pcb.font [i])
-      DeleteObject (pcb.font [i]);
-      
-  if (pcb.hDC)
-    DeleteDC  (pcb.hDC);
-
-  pcb.dlgPrintStatus->DestroyWindow ();
-  delete pcb.dlgPrintStatus;
-  
-  delete pcb.pd;
-  
-  Frame.EnableWindow (TRUE);   
-  Frame.SetFocus ();           // so keyboard input works
-
-  pcb.ok = FALSE;
+  print_cleanup_document (pcb);
   return FALSE; // OK exit
   } // end of print_end_document
+
+void print_abort_document (t_print_control_block & pcb)
+  {
+  if (pcb.initialised && pcb.hDC)
+    AbortDoc (pcb.hDC);
+  print_cleanup_document (pcb);
+  }
 
 
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++ */
@@ -461,14 +559,31 @@ void print_font (t_print_control_block & pcb, const short font_type)
 
 BOOL CALLBACK PrintingAbortProc(HDC, int)
 {
-
-
 	MSG msg;
-	while (!bAborted &&
-		::PeekMessage(&msg, NULL, NULL, NULL, PM_NOREMOVE))
+
+	if (::PeekMessage(&msg, NULL, WM_QUIT, WM_QUIT, PM_REMOVE))
 	{
-		if (!AfxGetThread()->PumpMessage())
-			return FALSE;   // terminate if WM_QUIT received
+		::PostQuitMessage((int) msg.wParam);
+		return FALSE;
+	}
+
+	HWND hPrintDialog = pActivePrintingDialog == NULL ? NULL :
+		pActivePrintingDialog->GetSafeHwnd ();
+
+	while (!bAborted && hPrintDialog != NULL &&
+		::PeekMessage(&msg, hPrintDialog, 0, 0, PM_REMOVE))
+	{
+		if (msg.message == WM_QUIT)
+		{
+			::PostQuitMessage((int) msg.wParam);
+			return FALSE;
+		}
+
+		if (!pActivePrintingDialog->IsDialogMessage(&msg))
+		{
+			::TranslateMessage(&msg);
+			::DispatchMessage(&msg);
+		}
 	}
 	return !bAborted;
 }

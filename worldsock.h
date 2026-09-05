@@ -27,6 +27,8 @@ public:
 public:
 	CMUSHclientDoc* m_pDoc;
   string m_outstanding_data;
+  bool m_bInReceive;
+  bool m_bReceivePending;
 
 // Implementation
 

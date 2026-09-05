@@ -908,7 +908,11 @@ void CMUSHclientDoc::OutputBadUTF8characters (void)
     char sOutput [5];
     memset (sOutput, 0, sizeof sOutput);  // ensure trailing null
     WideCharToMultiByte (CP_UTF8, 0, sUnicode, 1, sOutput, sizeof sOutput, NULL, NULL);
-    AddToLine (sOutput, 0); 
+    if (!AddToLine (sOutput, 0))
+      {
+      m_phase = NONE;
+      return;
+      }
     m_cLastChar = m_UTF8Sequence [i];
     }
 
@@ -952,7 +956,11 @@ void CMUSHclientDoc::Phase_UTF8 (const unsigned char c)
     }
 
   // valid UTF8 sequence, add to line
-  AddToLine ((const char *) m_UTF8Sequence, 0);
+  if (!AddToLine ((const char *) m_UTF8Sequence, 0))
+    {
+    m_phase = NONE;
+    return;
+    }
   m_phase = NONE;
 
   }  // end of CMUSHclientDoc::Phase_UTF8

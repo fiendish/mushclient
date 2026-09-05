@@ -114,8 +114,10 @@ class CMiniWindow
   long    m_FlagsOnMouseDown;     // which mouse-down we got
   long    m_ZOrder;               // Z-order. If zero, use name order. Lower is drawn earlier.
   bool    m_bExecutingScript;      // so windows don't delete themselves
+  bool    m_bAddingHotspot;        // prevent recursive hotspot creation in this window
 
   string  m_sCallbackPlugin;      // plugin we are using
+  __int64 m_iCallbackPluginInstanceNumber;
   string  m_sCreatingPlugin;      // plugin that created the miniwindow
 
   const long GetWidth ()      const { return m_iWidth; }
@@ -208,6 +210,7 @@ class CMiniWindow
   long AddHotspot(CMUSHclientDoc * pDoc,
                    LPCTSTR HotspotId, 
                    string sPluginID,
+                   __int64 iPluginInstanceNumber,
                    long Left, long Top, long Right, long Bottom, 
                    LPCTSTR MouseOver, 
                    LPCTSTR CancelMouseOver, 
@@ -263,6 +266,7 @@ class CMiniWindow
   long DragHandler(CMUSHclientDoc * pDoc, 
                    LPCTSTR HotspotId, 
                    string sPluginID,
+                   __int64 iPluginInstanceNumber,
                    LPCTSTR MoveCallback, 
                    LPCTSTR ReleaseCallback, 
                    long Flags);
@@ -270,6 +274,7 @@ class CMiniWindow
   long ScrollwheelHandler(CMUSHclientDoc * pDoc, 
                          LPCTSTR HotspotId, 
                          string sPluginID,
+                         __int64 iPluginInstanceNumber,
                          LPCTSTR MoveCallback);
 
   long HotspotTooltip(LPCTSTR HotspotId, 

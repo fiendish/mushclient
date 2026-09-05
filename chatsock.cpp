@@ -27,10 +27,13 @@ IMPLEMENT_DYNAMIC(CChatSocket, CAsyncSocket)
 CChatSocket::CChatSocket(CMUSHclientDoc* pDoc)
 {
 	m_pDoc = pDoc;
-  m_hNameLookup = NULL;
+	m_hNameLookup = NULL;
+  m_iNameLookupGeneration = 0;
   m_pGetHostStruct = NULL;
   ZeroMemory (&m_ServerAddr, sizeof m_ServerAddr);
   m_bDeleteMe = false;  
+  m_bInReceive = false;
+  m_bReceivePending = false;
   m_bIncoming = false;
   m_bIgnore = false;
   m_bCanSnoop = false;          
@@ -167,6 +170,34 @@ void CChatSocket::StopFileTransfer (const bool bAbort)
 
 
 void CChatSocket::OnReceive(int nErrorCode)
+  {
+  if (m_bInReceive)
+    {
+    m_bReceivePending = true;
+    return;
+    }
+
+  m_bInReceive = true;
+  try
+    {
+    do
+      {
+      m_bReceivePending = false;
+      ReceiveOneNotification (nErrorCode);
+      } while (m_bReceivePending && !m_bDeleteMe);
+    }
+  catch (...)
+    {
+    m_bInReceive = false;
+    m_bReceivePending = false;
+    throw;
+    }
+
+  m_bInReceive = false;
+  m_bReceivePending = false;
+  }
+
+void CChatSocket::ReceiveOneNotification(int nErrorCode)
 {
 
 char buff [1000];
@@ -1567,6 +1598,12 @@ void CChatSocket::Process_Snoop_data				  (const CString strMessage)
   bool bOldNotesInRGB = m_pDoc->m_bNotesInRGB;
   COLORREF iOldNoteColourFore = m_pDoc->m_iNoteColourFore;
   COLORREF iOldNoteColourBack = m_pDoc->m_iNoteColourBack;
+  CValueStateGuard<bool> notesRGBGuard
+    (m_pDoc->m_bNotesInRGB, m_pDoc->m_bNotesInRGB);
+  CValueStateGuard<COLORREF> noteForeGuard
+    (m_pDoc->m_iNoteColourFore, m_pDoc->m_iNoteColourFore);
+  CValueStateGuard<COLORREF> noteBackGuard
+    (m_pDoc->m_iNoteColourBack, m_pDoc->m_iNoteColourBack);
 
   m_pDoc->ColourTell ("springgreen", "black", ">");
 
@@ -1617,7 +1654,7 @@ void CChatSocket::Process_Send_command				  (const CString strMessage)
                   TFormat ("%s commands you to '%s'.",
                                 (LPCTSTR) m_strRemoteUserName,
                                 (LPCTSTR) strMessage));
-    m_pDoc->m_iExecutionDepth = 0;
+    CValueStateGuard<int> executionDepthGuard (m_pDoc->m_iExecutionDepth, 0);
     m_pDoc->Execute (strMessage);
     }   // end of allowed to send commands
   else

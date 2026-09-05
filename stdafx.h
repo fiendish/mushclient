@@ -91,6 +91,8 @@
 #include <iostream>
 #include <iterator>
 #include <sstream>
+#include <memory>
+#include <exception>
 #pragma warning (pop)
 
 #ifdef LUA_52
@@ -364,6 +366,49 @@ void FixFont (ptrCFont & pFont,
 
 // for escaping out things like \r in a trigger
 CString FixupEscapeSequences (const CString & strSource);
+void SetFileDialogFileName (CFileDialog & dialog, CString & buffer,
+                            const CString & initialName);
+
+class CBoolStateGuard
+  {
+  public:
+  CBoolStateGuard (bool & bValue, const bool bNewValue)
+    : m_bValue (bValue), m_bSavedValue (bValue)
+    {
+    m_bValue = bNewValue;
+    }
+
+  ~CBoolStateGuard ()
+    {
+    m_bValue = m_bSavedValue;
+    }
+
+  private:
+  bool & m_bValue;
+  bool m_bSavedValue;
+  };
+
+template <class T>
+class CValueStateGuard
+  {
+  public:
+  CValueStateGuard (T & value, const T newValue)
+    : m_value (value), m_savedValue (value)
+    {
+    m_value = newValue;
+    }
+
+  ~CValueStateGuard ()
+    {
+    m_value = m_savedValue;
+    }
+
+  private:
+  T & m_value;
+  T m_savedValue;
+  CValueStateGuard (const CValueStateGuard &);
+  CValueStateGuard & operator= (const CValueStateGuard &);
+  };
 
 // translates "send to" numbers
 CString GetSendToString (const unsigned short iWhere);
@@ -469,15 +514,26 @@ struct CThreadData
 {
 	char *	m_strFilename;    // which file to monitor
 	HWND	m_hWnd;             // window to post event to
-  DWORD m_pDoc;             // which document it belongs to
+  __int64 m_iDocumentNumber;  // which document instance it belongs to
 	HANDLE	m_hEvent;         // event which will become signalled
 };
 
-void ThreadFunc(LPVOID pParam);
-void KillThread (HANDLE & pThread, CEvent & eventFileChanged);
-HANDLE CreateMonitoringThread(const char * sName, DWORD pDoc, CEvent & eventFileChanged);
+struct CFileChangeNotification
+  {
+  __int64 m_iDocumentNumber;
+  };
 
-#define WM_USER_FILE_CONTENTS_CHANGED (WM_USER + 1001)
+struct CTLSFallbackNotification
+  {
+  __int64 m_iDocumentNumber;
+  unsigned long m_iConnectionAttemptNumber;
+  };
+
+unsigned __stdcall ThreadFunc(void * pParam);
+void KillThread (HANDLE & pThread, CEvent & eventFileChanged);
+HANDLE CreateMonitoringThread(const char * sName, __int64 iDocumentNumber, CEvent & eventFileChanged);
+
+#define WM_USER_FILE_CONTENTS_CHANGED (WM_USER + 1002)
 
 #define REGISTRATION_TIMER_ID 0x1001
 #define SPLASH_SCREEN_TIMER_ID 0x1002
@@ -630,16 +686,15 @@ enum
               _CrtSetDbgFlag((a) | _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
   #define  CLEAR_CRT_DEBUG_FIELD(a) \
               _CrtSetDbgFlag(~(a) & _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
-//  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
 //  #define DELETESTYLE(arg) DeleteStyle (arg, __FILE__, __LINE__)
-  #define NEWSTYLE new CStyle
+  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
   #define DELETESTYLE(arg) delete arg
 
 #else
   #define  SET_CRT_DEBUG_FIELD(a)   ((void) 0)
   #define  CLEAR_CRT_DEBUG_FIELD(a) ((void) 0)
 
-  #define NEWSTYLE new CStyle
+  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
   #define DELETESTYLE(arg) delete arg
 #endif
 

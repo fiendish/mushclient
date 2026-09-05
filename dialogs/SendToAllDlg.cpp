@@ -63,11 +63,15 @@ void CSendToAllDlg::DoDataExchange(CDataExchange* pDX)
         continue;
 
       for (int i = 0; i < nCount; i++)
-        if (m_ctlWorldList.GetItemData (aryListBoxSel [i]) == (DWORD) pDoc)
+        {
+        int iDocument = (int) m_ctlWorldList.GetItemData (aryListBoxSel [i]);
+        if (iDocument >= 0 && iDocument < m_DocumentNumbers.GetSize () &&
+            m_DocumentNumbers [iDocument] == pDoc->m_iUniqueDocumentNumber)
           {
           pDoc->m_bSelected = true;
           break;
           }
+        }
 
       } // end of doing each document
 
@@ -75,6 +79,8 @@ void CSendToAllDlg::DoDataExchange(CDataExchange* pDX)
     } // end of saving
   else
     {   // loading
+
+    m_DocumentNumbers.RemoveAll ();
 
     for (docPos = App.m_pWorldDocTemplate->GetFirstDocPosition();
         docPos != NULL; )
@@ -91,7 +97,8 @@ void CSendToAllDlg::DoDataExchange(CDataExchange* pDX)
 
       if (nItem != LB_ERR  && nItem != LB_ERRSPACE )
         {
-         m_ctlWorldList.SetItemData (nItem, (DWORD) pDoc);
+         int iDocument = m_DocumentNumbers.Add (pDoc->m_iUniqueDocumentNumber);
+         m_ctlWorldList.SetItemData (nItem, (DWORD) iDocument);
          if (pDoc->m_bSelected)
            m_ctlWorldList.SetSel (nItem, TRUE);		
         }

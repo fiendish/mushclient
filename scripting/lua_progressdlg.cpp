@@ -105,13 +105,17 @@ static int Lprogress_tostring (lua_State *L)
 
 static int Lprogress_new(lua_State *L)
 {
-  CProgressDlg *pProgressDlg = new CProgressDlg (); 
-  pProgressDlg->Create ();
-  pProgressDlg->SetWindowText (luaL_optstring (L, 1, "Progress ..."));
+  const char * sTitle = luaL_optstring (L, 1, "Progress ...");
   CProgressDlg **ud = (CProgressDlg **)lua_newuserdata(L, sizeof (CProgressDlg *));
+  *ud = NULL;
   luaL_getmetatable(L, progress_dlg_handle);
   lua_setmetatable(L, -2);
-  *ud = pProgressDlg;    // store pointer to this dialog in the userdata
+
+  std::unique_ptr<CProgressDlg> pProgressDlg (new CProgressDlg ());
+  if (!pProgressDlg->Create ())
+    AfxThrowResourceException ();
+  pProgressDlg->SetWindowText (sTitle);
+  *ud = pProgressDlg.release ();    // store pointer to this dialog in the userdata
   return 1;
   }  // end of Lprogress_new
 

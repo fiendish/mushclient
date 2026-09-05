@@ -18,6 +18,8 @@ CTimerWnd::CTimerWnd(CMUSHclientDoc * pDoc)
 {
   m_pDoc = pDoc;
   m_iTimer = 0;
+  m_bProcessingQueue = false;
+  m_bDrainQueue = false;
 }
 
 CTimerWnd::~CTimerWnd()
@@ -38,25 +40,83 @@ END_MESSAGE_MAP()
 
 void CTimerWnd::OnTimer(UINT nIDEvent) 
 {
+  DrainQueue (true);
+
+  if (m_iTimer && m_pDoc->m_iSpeedWalkDelay == 0)
+    {
+    KillTimer (m_iTimer);
+    m_iTimer = 0;
+    }
+}
+
+void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
+{
+  if (m_bProcessingQueue)
+    {
+    if (!bStopAfterDelayedCommand)
+      m_bDrainQueue = true;
+    return;
+    }
+
   // no queued commands - don't update status line
   if (m_pDoc->m_QueuedCommandsList.IsEmpty ())
-    return;
-
-  while (!m_pDoc->m_QueuedCommandsList.IsEmpty ())
     {
-    CString strCommand = m_pDoc->m_QueuedCommandsList.RemoveHead ();
-
-    char cMessageType = strCommand [0];
-  
-    m_pDoc->DoSendMsg (strCommand.Mid (1), 
-                       toupper (cMessageType) == QUEUE_WITH_ECHO ||
-                       toupper (cMessageType) == IMMEDIATE_WITH_ECHO,
-                       cMessageType >= 'A');      // log flag
-
-    if (toupper (cMessageType) == QUEUE_WITH_ECHO ||
-        toupper (cMessageType) == QUEUE_WITHOUT_ECHO)
-        break;    // if we need to wait, don't keep pulling them out
+    m_bDrainQueue = false;
+    return;
     }
+
+  m_bProcessingQueue = true;
+  bool bStopAfterDelay = bStopAfterDelayedCommand;
+
+  try
+    {
+    while (!m_pDoc->m_QueuedCommandsList.IsEmpty ())
+      {
+      CString strCommand = m_pDoc->m_QueuedCommandsList.RemoveHead ();
+
+      unsigned char cQueueFlags = (unsigned char) strCommand [0];
+      bool bSuppressPluginSend =
+        (cQueueFlags & QUEUE_SUPPRESS_PLUGIN_SEND) != 0;
+      char cMessageType =
+        (char) (cQueueFlags & ~QUEUE_SUPPRESS_PLUGIN_SEND);
+      bool bEcho = toupper ((unsigned char) cMessageType) == QUEUE_WITH_ECHO ||
+                   toupper ((unsigned char) cMessageType) == IMMEDIATE_WITH_ECHO;
+      bool bLog = cMessageType >= 'A';
+
+      if (bSuppressPluginSend)
+        {
+        CBoolStateGuard processingGuard
+          (m_pDoc->m_bPluginProcessingSend, true);
+        m_pDoc->DoSendMsg (strCommand.Mid (1), bEcho, bLog);
+        }
+      else
+        m_pDoc->DoSendMsg (strCommand.Mid (1), bEcho, bLog);
+
+      if (m_bDrainQueue)
+        {
+        bStopAfterDelay = false;
+        m_bDrainQueue = false;
+        }
+
+      if (bStopAfterDelay &&
+          (toupper ((unsigned char) cMessageType) == QUEUE_WITH_ECHO ||
+           toupper ((unsigned char) cMessageType) == QUEUE_WITHOUT_ECHO))
+        break;    // if we need to wait, don't keep pulling them out
+      }
+    }
+  catch (...)
+    {
+    bool bDrainQueue = m_bDrainQueue || !bStopAfterDelayedCommand;
+    m_bProcessingQueue = false;
+    m_bDrainQueue = bDrainQueue;
+    if (bDrainQueue && !m_pDoc->m_QueuedCommandsList.IsEmpty () && !m_iTimer)
+      m_iTimer = SetTimer (COMMAND_QUEUE_TIMER_ID,
+                           MAX ((int) m_pDoc->m_iSpeedWalkDelay, 1), NULL);
+    throw;
+    }
+
+  m_bProcessingQueue = false;
+  m_bDrainQueue = false;
   m_pDoc->ShowQueuedCommands ();    // update status line
 }
 
@@ -82,28 +142,16 @@ void CTimerWnd::ChangeTimerRate (const int iRate)
 
   // get rid of old timer
   if (m_iTimer)
-      KillTimer (m_iTimer);
+    {
+    KillTimer (m_iTimer);
+    m_iTimer = 0;
+    }
 
   // if zero, no timer wanted
   if (iNewRate)
     m_iTimer = SetTimer(COMMAND_QUEUE_TIMER_ID, iNewRate, NULL); 
   else
-    {
-
-    // if no delay any more, send all outstanding lines
-    while (!m_pDoc->m_QueuedCommandsList.IsEmpty ())
-      {
-      CString strCommand = m_pDoc->m_QueuedCommandsList.RemoveHead ();
-  
-      char cMessageType = strCommand [0];
-     
-      m_pDoc->DoSendMsg (strCommand.Mid (1), 
-                         cMessageType == QUEUE_WITH_ECHO ||
-                         cMessageType == IMMEDIATE_WITH_ECHO,
-                         cMessageType >= 'A');  // log flag
-      }   // end of sending all lines
-
-    }
+    DrainQueue (false);
 
   }  // end of ChangeTimerRate
 

@@ -155,9 +155,10 @@ string PluginCallbacksNames [] = {
 
 
 // constructor
-CPlugin::CPlugin (CMUSHclientDoc * pDoc) 
+CPlugin::CPlugin (CMUSHclientDoc * pDoc)
   { 
   m_pDoc = pDoc;
+  m_iPluginInstanceNumber = App.GetUniqueNumber ();
   m_ScriptEngine = NULL;
   m_bEnabled = true;
   m_VariableMap.InitHashTable (293); // allow for 300 variables in this plugin
@@ -173,19 +174,70 @@ CPlugin::CPlugin (CMUSHclientDoc * pDoc)
   m_iLoadOrder = 0;
   m_iScriptTimeTaken = 0;
   m_bSavingStateNow = false;
+  m_iActiveScriptCalls = 0;
   m_iSequence = DEFAULT_PLUGIN_SEQUENCE;
 
   } // end of constructor
 
+CPluginContextGuard::CPluginContextGuard (CMUSHclientDoc * pDoc,
+                                          CPlugin * pPlugin,
+                                          const bool bManageCallingID,
+                                          const bool bResetNoteStyle)
+  : m_pDoc (pDoc),
+    m_pPlugin (pPlugin),
+    m_pSavedPlugin (pDoc->m_CurrentPlugin),
+    m_iSavedNoteStyle (pDoc->m_iNoteStyle),
+    m_bManageCallingID (bManageCallingID),
+    m_bResetNoteStyle (bResetNoteStyle)
+  {
+  ASSERT (m_pDoc);
+  ASSERT (m_pPlugin || (!m_bManageCallingID && !m_bResetNoteStyle));
+
+  if (m_bManageCallingID)
+    {
+    m_strSavedCallingPluginID = m_pPlugin->m_strCallingPluginID;
+    m_pPlugin->m_strCallingPluginID.Empty ();
+    if (m_pSavedPlugin)
+      m_pPlugin->m_strCallingPluginID = m_pSavedPlugin->m_strID;
+    }
+
+  if (m_bResetNoteStyle)
+    m_pDoc->m_iNoteStyle = NORMAL;
+
+  m_pDoc->m_CurrentPlugin = m_pPlugin;
+  }
+
+CPluginContextGuard::~CPluginContextGuard ()
+  {
+  m_pDoc->m_CurrentPlugin = m_pSavedPlugin;
+  if (m_bResetNoteStyle)
+    m_pDoc->m_iNoteStyle = m_iSavedNoteStyle;
+  if (m_bManageCallingID)
+    m_pPlugin->m_strCallingPluginID = m_strSavedCallingPluginID;
+  }
+
+CPluginNotesGuard::CPluginNotesGuard (CMUSHclientDoc * pDoc)
+  : m_pDoc (pDoc),
+    m_bSavedNotesNotWanted (pDoc->m_bNotesNotWantedNow)
+  {
+  ASSERT (m_pDoc);
+  m_pDoc->m_bNotesNotWantedNow = true;
+  }
+
+CPluginNotesGuard::~CPluginNotesGuard ()
+  {
+  m_pDoc->m_bNotesNotWantedNow = m_bSavedNotesNotWanted;
+  }
+
 // destructor
 CPlugin::~CPlugin () 
   {
-  // change to this plugin, call function, put current plugin back
-  CPlugin * pSavedPlugin = m_pDoc->m_CurrentPlugin;
-  m_pDoc->m_CurrentPlugin = this;
+  ASSERT (m_iActiveScriptCalls == 0);
+  {
+  CPluginContextGuard contextGuard (m_pDoc, this);
   CScriptCallInfo callinfo (ON_PLUGIN_CLOSE, m_PluginCallbacks [ON_PLUGIN_CLOSE]);
   ExecutePluginScript (callinfo);
-  m_pDoc->m_CurrentPlugin = pSavedPlugin;
+  }
 
   SaveState ();
   DELETE_MAP (m_TriggerMap, CTrigger); 
@@ -218,6 +270,7 @@ DISPID CPlugin::GetPluginDispid (const char * sName)
 
 void CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo)
   {
+  CPluginCallGuard callGuard (this);
   DISPID & iRoutine = callinfo._dispid_info._dispid;
 
   if (m_ScriptEngine && iRoutine != DISPID_UNKNOWN)
@@ -265,6 +318,7 @@ void CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo)
 bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo, 
                                    const char * sText)
   {
+  CPluginCallGuard callGuard (this);
   DISPID & iRoutine = callinfo._dispid_info._dispid;
 
   if (m_ScriptEngine && iRoutine != DISPID_UNKNOWN)
@@ -346,6 +400,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   const long arg1,
                                   const string sText)
   {
+  CPluginCallGuard callGuard (this);
   DISPID & iRoutine = callinfo._dispid_info._dispid;
 
   if (m_ScriptEngine && iRoutine != DISPID_UNKNOWN)
@@ -438,6 +493,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   const long arg2,
                                   const string sText)
   {
+  CPluginCallGuard callGuard (this);
   DISPID & iRoutine = callinfo._dispid_info._dispid;
 
   if (m_ScriptEngine && iRoutine != DISPID_UNKNOWN)
@@ -526,6 +582,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   const char * arg3,
                                   const char * arg4)
   {
+  CPluginCallGuard callGuard (this);
   DISPID & iRoutine = callinfo._dispid_info._dispid;
 
   if (m_ScriptEngine && iRoutine != DISPID_UNKNOWN)
@@ -613,6 +670,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
 void CPlugin::ExecutePluginScriptRtn (CScriptCallInfo & callinfo, 
                                       CString & strText) 
   {
+  CPluginCallGuard callGuard (this);
   DISPID & iRoutine = callinfo._dispid_info._dispid;
 
   if (m_ScriptEngine && iRoutine != DISPID_UNKNOWN)
@@ -790,17 +848,15 @@ bool bError = true;
 
     }  // end of no save state folder
 
-  CPlugin * oldPlugin = m_pDoc->m_CurrentPlugin;
-  m_pDoc->m_CurrentPlugin = this;
+  CPluginContextGuard contextGuard (m_pDoc, this);
 
+  {
   // prevent infinite loops
-  m_bSavingStateNow = true;
+  CBoolStateGuard savingStateGuard (m_bSavingStateNow, true);
 
   CScriptCallInfo callinfo (ON_PLUGIN_SAVE_STATE, m_PluginCallbacks [ON_PLUGIN_SAVE_STATE]);
   ExecutePluginScript (callinfo);
-
-  // are not saving state now
-  m_bSavingStateNow = false;
+  }
 
   strFilename += m_pDoc->m_strWorldID;    // world ID
   strFilename += "-";
@@ -855,9 +911,6 @@ bool bError = true;
   delete ar;      // delete archive
   delete f;       // delete file
 
-  // put old plugin back
-  m_pDoc->m_CurrentPlugin = oldPlugin;
-
   return bError;
 
   } // end of CPlugin::SaveState 
@@ -865,6 +918,8 @@ bool bError = true;
 
 void CMUSHclientDoc::OnFilePluginwizard() 
 {
+  CPluginContextGuard pluginContextGuard (this, NULL);
+
   // TODO: The property sheet attached to your project
   // via this function is not hooked up to any message
   // handler.  In order to actually use the property sheet,
@@ -1283,83 +1338,152 @@ void CMUSHclientDoc::OnFilePluginwizard()
 
     if (propSheet.m_Page1.m_bRemoveItems)
       {
-      // ---------- triggers ----------
+      vector<CString> triggerNames;
+      vector<CString> aliasNames;
+      vector<CString> timerNames;
+      set<CTrigger *> triggersToDelete;
+      set<CAlias *> aliasesToDelete;
+      set<CTimer *> timersToDelete;
 
-      iCount = 0;
       for (pos = m_TriggerMap.GetStartPosition(); pos; )
-        {                                               
+        {
         CTrigger * t;
-        m_TriggerMap.GetNextAssoc (pos, strName, t);  
+        m_TriggerMap.GetNextAssoc (pos, strName, t);
         if (t->bSelected)
           {
-          iCount++;
-          // delete its pointer
-          delete t;
-          // now delete its entry
-          m_TriggerMap.RemoveKey (strName);
+          triggerNames.push_back (strName);
+          triggersToDelete.insert (t);
           }   // end of selected trigger
-    
-        // sort remaining ones, show document modified
-        if (iCount)
-          {
-          m_CurrentPlugin = NULL;
-          SortTriggers ();
-          SetModifiedFlag (TRUE);   // document has changed
-          }
-
         }  // end of doing all triggers
 
-      // ---------- aliases ----------
-
-      iCount = 0;
       for (pos = m_AliasMap.GetStartPosition(); pos; )
-        {                                               
+        {
         CAlias * a;
-        m_AliasMap.GetNextAssoc (pos, strName, a);  
+        m_AliasMap.GetNextAssoc (pos, strName, a);
         if (a->bSelected)
           {
-          iCount++;
-          // delete its pointer
-          delete a;
-          // now delete its entry
-          m_AliasMap.RemoveKey (strName);
+          aliasNames.push_back (strName);
+          aliasesToDelete.insert (a);
           }   // end of selected Alias
-    
-        //  show document modified
-        if (iCount)
-          {
-          m_CurrentPlugin = NULL;
-          SortAliases ();
-          SetModifiedFlag (TRUE);   // document has changed
-          }
-
         }  // end of doing all aliases
 
-      // ---------- timers ----------
-
-      iCount = 0;
       for (pos = m_TimerMap.GetStartPosition(); pos; )
-        {                                               
+        {
         CTimer * t;
-        m_TimerMap.GetNextAssoc (pos, strName, t);  
+        m_TimerMap.GetNextAssoc (pos, strName, t);
         if (t->bSelected)
           {
-          iCount++;
-          // delete its pointer
-          delete t;
-          // now delete its entry
-          m_TimerMap.RemoveKey (strName);
+          timerNames.push_back (strName);
+          timersToDelete.insert (t);
           }   // end of selected Timer
-    
-        // show document modified
-        if (iCount)
-          {
-          m_CurrentPlugin = NULL;
-          SortTimers ();
-          SetModifiedFlag (TRUE);   // document has changed
-          }
-
         }  // end of doing all Timers
+
+      m_CurrentPlugin = NULL;
+
+      // Build every replacement index before changing a live index or map.
+      vector<CTrigger *> newTriggerArray;
+      CTriggerRevMap newTriggerRevMap;
+      vector<CAlias *> newAliasArray;
+      CAliasRevMap newAliasRevMap;
+      CTimerRevMap newTimerRevMap;
+      if (!triggersToDelete.empty ())
+        BuildTriggerIndexes (newTriggerArray,
+                             newTriggerRevMap,
+                             &triggersToDelete);
+      if (!aliasesToDelete.empty ())
+        BuildAliasIndexes (newAliasArray,
+                           newAliasRevMap,
+                           &aliasesToDelete);
+      if (!timersToDelete.empty ())
+        BuildTimerIndex (newTimerRevMap, &timersToDelete);
+
+      // Grow both live arrays before publishing either replacement. Shrinking
+      // after this point does not allocate.
+      const int iOldTriggerArraySize = m_TriggerArray.GetSize ();
+      const int iOldAliasArraySize = m_AliasArray.GetSize ();
+      bool bTriggerArrayPrepared = false;
+      try
+        {
+        if (!triggersToDelete.empty ())
+          {
+          const int iPreparedSize =
+            iOldTriggerArraySize > static_cast<int> (newTriggerArray.size ()) ?
+              iOldTriggerArraySize : newTriggerArray.size ();
+          m_TriggerArray.SetSize (iPreparedSize);
+          bTriggerArrayPrepared = true;
+          }
+        if (!aliasesToDelete.empty ())
+          {
+          const int iPreparedSize =
+            iOldAliasArraySize > static_cast<int> (newAliasArray.size ()) ?
+              iOldAliasArraySize : newAliasArray.size ();
+          m_AliasArray.SetSize (iPreparedSize);
+          }
+        }
+      catch (...)
+        {
+        if (bTriggerArrayPrepared)
+          m_TriggerArray.SetSize (iOldTriggerArraySize);
+        throw;
+        }
+
+      if (!triggersToDelete.empty ())
+        {
+        m_TriggerArray.SetSize (newTriggerArray.size ());
+        for (size_t i = 0; i < newTriggerArray.size (); i++)
+          m_TriggerArray.SetAt (i, newTriggerArray [i]);
+        m_TriggerRevMap.swap (newTriggerRevMap);
+        }
+      if (!aliasesToDelete.empty ())
+        {
+        m_AliasArray.SetSize (newAliasArray.size ());
+        for (size_t i = 0; i < newAliasArray.size (); i++)
+          m_AliasArray.SetAt (i, newAliasArray [i]);
+        m_AliasRevMap.swap (newAliasRevMap);
+        }
+      if (!timersToDelete.empty ())
+        m_TimerRevMap.swap (newTimerRevMap);
+
+      if (!triggersToDelete.empty ())
+        {
+        for (vector<CString>::iterator it = triggerNames.begin ();
+             it != triggerNames.end (); it++)
+          {
+          CTrigger * t;
+          VERIFY (m_TriggerMap.Lookup (*it, t));
+          VERIFY (m_TriggerMap.RemoveKey (*it));
+          RetireTrigger (t);
+          }
+        }
+
+      if (!aliasesToDelete.empty ())
+        {
+        for (vector<CString>::iterator it = aliasNames.begin ();
+             it != aliasNames.end (); it++)
+          {
+          CAlias * a;
+          VERIFY (m_AliasMap.Lookup (*it, a));
+          VERIFY (m_AliasMap.RemoveKey (*it));
+          RetireAlias (a);
+          }
+        }
+
+      if (!timersToDelete.empty ())
+        {
+        for (vector<CString>::iterator it = timerNames.begin ();
+             it != timerNames.end (); it++)
+          {
+          CTimer * t;
+          VERIFY (m_TimerMap.Lookup (*it, t));
+          VERIFY (m_TimerMap.RemoveKey (*it));
+          RetireTimer (t);
+          }
+        }
+
+      if (!triggersToDelete.empty () ||
+          !aliasesToDelete.empty () ||
+          !timersToDelete.empty ())
+        SetModifiedFlag (TRUE);
 
       // ---------- variables ----------
 
@@ -1396,84 +1520,141 @@ void CMUSHclientDoc::OnFilePluginwizard()
 
 
 // tell plugins the list of plugins may have changed
+void GetPluginInstanceSnapshot (const CPluginList & plugins,
+                                CPluginInstanceSnapshot & snapshot)
+  {
+  for (CPluginList::const_iterator pit = plugins.begin ();
+       pit != plugins.end (); ++pit)
+    snapshot.push_back (CPluginInstanceIdentity (*pit));
+  }
+
+void GetPluginSequenceSnapshots (const CPluginList & plugins,
+                                 CPluginInstanceSnapshot & negativeSequence,
+                                 CPluginInstanceSnapshot & nonnegativeSequence)
+  {
+  for (CPluginList::const_iterator pit = plugins.begin ();
+       pit != plugins.end (); ++pit)
+    if ((*pit)->m_iSequence < 0)
+      negativeSequence.push_back (CPluginInstanceIdentity (*pit));
+    else
+      nonnegativeSequence.push_back (CPluginInstanceIdentity (*pit));
+  }
+
 void  CMUSHclientDoc::PluginListChanged (void)
 
   {
 
-static bool bInPluginListChanged = false;
+  if (m_iPluginListChangedDeferralDepth > 0)
+    {
+    m_bPluginListChangedDeferred = true;
+    return;
+    }
 
   // don't recurse into infinite loops
-  if (bInPluginListChanged)
+  if (m_bInPluginListChanged)
+    {
+    m_bPluginListChangedPending = true;
     return;
+    }
 
-  bInPluginListChanged = true;
-  SendToAllPluginCallbacks (ON_PLUGIN_LIST_CHANGED);
-  bInPluginListChanged = false;
+  m_bInPluginListChanged = true;
+  try
+    {
+    do
+      {
+      m_bPluginListChangedPending = false;
+      SendToAllPluginCallbacks (ON_PLUGIN_LIST_CHANGED);
+      }
+    while (m_bPluginListChangedPending);
+    }
+  catch (...)
+    {
+    m_bInPluginListChanged = false;
+    throw;
+    }
+  m_bInPluginListChanged = false;
 
   }    // end CMUSHclientDoc::PluginListChanged 
+
+void CMUSHclientDoc::BeginPluginListChangedDeferral (void)
+  {
+  m_iPluginListChangedDeferralDepth++;
+  }
+
+bool CMUSHclientDoc::EndPluginListChangedDeferral (void)
+  {
+  ASSERT (m_iPluginListChangedDeferralDepth > 0);
+  if (m_iPluginListChangedDeferralDepth <= 0)
+    return false;
+
+  m_iPluginListChangedDeferralDepth--;
+  if (m_iPluginListChangedDeferralDepth > 0 ||
+      !m_bPluginListChangedDeferred)
+    return false;
+
+  m_bPluginListChangedDeferred = false;
+  return true;
+  }
 
 
 void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arguments
   {
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-
-  m_bNotesNotWantedNow = true;  // batch up Note/Tell calls
+  CPluginNotesGuard notesGuard (this);
+  CPluginInstanceSnapshot snapshot;
+  GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
   // tell a plugin the message
-   for (PluginListIterator pit = m_PluginList.begin (); 
-         pit != m_PluginList.end (); 
-         ++pit)
+   for (size_t iPlugin = 0; iPlugin < snapshot.size (); iPlugin++)
     {
-    CPlugin * pPlugin = *pit;
+    CPlugin * pPlugin = GetPluginInstance
+      (snapshot [iPlugin].m_strID,
+       snapshot [iPlugin].m_iPluginInstanceNumber);
+
+    if (!pPlugin)
+      continue;
 
     if (!(pPlugin->m_bEnabled))   // ignore disabled plugins
       continue;
 
-    // change to this plugin, call function, put current plugin back
-    m_CurrentPlugin = pPlugin;        // so plugin knows who it is
+    CPluginContextGuard contextGuard (this, pPlugin);
     CScriptCallInfo callinfo (sName, pPlugin->m_PluginCallbacks [sName]);
     pPlugin->ExecutePluginScript (callinfo);
-    m_CurrentPlugin = pSavedPlugin;  // back to current plugin
 
     }   // end of doing each plugin
-
-  m_bNotesNotWantedNow = false;
 
   } // end of CMUSHclientDoc::SendToAllPluginCallbacks
 
 // this is for when we want the first available plugin to handle something (eg. Trace, Sound)
 bool CMUSHclientDoc::SendToFirstPluginCallbacks (const string & sName, const char * sText)   // one argument
   {
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-
-  m_bNotesNotWantedNow = true;  // batch up Note/Tell calls
+  CPluginNotesGuard notesGuard (this);
+  CPluginInstanceSnapshot snapshot;
+  GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
   // tell a plugin the message
-   for (PluginListIterator pit = m_PluginList.begin (); 
-         pit != m_PluginList.end (); 
-         ++pit)
+   for (size_t iPlugin = 0; iPlugin < snapshot.size (); iPlugin++)
     {
-    CPlugin * pPlugin = *pit;
+    CPlugin * pPlugin = GetPluginInstance
+      (snapshot [iPlugin].m_strID,
+       snapshot [iPlugin].m_iPluginInstanceNumber);
+
+    if (!pPlugin)
+      continue;
 
     if (!(pPlugin->m_bEnabled))   // ignore disabled plugins
       continue;
 
-    // change to this plugin, call function, put current plugin back
-    m_CurrentPlugin = pPlugin;        // so plugin knows who it is
+    CPluginContextGuard contextGuard (this, pPlugin);
     CScriptCallInfo callinfo (sName, pPlugin->m_PluginCallbacks [sName]);
     pPlugin->ExecutePluginScript (callinfo, sText); 
-    m_CurrentPlugin = pSavedPlugin;   // back to current plugin
 
     if (callinfo._dispid_info.isvalid ())
       {
-      m_CurrentPlugin = pSavedPlugin;
-      m_bNotesNotWantedNow = false;
       return true;   // indicate we found it
       }
 
     }   // end of doing each plugin
 
-  m_bNotesNotWantedNow = false;
   return false;  // didn't find one
   } // end of CMUSHclientDoc::SendToFirstPluginCallbacks
 
@@ -1484,36 +1665,36 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const char * sText,         // one argument
                                                const bool bStopOnFalse)
   {
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
   bool bResult = true;    // assume they OK'd something
-  m_bNotesNotWantedNow = true;  // batch up Note/Tell calls
+  CPluginNotesGuard notesGuard (this);
+  CPluginInstanceSnapshot snapshot;
+  GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
   // tell a plugin the message
-  for (PluginListIterator pit = m_PluginList.begin (); 
-         pit != m_PluginList.end (); 
-         ++pit)
+  for (size_t iPlugin = 0; iPlugin < snapshot.size (); iPlugin++)
     {
-    CPlugin * pPlugin = *pit;
+    CPlugin * pPlugin = GetPluginInstance
+      (snapshot [iPlugin].m_strID,
+       snapshot [iPlugin].m_iPluginInstanceNumber);
+
+    if (!pPlugin)
+      continue;
 
     if (!(pPlugin->m_bEnabled))   // ignore disabled plugins
       continue;
 
-    // change to this plugin, call function, put current plugin back
-    m_CurrentPlugin = pPlugin;        // so plugin knows who it is
+    CPluginContextGuard contextGuard (this, pPlugin);
     CScriptCallInfo callinfo (sName, pPlugin->m_PluginCallbacks [sName]);
     if (!pPlugin->ExecutePluginScript (callinfo, sText))
         bResult = false;
-    m_CurrentPlugin = pSavedPlugin;  // back to current plugin
 
     if (bStopOnFalse && !bResult && callinfo._dispid_info.isvalid ())
       {
-      m_bNotesNotWantedNow = false;
       return false;
       }
 
     }   // end of doing each plugin
 
-  m_bNotesNotWantedNow = false;
   return bResult;
   } // end of CMUSHclientDoc::SendToAllPluginCallbacks
 
@@ -1521,28 +1702,29 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
 // this sends a string to all plugins and allows them to modify it
 void CMUSHclientDoc::SendToAllPluginCallbacksRtn (const string & sName, CString & strResult)  // taking and returning a string
   {
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_bNotesNotWantedNow = true;  // batch up Note/Tell calls
+  CPluginNotesGuard notesGuard (this);
+  CPluginInstanceSnapshot snapshot;
+  GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
   // tell a plugin the message
-  for (PluginListIterator pit = m_PluginList.begin (); 
-         pit != m_PluginList.end (); 
-         ++pit)
+  for (size_t iPlugin = 0; iPlugin < snapshot.size (); iPlugin++)
     {
-    CPlugin * pPlugin = *pit;
+    CPlugin * pPlugin = GetPluginInstance
+      (snapshot [iPlugin].m_strID,
+       snapshot [iPlugin].m_iPluginInstanceNumber);
+
+    if (!pPlugin)
+      continue;
 
     if (!(pPlugin->m_bEnabled))   // ignore disabled plugins
       continue;
 
-    // change to this plugin, call function, put current plugin back
-    m_CurrentPlugin = pPlugin;        // so plugin knows who it is
+    CPluginContextGuard contextGuard (this, pPlugin);
     CScriptCallInfo callinfo (sName, pPlugin->m_PluginCallbacks [sName]);
     pPlugin->ExecutePluginScriptRtn (callinfo, strResult);
-    m_CurrentPlugin = pSavedPlugin;   // back to current plugin
 
     }   // end of doing each plugin
 
-  m_bNotesNotWantedNow = false;
   } // end of CMUSHclientDoc::SendToAllPluginCallbacks
 
 
@@ -1553,41 +1735,40 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnTrue,
                                                const bool bStopOnFalse)
   {
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_bNotesNotWantedNow = true;  // batch up Note/Tell calls
+  CPluginNotesGuard notesGuard (this);
+  CPluginInstanceSnapshot snapshot;
+  GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
   // tell a plugin the message
-  for (PluginListIterator pit = m_PluginList.begin (); 
-         pit != m_PluginList.end (); 
-         ++pit)
+  for (size_t iPlugin = 0; iPlugin < snapshot.size (); iPlugin++)
     {
-    CPlugin * pPlugin = *pit;
+    CPlugin * pPlugin = GetPluginInstance
+      (snapshot [iPlugin].m_strID,
+       snapshot [iPlugin].m_iPluginInstanceNumber);
+
+    if (!pPlugin)
+      continue;
 
     if (!(pPlugin->m_bEnabled))   // ignore disabled plugins
       continue;
 
-    // change to this plugin, call function, put current plugin back
-    m_CurrentPlugin = pPlugin;        // so plugin knows who it is
+    CPluginContextGuard contextGuard (this, pPlugin);
     CScriptCallInfo callinfo (sName, pPlugin->m_PluginCallbacks [sName]);
     bool bResult = pPlugin->ExecutePluginScript (callinfo, arg1, sText);
-    m_CurrentPlugin = pSavedPlugin;  // back to current plugin
 
     if (bStopOnTrue && bResult && callinfo._dispid_info.isvalid ())
       {
-      m_bNotesNotWantedNow = false;
       return true;
       }
 
     if (bStopOnFalse && !bResult && callinfo._dispid_info.isvalid ())
       {
-      m_bNotesNotWantedNow = false;
       return false;
       }
 
     }   // end of doing each plugin
 
 
-  m_bNotesNotWantedNow = false;
   if (bStopOnTrue)
     return false;
   else 
@@ -1603,40 +1784,39 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnTrue,
                                                const bool bStopOnFalse)
   {
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_bNotesNotWantedNow = true;  // batch up Note/Tell calls
+  CPluginNotesGuard notesGuard (this);
+  CPluginInstanceSnapshot snapshot;
+  GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
   // tell a plugin the message
-  for (PluginListIterator pit = m_PluginList.begin (); 
-         pit != m_PluginList.end (); 
-         ++pit)
+  for (size_t iPlugin = 0; iPlugin < snapshot.size (); iPlugin++)
     {
-    CPlugin * pPlugin = *pit;
+    CPlugin * pPlugin = GetPluginInstance
+      (snapshot [iPlugin].m_strID,
+       snapshot [iPlugin].m_iPluginInstanceNumber);
+
+    if (!pPlugin)
+      continue;
 
     if (!(pPlugin->m_bEnabled))   // ignore disabled plugins
       continue;
 
-    // change to this plugin, call function, put current plugin back
-    m_CurrentPlugin = pPlugin;        // so plugin knows who it is
+    CPluginContextGuard contextGuard (this, pPlugin);
     CScriptCallInfo callinfo (sName, pPlugin->m_PluginCallbacks [sName]);
     bool bResult = pPlugin->ExecutePluginScript (callinfo, arg1, arg2, sText);
-    m_CurrentPlugin = pSavedPlugin;   // back to current plugin
 
     if (bStopOnTrue && bResult && callinfo._dispid_info.isvalid ())
       {
-      m_bNotesNotWantedNow = false;
       return true;
       }
 
     if (bStopOnFalse && !bResult && callinfo._dispid_info.isvalid ())
       {
-      m_bNotesNotWantedNow = false;
       return false;
       }
 
     }   // end of doing each plugin
 
-  m_bNotesNotWantedNow = false;
   if (bStopOnTrue)
     return false;
   else 

@@ -111,27 +111,49 @@ long CMUSHclientDoc::WindowCreate(LPCTSTR Name,
   if (Width < 0 || Height < 0)
     return eBadParameter;
 
-  MiniWindowMapIterator it = m_MiniWindows.find (Name);
+  string sCreatingPlugin;
+  if (m_CurrentPlugin)
+    sCreatingPlugin = m_CurrentPlugin->m_strID;
 
-  CMiniWindow * pMiniWindow = NULL;
+  MiniWindowMapIterator it = m_MiniWindows.find (Name);
 
   if (it == m_MiniWindows.end ())
     {
-    pMiniWindow = new CMiniWindow ();
-    m_MiniWindows [Name] = pMiniWindow;
+    std::unique_ptr<CMiniWindow> pMiniWindow (new CMiniWindow ());
+    pMiniWindow->Create (Left, Top, Width, Height,
+                         Position, Flags,
+                         BackgroundColour);
+    pMiniWindow->m_sCreatingPlugin.swap (sCreatingPlugin);
+
+    pair<MiniWindowMapIterator, bool> result =
+      m_MiniWindows.insert (make_pair (string (Name), pMiniWindow.get ()));
+
+    ASSERT (result.second);
+    if (!result.second)
+      AfxThrowMemoryException ();
+
+    try
+      {
+      SortWindows ();  // need to re-make sorted list in Z-order
+      }
+    catch (...)
+      {
+      m_MiniWindows.erase (result.first);
+      throw;
+      }
+
+    pMiniWindow.release ();
     }
   else
-    pMiniWindow = it->second;
+    {
+    CMiniWindow * pMiniWindow = it->second;
+    SortWindows ();  // validate the replacement order before changing the window
+    pMiniWindow->Create (Left, Top, Width, Height,
+                         Position, Flags,
+                         BackgroundColour);
+    pMiniWindow->m_sCreatingPlugin.swap (sCreatingPlugin);
+    }
 
-  pMiniWindow->Create (Left, Top, Width, Height,
-                       Position, Flags, 
-                       BackgroundColour);
-
-  pMiniWindow->m_sCreatingPlugin.erase ();
-  if (m_CurrentPlugin)
-    pMiniWindow->m_sCreatingPlugin = m_CurrentPlugin->m_strID;
-
-  SortWindows ();  // need to re-make sorted list in Z-order
   UpdateAllViews (NULL);
 
 	return eOK;
@@ -548,24 +570,27 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
 
   CMiniWindow * mw = it->second;
 
-static bool bInWindowAddHotspot = false;
-
   // don't recurse into infinite loops
-  if (bInWindowAddHotspot)
+  if (mw->m_bAddingHotspot)
     return eItemInUse;
 
-  bInWindowAddHotspot = true;
+  CBoolStateGuard addingHotspotGuard (mw->m_bAddingHotspot, true);
 
   string sPluginID;
+  __int64 iPluginInstanceNumber = 0;
 
-  if (m_CurrentPlugin)                            
+  if (m_CurrentPlugin)
+    {
     sPluginID = m_CurrentPlugin->m_strID;
+    iPluginInstanceNumber = m_CurrentPlugin->m_iPluginInstanceNumber;
+    }
 
   long status;
 
   status = mw->AddHotspot (this,
                            HotspotId,
                            sPluginID,
+                           iPluginInstanceNumber,
                            Left, Top, Right, Bottom,
                            MouseOver,
                            CancelMouseOver,
@@ -598,8 +623,6 @@ static bool bInWindowAddHotspot = false;
       } // end of hotspot found
     } // end of added hotspot OK
 
-
-  bInWindowAddHotspot = false;
 
   return status;
 
@@ -779,9 +802,18 @@ long CMUSHclientDoc::WindowSetZOrder(LPCTSTR Name, long Order)
   if (it == m_MiniWindows.end ())
     return eNoSuchWindow;
 
+  long iOldOrder = it->second->m_ZOrder;
   long status = it->second->SetZOrder (Order);
 
-  SortWindows ();   // need to re-make sorted list in Z-order
+  try
+    {
+    SortWindows ();   // need to re-make sorted list in Z-order
+    }
+  catch (...)
+    {
+    it->second->m_ZOrder = iOldOrder;
+    throw;
+    }
 
   return status;   // now we can return status
 
@@ -1314,11 +1346,10 @@ long CMUSHclientDoc::WindowDelete(LPCTSTR Name)
   if (it->second->m_bExecutingScript)
     return eItemInUse;
 
-  delete it->second;
-
+  CMiniWindow * pWindow = it->second;
+  SortWindows (pWindow);   // rebuild the order before deleting the window
   m_MiniWindows.erase (it);
-
-  SortWindows ();   // need to re-make sorted list in Z-order
+  delete pWindow;
 
   UpdateAllViews (NULL);
 
@@ -1427,11 +1458,17 @@ long CMUSHclientDoc::WindowDragHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR 
     return eNoSuchWindow;
 
   string sPluginID;
+  __int64 iPluginInstanceNumber = 0;
 
-  if (m_CurrentPlugin)                            
+  if (m_CurrentPlugin)
+    {
     sPluginID = m_CurrentPlugin->m_strID;
+    iPluginInstanceNumber = m_CurrentPlugin->m_iPluginInstanceNumber;
+    }
 
-  return it->second->DragHandler (this, HotspotId, sPluginID, MoveCallback, ReleaseCallback, Flags);
+  return it->second->DragHandler (this, HotspotId, sPluginID,
+                                  iPluginInstanceNumber,
+                                  MoveCallback, ReleaseCallback, Flags);
 }   // end of CMUSHclientDoc::WindowDragHandler
 
 
@@ -1443,10 +1480,16 @@ long CMUSHclientDoc::WindowScrollwheelHandler(LPCTSTR Name, LPCTSTR HotspotId, L
     return eNoSuchWindow;
 
   string sPluginID;
+  __int64 iPluginInstanceNumber = 0;
 
-  if (m_CurrentPlugin)                            
+  if (m_CurrentPlugin)
+    {
     sPluginID = m_CurrentPlugin->m_strID;
+    iPluginInstanceNumber = m_CurrentPlugin->m_iPluginInstanceNumber;
+    }
 
-  return it->second->ScrollwheelHandler (this, HotspotId, sPluginID, MoveCallback);
+  return it->second->ScrollwheelHandler (this, HotspotId, sPluginID,
+                                         iPluginInstanceNumber,
+                                         MoveCallback);
 }   // end of CMUSHclientDoc::WindowScrollwheelHandler
 

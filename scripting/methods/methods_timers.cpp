@@ -185,24 +185,12 @@ bool bReplace = false;
       return eScriptNameNotLocated;
     }
 
-  // timer replacement wanted
-  if (bReplace)
-    {
-    // the timer seems to exist - delete its pointer
-    delete timer_item;
-
-    // now delete its entry
-    GetTimerMap ().RemoveKey (strTimerName);
-    }
-
-  // create new timer item and insert in timer map
-  GetTimerMap ().SetAt (strTimerName, timer_item = new CTimer);
- 
-  if ((Flags & eTemporary) == 0)
-    if (!m_CurrentPlugin) // plugin mods don't really count
-      SetModifiedFlag (TRUE);
+  CTimer * old_timer_item = bReplace ? timer_item : NULL;
+  std::unique_ptr<CTimer> new_timer_item (new CTimer);
+  timer_item = new_timer_item.get ();
 
   timer_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  timer_item->nCreationNumber  = App.GetUniqueNumber ();
 
   if (Flags & eAtTime)
     {
@@ -235,7 +223,28 @@ bool bReplace = false;
 
   ResetOneTimer (timer_item);
 
-  SortTimers ();
+  GetTimerMap ().SetAt (strTimerName, timer_item);
+  new_timer_item.release ();
+
+  try
+    {
+    SortTimers ();
+    }
+  catch (...)
+    {
+    if (old_timer_item)
+      GetTimerMap ().SetAt (strTimerName, old_timer_item);
+    else
+      GetTimerMap ().RemoveKey (strTimerName);
+    delete timer_item;
+    throw;
+    }
+
+  RetireTimer (old_timer_item);
+
+  if ((Flags & eTemporary) == 0)
+    if (!m_CurrentPlugin) // plugin mods don't really count
+      SetModifiedFlag (TRUE);
 
 	return eOK;
 }  // end of CMUSHclientDoc::AddTimer
@@ -255,14 +264,11 @@ CTimer * timer_item;
   if (timer_item->bExecutingScript)
     return eItemInUse;
 
-  // the timer seems to exist - delete its pointer
+  set<CTimer *> timersToDelete;
+  timersToDelete.insert (timer_item);
+  SortTimers (&timersToDelete);
+  VERIFY (GetTimerMap ().RemoveKey (strTimerName));
   delete timer_item;
-
-  // now delete its entry
-  if (!GetTimerMap ().RemoveKey (strTimerName))
-    return eTimerNotFound;
-
-  SortTimers ();
 
   if (!m_CurrentPlugin) // plugin mods don't really count
     SetModifiedFlag (TRUE);   // document has changed
@@ -478,7 +484,6 @@ int iHours,
     return eOptionOutOfRange;
 
 CString strTimerName;
-CTimer * timer_item;
 
   // this is a temporary unlabelled timer, make up a name
   strTimerName.Format ("*timer%010ld", CTimer::GetNextTimerSequence ()); 
@@ -492,10 +497,11 @@ CTimer * timer_item;
   if (Seconds < 0 || Seconds > 59.9999)
     return eTimeInvalid;
 
-  // create new timer item and insert in timer map
-  GetTimerMap ().SetAt (strTimerName, timer_item = new CTimer);
+  std::unique_ptr<CTimer> new_timer_item (new CTimer);
+  CTimer * timer_item = new_timer_item.get ();
 
   timer_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  timer_item->nCreationNumber  = App.GetUniqueNumber ();
 
   timer_item->iEveryHour = iHours;
   timer_item->iEveryMinute = iMinutes;
@@ -512,7 +518,26 @@ CTimer * timer_item;
 
   ResetOneTimer (timer_item);
 
-  SortTimers ();
+  CTimer * old_timer_item = NULL;
+  GetTimerMap ().Lookup (strTimerName, old_timer_item);
+  GetTimerMap ().SetAt (strTimerName, timer_item);
+  new_timer_item.release ();
+
+  try
+    {
+    SortTimers ();
+    }
+  catch (...)
+    {
+    if (old_timer_item)
+      GetTimerMap ().SetAt (strTimerName, old_timer_item);
+    else
+      GetTimerMap ().RemoveKey (strTimerName);
+    delete timer_item;
+    throw;
+    }
+
+  RetireTimer (old_timer_item);
 
 	return eOK;
 }   // end of CMUSHclientDoc::DoAfterSpecial
@@ -547,26 +572,35 @@ long CMUSHclientDoc::DoAfterNote(double Seconds, LPCTSTR NoteText)
 
 long CMUSHclientDoc::DeleteTemporaryTimers() 
 {
-long iCount = 0;
 POSITION pos;
 CString strTimerName;
 CTimer * timer_item;
+vector<pair<string, CTimer *> > timersToDelete;
+set<CTimer *> excludedTimers;
 
   for (pos = GetTimerMap ().GetStartPosition(); pos; )
     {
     GetTimerMap ().GetNextAssoc (pos, strTimerName, timer_item);
     if (timer_item->bTemporary && !timer_item->bExecutingScript)
       {
-      delete timer_item;
-      GetTimerMap ().RemoveKey (strTimerName);
-      iCount++;
+      timersToDelete.push_back (make_pair (string ((LPCTSTR) strTimerName), timer_item));
+      excludedTimers.insert (timer_item);
       }
     }   // end of deleting timers
 
-  if (iCount)
-    SortTimers ();
+  if (!timersToDelete.empty ())
+    {
+    SortTimers (&excludedTimers);
+    for (vector<pair<string, CTimer *> >::const_iterator it = timersToDelete.begin ();
+         it != timersToDelete.end ();
+         ++it)
+      {
+      VERIFY (GetTimerMap ().RemoveKey (it->first.c_str ()));
+      delete it->second;
+      }
+    }
 
-	return iCount;
+	return timersToDelete.size ();
 }  // end of CMUSHclientDoc::DeleteTemporaryTimers
 
 
@@ -611,7 +645,8 @@ long CMUSHclientDoc::DeleteTimerGroup(LPCTSTR GroupName)
   if (strlen (GroupName) == 0)
     return 0;
 
-  vector<string> vToDelete;
+  vector<pair<string, CTimer *> > vToDelete;
+  set<CTimer *> excludedTimers;
 
   // count timers
   for (pos = GetTimerMap ().GetStartPosition(); pos; )
@@ -624,22 +659,22 @@ long CMUSHclientDoc::DeleteTimerGroup(LPCTSTR GroupName)
       if (timer_item->bExecutingScript)
         continue;
 
-      delete timer_item;
-
       // remember to delete from timer map
-      vToDelete.push_back ((LPCTSTR) strTimerName);
+      vToDelete.push_back (make_pair (string ((LPCTSTR) strTimerName), timer_item));
+      excludedTimers.insert (timer_item);
       }
     }   // end of timers
 
-  // now delete from map, do it this way in case deleting whilst looping throws things out
-  for (vector<string>::const_iterator it = vToDelete.begin (); 
-       it != vToDelete.end ();
-       it++)
-      GetTimerMap ().RemoveKey (it->c_str ());
-
   if (!vToDelete.empty ())
     {
-    SortTimers ();
+    SortTimers (&excludedTimers);
+    for (vector<pair<string, CTimer *> >::const_iterator it = vToDelete.begin ();
+         it != vToDelete.end ();
+         ++it)
+      {
+      VERIFY (GetTimerMap ().RemoveKey (it->first.c_str ()));
+      delete it->second;
+      }
     if (!m_CurrentPlugin) // plugin mods don't really count
       SetModifiedFlag (TRUE);   // document has changed
     }
@@ -862,13 +897,13 @@ bool bChanged;
       if (Timer_item->iType == CTimer::eInterval)
         {
         Timer_item->iEveryHour    = Timer_item->iAtHour;
-        Timer_item->iEveryMinute  = Timer_item->iAtHour;
+        Timer_item->iEveryMinute  = Timer_item->iAtMinute;
         Timer_item->fEverySecond  = Timer_item->fAtSecond;
         }
       else
         {
         Timer_item->iAtHour    = Timer_item->iEveryHour;
-        Timer_item->iAtMinute  = Timer_item->iEveryHour;
+        Timer_item->iAtMinute  = Timer_item->iEveryMinute;
         Timer_item->fAtSecond  = Timer_item->fEverySecond;
         }
        ResetOneTimer (Timer_item);
@@ -893,6 +928,8 @@ bool bChanged;
     	  return ePluginCannotSetOption;  // not available for writing at all    
 
       // ------ preliminary validation before setting the option
+      DISPID newDispid = DISPID_UNKNOWN;
+      bool bUpdateDispid = false;
 
       if (strOptionName == "script")
         {
@@ -901,12 +938,11 @@ bool bChanged;
 
         if (GetScriptEngine () && !strValue.IsEmpty ())
           {
-          DISPID dispid = DISPID_UNKNOWN;
           CString strMessage;
-          dispid = GetProcedureDispid (strValue, "Timer", TimerName, strMessage);
-          if (dispid == DISPID_UNKNOWN)
+          newDispid = GetProcedureDispid (strValue, "Timer", TimerName, strMessage);
+          if (newDispid == DISPID_UNKNOWN)
             return eScriptNameNotLocated;
-          Timer_item->dispid  = dispid;   // update dispatch ID
+          bUpdateDispid = true;
           }
         } // end of option "script"
 
@@ -919,6 +955,12 @@ bool bChanged;
                         (char *) Timer_item,  
                         strValue,
                         bChanged);
+
+      if (iResult != eOK)
+        return iResult;
+
+      if (bUpdateDispid)
+        Timer_item->dispid = newDispid;
 
       if (bChanged)
         {

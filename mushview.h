@@ -17,6 +17,23 @@
 #define MW_MOUSE_SCROLL_BACK 0x100
 #define MW_MOUSE_MIDDLE 0x200
 
+class CMXPMenuItem
+  {
+  public:
+  CMXPMenuItem ()
+    : m_iAliasCreationNumber (0),
+      m_iPluginInstanceNumber (0) {}
+
+  CString m_strAction;
+  CString m_strMenuText;
+  CString m_strAliasKey;
+  CString m_strPluginID;
+  __int64 m_iAliasCreationNumber;
+  __int64 m_iPluginInstanceNumber;
+  };
+
+typedef vector<CMXPMenuItem> CMXPMenuItemList;
+
 class CMUSHView : public CView
 {
 
@@ -82,6 +99,9 @@ public:
   string m_sPreviousMiniWindow;
 
   BOOL m_mousedover;
+  bool m_bInSelectionChanged;
+  int m_iMXPMenuAction;
+  CMXPMenuItemList m_MXPMenuItems;
 
 // Operations
 public:
@@ -115,7 +135,9 @@ void Blit_Bitmap (CDC* pDestDC, CDC* pSrcDC,
                   const COLORREF TransparentColour = 0);
 
 void Send_Mouse_Event_To_Plugin (DISPID iDispatchID,
+                                 CMiniWindow & miniwindow,
                                  const string m_sPluginID, 
+                                 const __int64 iPluginInstanceNumber,
                                  const string sRoutineName, 
                                  const string HotspotId,
                                  long Flags = 0,

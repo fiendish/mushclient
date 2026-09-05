@@ -195,11 +195,20 @@ void CXMLparser::BuildStructure (CFile * file)
     // find required buffer length
     int length = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q, (m_xmlLength - 2) / 2, 
                     NULL, 0, NULL, NULL);
+    if (length <= 0)
+      ThrowErrorException ("Could not convert Unicode XML file");
+
     // make a new string with enough length to hold it
     char * p = buf2.GetBuffer (length);
     // convert it
-    WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q, (m_xmlLength - 2) / 2, 
-              p, length, NULL, NULL);
+    int iConverted = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q,
+                                          (m_xmlLength - 2) / 2,
+                                          p, length, NULL, NULL);
+    if (iConverted != length)
+      {
+      buf2.ReleaseBuffer (0);
+      ThrowErrorException ("Could not convert Unicode XML file");
+      }
     buf2.ReleaseBuffer (length);
     // copy to our buffer
     m_strxmlBuffer = buf2;
@@ -533,27 +542,24 @@ UINT iFirstLine = m_xmlLine;
       {     // not a declaration, must be an ordinary element
 
       // time to create a new element
-      CXMLelement * pElement = new CXMLelement;
-
-      if (!pElement)
-        ThrowErrorException ("Could not allocate memory for XML parsing of element %s",
-                              (LPCTSTR) strName);
+      std::unique_ptr<CXMLelement> pElement (new CXMLelement);
 
       // remember its name
       pElement->strName = strPrefix + strName;
       pElement->iLine = iLine;
 
-      parent.ChildrenList.AddTail (pElement);    // add to parent's list of children
+      parent.ChildrenList.AddTail (pElement.get ());    // add to parent's list of children
+      CXMLelement * pPublishedElement = pElement.release ();
 
       // OK, we have a new sibling for our parent, let's see if it has any attributes ...
 
-      ProcessAttributes (*pElement);  // process its attributes
+      ProcessAttributes (*pPublishedElement);  // process its attributes
 
       // hmm - we have now got something like <blah> ...
       // drop down to find children for it - unless 'empty' element
 
-      if (!pElement->bEmpty)
-        ProcessNode (*pElement);
+      if (!pPublishedElement->bEmpty)
+        ProcessNode (*pPublishedElement);
 
       }   // end of non-declaration
     } // end of processing buffer
@@ -766,11 +772,8 @@ CString strValue;
 
     strValue = GetValue ("attribute", strName);
 
-    pAttribute = new CAttribute;
-
-    if (!pAttribute)
-      ThrowErrorException ("Could not allocate memory for XML parsing of attribute %s",
-                            (LPCTSTR) strName);
+    std::unique_ptr<CAttribute> newAttribute (new CAttribute);
+    pAttribute = newAttribute.get ();
 
     pAttribute->strName = strName;
     pAttribute->strValue = ReplaceEntities (strValue);
@@ -778,6 +781,7 @@ CString strValue;
 
     // add to map
     node.AttributeMap.SetAt (strName, pAttribute);
+    newAttribute.release ();
 
     } // end of looking for attributes
 

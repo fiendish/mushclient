@@ -47,6 +47,7 @@ public:
 
 
   bool m_bChanged;    // the user has typed something
+  bool m_bNotifyingPluginCommandChanged;
   
   CString m_strPartialCommand;  // for Alt+UpArrow
 
@@ -75,7 +76,8 @@ public:
 
   void NotifyPluginCommandChanged ();
 
-  void AddToCommandHistory (const CString & strCommand);
+  void AddToCommandHistory (const CString & strCommand,
+                            const bool bRespectNoEcho = true);
 
   void AdjustCommandWindowSize (void);
   void CheckForSelectionChange (void);

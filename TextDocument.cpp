@@ -35,10 +35,15 @@ CTextDocument::CTextDocument()
   :	m_eventFileChanged(FALSE, TRUE)
 {
   m_bInFileChanged = false;
+  m_bFileChangedPending = false;
+  m_iActiveOperations = 0;
+  m_bClosePending = false;
+  m_bCloseQueued = false;
   m_pThread = NULL;
   m_pRelatedWorld = NULL;
 
   m_iUniqueDocumentNumber = 0;
+  m_iTextDocumentNumber = App.GetUniqueNumber ();
   m_strFontName = App.m_strDefaultInputFont;
   m_iFontSize = App.m_iDefaultInputFontHeight;
   m_iFontWeight = App.m_iDefaultInputFontWeight;
@@ -139,18 +144,40 @@ void CTextDocument::OnUpdateStatusModified(CCmdUI* pCmdUI)
 
 void CTextDocument::OnCloseDocument() 
 {
+  if (m_iActiveOperations > 0)
+    {
+    m_bClosePending = true;
+    return;
+    }
+
   KillThread (m_pThread, m_eventFileChanged);
 	CDocument::OnCloseDocument();
 }
 
+void CTextDocument::BeginOperation (void)
+  {
+  m_iActiveOperations++;
+  }
+
+void CTextDocument::EndOperation (void)
+  {
+  ASSERT (m_iActiveOperations > 0);
+  m_iActiveOperations--;
+
+  if (m_iActiveOperations == 0 && m_bClosePending && !m_bCloseQueued)
+    {
+    m_bCloseQueued = true;
+    App.DeferTextDocumentClose (m_iTextDocumentNumber);
+    }
+  }
 
 // ------------------- file change monitoring thread -------------------------
 
-void ThreadFunc(LPVOID pParam)
+unsigned __stdcall ThreadFunc(void * pParam)
 {
   CThreadData*	pData = (CThreadData*) pParam;
 	char * strDir = pData->m_strFilename;
-  DWORD pDoc = pData->m_pDoc;
+  __int64 iDocumentNumber = pData->m_iDocumentNumber;
 	char * p = strrchr (strDir, '\\');
 	if (!p)
 		p = strrchr (strDir, ':');   // why?
@@ -168,7 +195,7 @@ void ThreadFunc(LPVOID pParam)
 
   // Return now if ::FindFirstChangeNotification failed.
   if (hChange == INVALID_HANDLE_VALUE)
-    return;
+    return 0;
 
 	HANDLE	aHandles[2];
 	aHandles[0] = hChange;
@@ -182,10 +209,16 @@ void ThreadFunc(LPVOID pParam)
 		switch ((::WaitForMultipleObjects(2, aHandles, FALSE, INFINITE)))
 		{
 		case 0:
+			{
 			// Respond to a change notification.
-			::PostMessage(hWnd, WM_USER_FILE_CONTENTS_CHANGED, (WPARAM) pDoc, 0);
+			CFileChangeNotification * pNotification = new CFileChangeNotification;
+      pNotification->m_iDocumentNumber = iDocumentNumber;
+      if (!::PostMessage(hWnd, WM_USER_FILE_CONTENTS_CHANGED,
+                         (WPARAM) pNotification, 0))
+        delete pNotification;
 			::FindNextChangeNotification(hChange);
 			break;
+			}
 
 		default:
 			// Kill this thread (m_event became signaled).
@@ -196,7 +229,7 @@ void ThreadFunc(LPVOID pParam)
 
 	// Close the file change notification handle and return.
 	::FindCloseChangeNotification(hChange);
-	return;
+	return 0;
 }
 
 void KillThread (HANDLE & pThread, CEvent & eventFileChanged)
@@ -208,31 +241,55 @@ void KillThread (HANDLE & pThread, CEvent & eventFileChanged)
 		eventFileChanged.SetEvent();
 
     // wait for thread to go away, or 10 seconds, whichever is sooner
-		DWORD waitstatus = ::WaitForSingleObject(pThread, 10000L);
+	DWORD waitstatus = ::WaitForSingleObject(pThread, 10000L);
 
-    // if unable to terminate thread properly, get rid of the blasted thing
-    if (waitstatus == WAIT_TIMEOUT || waitstatus == WAIT_FAILED)   
-      TerminateThread (pThread, 1);
+    if (waitstatus == WAIT_TIMEOUT)
+      waitstatus = ::WaitForSingleObject (pThread, INFINITE);
 
-		pThread = NULL;
+    if (waitstatus == WAIT_FAILED)
+      AfxThrowResourceException ();
+
+    if (waitstatus != WAIT_OBJECT_0)
+      AfxThrowResourceException ();
+
+    if (!CloseHandle (pThread))
+      AfxThrowResourceException ();
+
+	pThread = NULL;
 	  }
   } // end of KillThread
 
 // Create script source file monitoring thread
 //
-HANDLE CreateMonitoringThread(const char * sName, DWORD pDoc, CEvent & eventFileChanged)
+HANDLE CreateMonitoringThread(const char * sName, __int64 iDocumentNumber, CEvent & eventFileChanged)
 {
   HANDLE pThread;
 
 	CThreadData*	pData = new CThreadData;
+  try
+    {
 	pData->m_strFilename = new char [strlen (sName) + 1];
+    }
+  catch (...)
+    {
+    delete pData;
+    throw;
+    }
   strcpy (pData->m_strFilename, sName);
 	pData->m_hWnd = Frame.GetSafeHwnd ();
 	pData->m_hEvent = eventFileChanged;
-  pData->m_pDoc = pDoc;
+  pData->m_iDocumentNumber = iDocumentNumber;
 	eventFileChanged.ResetEvent();
 
-	pThread = (HANDLE) _beginthread (ThreadFunc, 0, pData);
+  uintptr_t iThread = _beginthreadex (NULL, 0, ThreadFunc, pData, 0, NULL);
+  if (iThread == 0)
+    {
+    delete [] pData->m_strFilename;
+    delete pData;
+    AfxThrowResourceException ();
+    }
+
+	pThread = (HANDLE) iThread;
   SetThreadPriority (pThread, THREAD_PRIORITY_IDLE);
 
   return pThread;
@@ -250,7 +307,8 @@ void CTextDocument::OnFileChanged(void)
 	if (m_bInFileChanged)
 		return;
 
-  m_bInFileChanged = true;
+	CTextDocumentOperationGuard operationGuard (this);
+	CBoolStateGuard fileChangedGuard (m_bInFileChanged, true);
 
 	// Check if this file has changed
 	CFileStatus	status;
@@ -265,7 +323,12 @@ void CTextDocument::OnFileChanged(void)
 		CString	strText;
     strText = TFormat ("The file \"%s\" has been modified. Do you wish to reload it?",
       (LPCTSTR) GetPathName ());
-    if (::TMessageBox (strText, MB_YESNO | MB_ICONQUESTION) == IDYES)
+    int iAnswer = ::TMessageBox (strText, MB_YESNO | MB_ICONQUESTION);
+
+    if (m_bClosePending)
+      return;
+
+    if (iAnswer == IDYES)
       {
 		  CWaitCursor	wait;
 
@@ -287,16 +350,19 @@ void CTextDocument::OnFileChanged(void)
       } // end of approving modification or wanting it anyway
     } // end of time changing
 
-	m_bInFileChanged = false;
 }
 
 
 // kill the monitoring thread during the save
 BOOL CTextDocument::DoSave(LPCTSTR lpszPathName, BOOL bReplace)
   {
+  CTextDocumentOperationGuard operationGuard (this);
   KillThread (m_pThread, m_eventFileChanged);
 
   BOOL bResult = CDocument::DoSave (lpszPathName, bReplace);
+
+  if (m_bClosePending)
+    return bResult;
 
   // monitor this file again
   if (!GetPathName ().IsEmpty ())
@@ -318,13 +384,16 @@ void CTextDocument::CreateMonitoringThread(const char * sName)
   m_timeFileMod = status.m_mtime;
 
   // create the thread
-  m_pThread = ::CreateMonitoringThread (sName, (DWORD) this, m_eventFileChanged);
+  m_pThread = ::CreateMonitoringThread
+    (sName, m_iTextDocumentNumber, m_eventFileChanged);
 
   UpdateAllViews  (NULL);     // force window title to be redrawn
 }
 
 void CTextDocument::OnFileOpen() 
 {
+	CTextDocumentOperationGuard operationGuard (this);
+
 	CString title;
 	VERIFY(title.LoadString(AFX_IDS_OPENFILE));
 
@@ -341,7 +410,7 @@ void CTextDocument::OnFileOpen()
                  NULL);        // parent window
 
 	dlgFile.m_ofn.lpstrTitle = title;
-	dlgFile.m_ofn.lpstrFile = fileName.GetBuffer(_MAX_PATH);
+	SetFileDialogFileName (dlgFile, fileName, "");
   ChangeToFileBrowsingDirectory ();
 	int nResult = dlgFile.DoModal();
   ChangeToStartupDirectory ();
@@ -464,6 +533,8 @@ CMUSHclientDoc * pDoc = FindWorld ();
 
 BOOL CTextDocument::SaveModified() 
 {
+	CTextDocumentOperationGuard operationGuard (this);
+
 // don't bother asking if they want to save an empty document
 CTextView* pView = (CTextView*) m_viewList.GetHead();
   
