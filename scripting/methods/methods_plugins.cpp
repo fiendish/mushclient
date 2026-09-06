@@ -36,56 +36,6 @@
 
 // gets our own plugin id
 
-static PluginListIterator FindPluginInstanceInList (
-  CPluginList & plugins,
-  const CString & strID,
-  const __int64 iInstanceNumber)
-  {
-  for (PluginListIterator it = plugins.begin (); it != plugins.end (); ++it)
-    if ((*it)->m_iPluginInstanceNumber == iInstanceNumber &&
-        (*it)->m_strID.CompareNoCase (strID) == 0)
-      return it;
-  return plugins.end ();
-  }
-
-static void RestoreReloadPlugin (
-  CPluginList & plugins,
-  CPluginList & heldPlugin,
-  CPlugin * pPlugin,
-  const bool bHavePrevious,
-  const CString & strPreviousID,
-  const __int64 iPreviousInstanceNumber,
-  const bool bHaveNext,
-  const CString & strNextID,
-  const __int64 iNextInstanceNumber)
-  {
-  PluginListIterator restorePosition = plugins.end ();
-  if (bHaveNext)
-    restorePosition = FindPluginInstanceInList (plugins,
-                                                strNextID,
-                                                iNextInstanceNumber);
-  if (restorePosition == plugins.end () && bHavePrevious)
-    {
-    PluginListIterator previous =
-      FindPluginInstanceInList (plugins,
-                                strPreviousID,
-                                iPreviousInstanceNumber);
-    if (previous != plugins.end ())
-      {
-      restorePosition = previous;
-      ++restorePosition;
-      }
-    }
-  if (restorePosition == plugins.end ())
-    for (restorePosition = plugins.begin ();
-         restorePosition != plugins.end () &&
-           pPlugin->m_iSequence >= (*restorePosition)->m_iSequence;
-         ++restorePosition)
-      { }
-
-  plugins.splice (restorePosition, heldPlugin, heldPlugin.begin ());
-  }
-
 BSTR CMUSHclientDoc::GetPluginID() 
 {
 	CString strResult;
@@ -286,31 +236,9 @@ CPlugin * pPlugin = GetPlugin (PluginID);
     return eNoSuchPlugin;
 
   CString strName = pPlugin->m_strSource;
-  bool bHavePrevious = false;
-  CString strPreviousID;
-  __int64 iPreviousInstanceNumber = 0;
-  if (pit != m_PluginList.begin ())
-    {
-    PluginListIterator previous = pit;
-    --previous;
-    bHavePrevious = true;
-    strPreviousID = (*previous)->m_strID;
-    iPreviousInstanceNumber = (*previous)->m_iPluginInstanceNumber;
-    }
-  bool bHaveNext = false;
-  CString strNextID;
-  __int64 iNextInstanceNumber = 0;
-  PluginListIterator next = pit;
-  ++next;
-  if (next != m_PluginList.end ())
-    {
-    bHaveNext = true;
-    strNextID = (*next)->m_strID;
-    iNextInstanceNumber = (*next)->m_iPluginInstanceNumber;
-    }
-
-  CPluginList heldPlugin;
-  heldPlugin.splice (heldPlugin.begin (), m_PluginList, pit);
+  m_PluginList.erase (pit);
+  // Close and save state before the replacement reads it or runs install scripts.
+  delete pPlugin;
 
   {
   CPluginContextGuard pluginContextGuard (this, NULL); // reload outside the calling plugin
@@ -323,51 +251,16 @@ CPlugin * pPlugin = GetPlugin (PluginID);
 
     catch (CFileException * e)
       {
-      RestoreReloadPlugin (m_PluginList,
-                           heldPlugin,
-                           pPlugin,
-                           bHavePrevious,
-                           strPreviousID,
-                           iPreviousInstanceNumber,
-                           bHaveNext,
-                           strNextID,
-                           iNextInstanceNumber);
       e->Delete ();
       return ePluginFileNotFound;
       } // end of catching a file exception
 
     catch (CArchiveException* e)
       {
-      RestoreReloadPlugin (m_PluginList,
-                           heldPlugin,
-                           pPlugin,
-                           bHavePrevious,
-                           strPreviousID,
-                           iPreviousInstanceNumber,
-                           bHaveNext,
-                           strNextID,
-                           iNextInstanceNumber);
       e->Delete ();
       return eProblemsLoadingPlugin;
       }
-
-    catch (...)
-      {
-      RestoreReloadPlugin (m_PluginList,
-                           heldPlugin,
-                           pPlugin,
-                           bHavePrevious,
-                           strPreviousID,
-                           iPreviousInstanceNumber,
-                           bHaveNext,
-                           strNextID,
-                           iNextInstanceNumber);
-      throw;
-      }
   }
-
-  heldPlugin.pop_front ();
-  delete pPlugin;
 
   PluginListChanged ();
 
