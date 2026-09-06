@@ -1096,31 +1096,14 @@ int iStartCol,
     iEndCol;
 POSITION pos;
 
-  OneShotItemMap triggersToEvaluate;
-  for (int iTrigger = 0; iTrigger < GetTriggerArray ().GetSize (); iTrigger++)
-    triggersToEvaluate.push_back
-      (OneShotItem (m_CurrentPlugin,
-                    (const char *) GetTriggerArray () [iTrigger]->strInternalName,
-                    GetTriggerArray () [iTrigger]->nCreationNumber));
-
-  for (OneShotItemMap::const_iterator trigger_it = triggersToEvaluate.begin ();
-       trigger_it != triggersToEvaluate.end ();
-       ++trigger_it)
+  for (iItem = 0; iItem < GetTriggerArray ().GetSize (); iItem++)
     {
-    trigger_item = NULL;
-    if (!GetTriggerMap ().Lookup (trigger_it->sItemKey.c_str (), trigger_item) ||
-        trigger_item->nCreationNumber != trigger_it->iCreationNumber)
-      continue;
-
-    for (iItem = 0; iItem < GetTriggerArray ().GetSize (); iItem++)
-      if (GetTriggerArray () [iItem] == trigger_item)
-        break;
-    if (iItem >= GetTriggerArray ().GetSize ())
-      continue;
+    trigger_item = GetTriggerArray () [iItem];
+    CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
+    CTriggerExecutionGuard executingGuard (this, trigger_item);
 
     trigger_item = EvaluateTrigger (strCurrentLine,
                                         strResponse,
-                                        iItem,
                                         iStartCol,
                                         iEndCol,
                                         trigger_item);
@@ -1198,8 +1181,6 @@ POSITION pos;
 
         } // end of some matching wanted
 
-      CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
-      CTriggerExecutionGuard executingGuard (this, trigger_item);
       __int64 iOutputGeneration = m_iOutputGeneration;
 
     // copy the wildcard contents to the clipboard, if required
@@ -1585,8 +1566,6 @@ POSITION pos;
         break;
 
       }   // end of successful evaluation
-    else
-      break;
     } // end of processing triggers
 
 

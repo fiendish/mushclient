@@ -1913,10 +1913,9 @@ public:
 
   CTrigger * EvaluateTrigger (const CString & input,
                               CString & output,
-                              int & iItem,
                               int & iStartCol,
                               int & iEndCol,
-                              const CTrigger * pOnlyTrigger = NULL);
+                              CTrigger * trigger_item);
 
   CString FixSendText (const CString strSource, 
                             const int iSendTo,

@@ -348,16 +348,11 @@ string FixWildcard (const string sWildcard,       // the wildcard
 
 CTrigger * CMUSHclientDoc::EvaluateTrigger (const CString & input,
                                             CString & output,
-                                            int & iItem,  // which one to start with
                                             int & iStartCol,
                                             int & iEndCol,
-                                            const CTrigger * pOnlyTrigger)
-  {          
+                                            CTrigger * trigger_item)
+  {
 //  timer t ("EvaluateTrigger");
-
-bool matched = false;
-CTrigger * trigger_item = NULL;
-int iCount = GetTriggerArray ().GetSize ();    // how many there are
 
   output.Empty ();
 
@@ -370,187 +365,171 @@ int iCount = GetTriggerArray ().GetSize ();    // how many there are
   if (!m_enable_triggers)
     return NULL;    // error return
 
-  for ( ; iItem < iCount; iItem++)
+  if (!trigger_item->bEnabled)
+    return NULL;   // ignore non-enabled triggers
+
+  m_iTriggersEvaluatedCount++;  // count evaluations
+
+  // do regular expression, if available
+  if (trigger_item->regexp)
     {
-    trigger_item = GetTriggerArray () [iItem];
+    CString strTarget;
 
-    if (pOnlyTrigger && trigger_item != pOnlyTrigger)
-      continue;
-
-    if (!trigger_item->bEnabled)
-      continue;   // ignore non-enabled triggers
-
-    m_iTriggersEvaluatedCount++;  // count evaluations
-
-    // do regular expression, if available
-    if (trigger_item->regexp)
+    if (trigger_item->bMultiLine)
       {
-      CString strTarget;
-      
-      if (trigger_item->bMultiLine)
-        {
 //        timer t ("Assembling text");
-        string s;
+      string s;
 
-        // can't do it if not enough lines received (hmm, maybe not)
+      // can't do it if not enough lines received (hmm, maybe not)
 //        if (m_sRecentLines.size () < trigger_item->iLinesToMatch)
 //          continue;
 
-        // assemble multi-line match text
-        int iPos = m_sRecentLines.size () - trigger_item->iLinesToMatch;
-        if (iPos < 0)
-          iPos = 0;
+      // assemble multi-line match text
+      int iPos = m_sRecentLines.size () - trigger_item->iLinesToMatch;
+      if (iPos < 0)
+        iPos = 0;
 
-        for (int iCount = 0; 
-              iCount < trigger_item->iLinesToMatch &&
-              iPos != m_sRecentLines.size ()
-              ; iPos++, iCount++
-            )
-          {
-          s += m_sRecentLines [iPos];
-          s += '\n';  // multi-line triggers always end in newlines (new in version 3.50)
-          } // end of assembling text
-        strTarget = s.c_str ();
-        }
-      else
-        strTarget = input;
-
-  /*
-  New feature in 3.18 - trigger match strings can incorporate variables in 
-  the "trigger" portion. Do a quick scan to see if this is the case, and if
-  so, recompile the regexp with substituted variables.
-
-  Note, non-existent and empty variables will be silently dropped.
-
-  */
-
-      if (trigger_item->bExpandVariables &&
-          trigger_item->trigger.Find ('@') != -1)
+      for (int iCount = 0;
+            iCount < trigger_item->iLinesToMatch &&
+            iPos != m_sRecentLines.size ()
+            ; iPos++, iCount++
+          )
         {
-        CString strOutput = FixSendText (trigger_item->trigger, 
-                                        trigger_item->iSendTo,
-                                        NULL,     // regexp
-                                        GetLanguage (),
-                                        false,    // lower-case wildcards
-                                        true,     // expand variables
-                                        false,    // expand wildcards
-                                        true,     // convert regexps
-                                        trigger_item->bRegexp,  // is it regexp or normal?
-                                        false,         // don't throw exceptions
-                                        NULL);    // no name substitution in match text
+        s += m_sRecentLines [iPos];
+        s += '\n';  // multi-line triggers always end in newlines (new in version 3.50)
+        } // end of assembling text
+      strTarget = s.c_str ();
+      }
+    else
+      strTarget = input;
+
+/*
+New feature in 3.18 - trigger match strings can incorporate variables in
+the "trigger" portion. Do a quick scan to see if this is the case, and if
+so, recompile the regexp with substituted variables.
+
+Note, non-existent and empty variables will be silently dropped.
+
+*/
+
+    if (trigger_item->bExpandVariables &&
+        trigger_item->trigger.Find ('@') != -1)
+      {
+      CString strOutput = FixSendText (trigger_item->trigger,
+                                      trigger_item->iSendTo,
+                                      NULL,     // regexp
+                                      GetLanguage (),
+                                      false,    // lower-case wildcards
+                                      true,     // expand variables
+                                      false,    // expand wildcards
+                                      true,     // convert regexps
+                                      trigger_item->bRegexp,  // is it regexp or normal?
+                                      false,         // don't throw exceptions
+                                      NULL);    // no name substitution in match text
 
 
-        LONGLONG iOldTimeTaken = 0;
-        long iOldMatchAttempts = 0;
+      LONGLONG iOldTimeTaken = 0;
+      long iOldMatchAttempts = 0;
 
 
-        // remember time taken to execute them
+      // remember time taken to execute them
 
-        if (trigger_item->regexp)
-          {
-          iOldTimeTaken = trigger_item->regexp->iTimeTaken;
-          iOldMatchAttempts = trigger_item->regexp->m_iMatchAttempts;
-          }
+      if (trigger_item->regexp)
+        {
+        iOldTimeTaken = trigger_item->regexp->iTimeTaken;
+        iOldMatchAttempts = trigger_item->regexp->m_iMatchAttempts;
+        }
 
-      // all triggers are now regular expressions
+    // all triggers are now regular expressions
 
-        CString strRegexp; 
+      CString strRegexp;
 
-        if (trigger_item->bRegexp)
-          strRegexp = strOutput;
-        else
-          strRegexp = ConvertToRegularExpression (strOutput);
+      if (trigger_item->bRegexp)
+        strRegexp = strOutput;
+      else
+        strRegexp = ConvertToRegularExpression (strOutput);
 
-        std::unique_ptr<t_regexp> newRegexp;
-        try
-          {
-          newRegexp.reset (regcomp (strRegexp,
-                                    (trigger_item->ignore_case  ? PCRE_CASELESS : 0) |
-                                    (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
-                                    (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                   ));
-          } // end of try
-    	  catch(CException* e)
-          {
-          e->ReportError ();
-          e->Delete ();
-          continue;
-          }   // end of catch
-
-        // add back execution time
-        if (newRegexp.get ())
-          {
-          newRegexp->iTimeTaken += iOldTimeTaken;
-          newRegexp->m_iMatchAttempts += iOldMatchAttempts;
-          }
-
-        delete trigger_item->regexp;
-        trigger_item->regexp = newRegexp.release ();
-
-        } // end of variable substitution
-
+      std::unique_ptr<t_regexp> newRegexp;
       try
         {
-//        timer t ("Evaluating regular expression");
-        if (!regexec (trigger_item->regexp, strTarget))
-          continue;
+        newRegexp.reset (regcomp (strRegexp,
+                                  (trigger_item->ignore_case  ? PCRE_CASELESS : 0) |
+                                  (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
+                                  (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                 ));
         } // end of try
-    	catch(CException* e)
+      catch(CException* e)
         {
         e->ReportError ();
         e->Delete ();
-        continue;
+        return NULL;
         }   // end of catch
 
-      iStartCol = trigger_item->regexp->m_vOffsets [0];
-      iEndCol   = trigger_item->regexp->m_vOffsets [1];
+      // add back execution time
+      if (newRegexp.get ())
+        {
+        newRegexp->iTimeTaken += iOldTimeTaken;
+        newRegexp->m_iMatchAttempts += iOldMatchAttempts;
+        }
 
-      trigger_item->wildcards.clear ();
+      delete trigger_item->regexp;
+      trigger_item->regexp = newRegexp.release ();
 
-      for (int iWildcard = 0; 
-           iWildcard < MAX_WILDCARDS; 
-           iWildcard++)
-        trigger_item->wildcards.push_back 
-                        (
-                        FixWildcard (trigger_item->regexp->GetWildcard (iWildcard),
-                                     trigger_item->bLowercaseWildcard,
-                                     trigger_item->iSendTo,
-                                     m_strLanguage)
-                        );
-          
-      }
-    else
-      continue;   // no regexp, ignore trigger
+      } // end of variable substitution
 
-    matched = true;
+    try
+      {
+//        timer t ("Evaluating regular expression");
+      if (!regexec (trigger_item->regexp, strTarget))
+        return NULL;
+      } // end of try
+    catch(CException* e)
+      {
+      e->ReportError ();
+      e->Delete ();
+      return NULL;
+      }   // end of catch
 
-    trigger_item->tWhenMatched = CTime::GetCurrentTime(); // when it matched        
+    iStartCol = trigger_item->regexp->m_vOffsets [0];
+    iEndCol   = trigger_item->regexp->m_vOffsets [1];
+
+    trigger_item->wildcards.clear ();
+
+    for (int iWildcard = 0;
+         iWildcard < MAX_WILDCARDS;
+         iWildcard++)
+      trigger_item->wildcards.push_back
+                      (
+                      FixWildcard (trigger_item->regexp->GetWildcard (iWildcard),
+                                   trigger_item->bLowercaseWildcard,
+                                   trigger_item->iSendTo,
+                                   m_strLanguage)
+                      );
+
+    }
+  else
+    return NULL;   // no regexp, ignore trigger
+
+  trigger_item->tWhenMatched = CTime::GetCurrentTime(); // when it matched
 
 // copy contents to output area, replacing %1, %2 etc. with appropriate contents
 
-    // get unlabelled trigger's internal name
-    const char * pLabel = trigger_item->strLabel;
-    if (pLabel [0] == 0)
-       pLabel = trigger_item->strInternalName;
+  // get unlabelled trigger's internal name
+  const char * pLabel = trigger_item->strLabel;
+  if (pLabel [0] == 0)
+     pLabel = trigger_item->strInternalName;
 
-    output += FixSendText (::FixupEscapeSequences (trigger_item->contents), 
-                            trigger_item->iSendTo,    // where it is going
-                            trigger_item->regexp,     // regexp
-                            GetLanguage (),           // eg. vbscript
-                            trigger_item->bLowercaseWildcard,    // lower-case wildcards
-                            trigger_item->bExpandVariables,     // expand variables
-                            true,      // expand wildcards
-                            false,     // convert regexps
-                            false,     // is it regexp or normal?
-                            false,         // don't throw exceptions
-                            pLabel);   
-
-    break;   // break out of loop, we have a trigger match
-
-    } // end of search each trigger item
-
-  if (!matched)
-    return NULL;
+  output += FixSendText (::FixupEscapeSequences (trigger_item->contents),
+                          trigger_item->iSendTo,    // where it is going
+                          trigger_item->regexp,     // regexp
+                          GetLanguage (),           // eg. vbscript
+                          trigger_item->bLowercaseWildcard,    // lower-case wildcards
+                          trigger_item->bExpandVariables,     // expand variables
+                          true,      // expand wildcards
+                          false,     // convert regexps
+                          false,     // is it regexp or normal?
+                          false,         // don't throw exceptions
+                          pLabel);
 
   return trigger_item;
   } // end of CMUSHclientDoc::EvaluateTrigger 
@@ -1101,21 +1080,11 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
                             OneShotItemMap & mapOneShotItems)
   {
 
-  OneShotItemMap aliasesToEvaluate;
   for (int iAlias = 0; iAlias < GetAliasArray ().GetSize (); iAlias++)
-    aliasesToEvaluate.push_back
-      (OneShotItem (m_CurrentPlugin,
-                    (const char *) GetAliasArray () [iAlias]->strInternalName,
-                    GetAliasArray () [iAlias]->nCreationNumber));
-
-  for (OneShotItemMap::const_iterator alias_it = aliasesToEvaluate.begin ();
-       alias_it != aliasesToEvaluate.end ();
-       ++alias_it)
     {
-    CAlias * alias_item = NULL;
-    if (!GetAliasMap ().Lookup (alias_it->sItemKey.c_str (), alias_item) ||
-        alias_item->nCreationNumber != alias_it->iCreationNumber)
-      continue;
+    CAlias * alias_item = GetAliasArray () [iAlias];
+    CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
+    CAliasExecutionGuard executingGuard (this, alias_item);
 
   // ignore non-enabled aliases
 
@@ -1146,8 +1115,6 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
     if (!bMatched) // no match, try next one
       continue;   
 
-    CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
-    CAliasExecutionGuard executingGuard (this, alias_item);
     CString strAliasLabel = alias_item->strLabel;
     if (strAliasLabel.IsEmpty ())
       strAliasLabel = alias_item->strInternalName;
