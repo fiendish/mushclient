@@ -71,7 +71,8 @@ adding a host patch.
 
 The `LuaCOM source parity` CI job checks the exact file inventory, bytes, and
 staged Git modes against a fresh reconstruction. It also tests the import and
-publication tools and runs the pinned upstream connection tests against the
+publication tools, checks that the native project includes every imported C/C++
+source and header, and runs the pinned upstream connection tests against the
 host source. Both native Windows builds depend on this job.
 
 The `Update LuaCOM` workflow checks upstream master daily at 09:17 UTC. It can
