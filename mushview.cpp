@@ -3915,6 +3915,23 @@ t_print_control_block pcb;
                             bHaveSelection))
     return;
 
+  class CPrintDocumentGuard
+    {
+    public:
+      CPrintDocumentGuard (t_print_control_block & controlBlock) :
+        m_controlBlock (controlBlock), m_bFinished (false) { }
+      ~CPrintDocumentGuard ()
+        {
+        if (!m_bFinished)
+          print_abort_document (m_controlBlock);
+        }
+      void Finish () { m_bFinished = true; }
+
+    private:
+      t_print_control_block & m_controlBlock;
+      bool m_bFinished;
+    } printDocumentGuard (pcb);
+
   Frame.SetStatusMessageNow (Translate ("Printing world..."));
 
   unsigned int current_line = App.m_nPrinterLinesPerPage;   // force new page immediately
@@ -4099,6 +4116,7 @@ t_print_control_block pcb;
   print_end_page (pcb);
   
   print_end_document (pcb);
+  printDocumentGuard.Finish ();
 
   if (pcb.cancelled)
     ::TMessageBox ("Printing cancelled");
