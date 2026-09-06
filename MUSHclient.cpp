@@ -1000,15 +1000,106 @@ BOOL CMUSHclientApp::SaveAllModified()
 	return CWinApp::SaveAllModified();
 }
 
+void CMUSHclientApp::DeferMessageUntilIdle (const MSG & msg,
+                                            __int64 iDocumentNumber,
+                                            HANDLE hLookup,
+                                            unsigned long iGeneration,
+                                            long iChatID)
+{
+  CDeferredMessage deferred;
+  deferred.m_msg = msg;
+  deferred.m_iDocumentNumber = iDocumentNumber;
+  deferred.m_hLookup = hLookup;
+  deferred.m_iGeneration = iGeneration;
+  deferred.m_iChatID = iChatID;
+  m_DeferredMessages.push_back (deferred);
+}
+
+void CMUSHclientApp::DeferTextDocumentClose (__int64 iDocumentNumber)
+{
+  m_DeferredTextDocumentCloses.push_back (iDocumentNumber);
+}
+
 BOOL CMUSHclientApp::OnIdle(LONG lCount) 
 {
 	
 	if (CWinApp::OnIdle(lCount))
     return 1;
 
-CWnd* wnd = Frame.GetForegroundWindow( );
+  // A text document can request its own close from a nested modal loop.
+  // Close it only after the active document operation has returned.
+  if (!m_DeferredTextDocumentCloses.empty ())
+    {
+    __int64 iDocumentNumber = m_DeferredTextDocumentCloses.front ();
+    m_DeferredTextDocumentCloses.pop_front ();
 
-  if (!wnd)
+    for (POSITION pos = m_pNormalDocTemplate->GetFirstDocPosition(); pos; )
+      {
+      CTextDocument * pDoc =
+        (CTextDocument *) m_pNormalDocTemplate->GetNextDoc (pos);
+
+      if (pDoc->m_iTextDocumentNumber == iDocumentNumber)
+        {
+        pDoc->m_bCloseQueued = false;
+        pDoc->OnCloseDocument ();
+        break;
+        }
+      }
+
+    return 1;
+    }
+
+  // Process one application notification only after the main message loop
+  // reaches this safe point.
+  if (!m_DeferredMessages.empty ())
+    {
+    CDeferredMessage msg = m_DeferredMessages.front ();
+    m_DeferredMessages.pop_front ();
+
+    if (msg.m_msg.hwnd == Frame.GetSafeHwnd () && ::IsWindow (msg.m_msg.hwnd))
+      Frame.ProcessDeferredMessage (msg);
+
+    return 1;
+    }
+
+  // Script file notifications can arrive inside nested modal loops. Reload
+  // only after the main message loop reaches this safe point.
+  POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CMUSHclientDoc* pDoc =
+      (CMUSHclientDoc*) m_pWorldDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_bScriptFileChangedPending &&
+        !pDoc->m_bInScriptFileChanged)
+      {
+      pDoc->m_bScriptFileChangedPending = false;
+      pDoc->OnScriptFileChanged ();
+      return 1;
+      }
+    }
+
+  // Text file notifications can also arrive inside nested modal loops.
+  // Ask about the reload only after the main message loop reaches this point.
+  pos = m_pNormalDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CTextDocument* pDoc =
+      (CTextDocument*) m_pNormalDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_bFileChangedPending && !pDoc->m_bInFileChanged)
+      {
+      pDoc->m_bFileChangedPending = false;
+      pDoc->OnFileChanged ();
+      return 1;
+      }
+    }
+
+HWND hwndForeground = ::GetForegroundWindow( );
+
+  if (!hwndForeground)
     return 0;
 
 // update activity window if required
@@ -1027,9 +1118,9 @@ CWnd* wnd = Frame.GetForegroundWindow( );
 
 // See if the front window is our main frame
 
-	if (wnd->IsKindOf(RUNTIME_CLASS(CMainFrame)))
+	if (hwndForeground == Frame.GetSafeHwnd ())
     {
-    CMainFrame * frame = (CMainFrame *) wnd;
+    CMainFrame * frame = &Frame;
 
 // find the active view
 
@@ -1070,6 +1161,11 @@ void CMUSHclientApp::OnGameMinimiseprogram()
 
 BOOL CMUSHclientApp::PreTranslateMessage(MSG* pMsg)
 {
+	// A queued message can outlive its target window. Do not let MFC look up a
+	// stale permanent CWnd for a message that Windows can no longer deliver.
+	if (pMsg->hwnd != NULL && !::IsWindow(pMsg->hwnd))
+		return TRUE;
+
 	// CG: The following lines were added by the Splash Screen component.
 	if (CSplashWnd::PreTranslateAppMessage(pMsg))
 		return TRUE;

@@ -121,6 +121,7 @@ public:
 
   HANDLE      m_hNameLookup;      // for name lookup
   char *      m_pGetHostStruct;   // ditto
+  unsigned long m_iNameLookupGeneration;
 
   int m_iChatStatus;              // status of session, see enum above
   int m_iChatConnectionType;      // type of connection, see enum above

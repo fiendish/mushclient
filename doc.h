@@ -1208,7 +1208,9 @@ public:
 
   HANDLE      m_hNameLookup;
   char *      m_pGetHostStruct;
+  unsigned long m_iNameLookupGeneration;
   int         m_iConnectPhase;    // see enum above
+  unsigned long m_iConnectionAttemptNumber;
 
 
 // chatting
@@ -1257,6 +1259,7 @@ public:
 	HANDLE	m_pThread;			// Notification thread
 	CEvent  m_eventScriptFileChanged;		// script file changed thread event
   bool m_bInScriptFileChanged;
+  bool m_bScriptFileChangedPending;
   CTime m_timeScriptFileMod;
 
   CString m_strStatusMessage;   // "ready" or user-supplied message
@@ -1935,7 +1938,7 @@ public:
   bool CreateScriptEngine();
   void DisableScripting (void);
   void CreateMonitoringThread();
-	static void ThreadFunc(LPVOID pParam);
+	static unsigned __stdcall ThreadFunc(void * pParam);
   void OnScriptFileChanged(const bool bForce = false);
   DISPID GetProcedureDispid (const CString & strName, 
                              const CString & strType,

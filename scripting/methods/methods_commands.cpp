@@ -401,7 +401,12 @@ int nID = StringToCommandID (Command);
   if (nID == 0)
     return eNoSuchCommand;
 
-  Frame.PostMessage(WM_COMMAND, nID, 0);
+  MSG msg;
+  ZeroMemory (&msg, sizeof msg);
+  msg.hwnd = Frame.GetSafeHwnd ();
+  msg.message = WM_COMMAND;
+  msg.wParam = nID;
+  App.DeferMessageUntilIdle (msg);
 
 	return eOK;
 }   // end of  CMUSHclientDoc::DoCommand

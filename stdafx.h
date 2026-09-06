@@ -512,15 +512,26 @@ struct CThreadData
 {
 	char *	m_strFilename;    // which file to monitor
 	HWND	m_hWnd;             // window to post event to
-  DWORD m_pDoc;             // which document it belongs to
+  __int64 m_iDocumentNumber;  // which document instance it belongs to
 	HANDLE	m_hEvent;         // event which will become signalled
 };
 
-void ThreadFunc(LPVOID pParam);
-void KillThread (HANDLE & pThread, CEvent & eventFileChanged);
-HANDLE CreateMonitoringThread(const char * sName, DWORD pDoc, CEvent & eventFileChanged);
+struct CFileChangeNotification
+  {
+  __int64 m_iDocumentNumber;
+  };
 
-#define WM_USER_FILE_CONTENTS_CHANGED (WM_USER + 1001)
+struct CTLSFallbackNotification
+  {
+  __int64 m_iDocumentNumber;
+  unsigned long m_iConnectionAttemptNumber;
+  };
+
+unsigned __stdcall ThreadFunc(void * pParam);
+void KillThread (HANDLE & pThread, CEvent & eventFileChanged);
+HANDLE CreateMonitoringThread(const char * sName, __int64 iDocumentNumber, CEvent & eventFileChanged);
+
+#define WM_USER_FILE_CONTENTS_CHANGED (WM_USER + 1002)
 
 #define REGISTRATION_TIMER_ID 0x1001
 #define SPLASH_SCREEN_TIMER_ID 0x1002

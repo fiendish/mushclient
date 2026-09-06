@@ -1043,6 +1043,8 @@ CString str;
 
     } // end of switch
 
+  m_iConnectionAttemptNumber++;
+
 	m_bEnableAutoSay = FALSE;		// auto-say off at start of session
 
   m_bDisconnectOK = false;    // not OK to disconnect
@@ -6700,8 +6702,9 @@ void CMUSHclientDoc::SendTo (
 
 bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
   {
+  char * pNewHostStruct = new char [MAXGETHOSTSTRUCT];
   delete [] m_pGetHostStruct;   // delete buffer just in case
-  m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
+  m_pGetHostStruct = pNewHostStruct;
 
   if (!m_pGetHostStruct)
     {
@@ -6710,11 +6713,14 @@ bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
     }
 
   if (Frame.GetSafeHwnd ())   // forget it if we don't have a window yet
+    {
+    m_iNameLookupGeneration++;
     m_hNameLookup = WSAAsyncGetHostByName (Frame.GetSafeHwnd (),
                                            WM_USER_HOST_NAME_RESOLVED,
                                            sName,
                                            m_pGetHostStruct,
                                            MAXGETHOSTSTRUCT);
+    }
 
  if (!m_hNameLookup)
    {
@@ -7406,7 +7412,12 @@ void CMUSHclientDoc::ContinueSSLHandshake (void)
   OnConnectionDisconnect ();
 
   // defer the fallback prompt via PostMessage so we're not inside a socket callback
-  Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT, (WPARAM) this, 0);
+  CTLSFallbackNotification * pNotification = new CTLSFallbackNotification;
+  pNotification->m_iDocumentNumber = m_iUniqueDocumentNumber;
+  pNotification->m_iConnectionAttemptNumber = m_iConnectionAttemptNumber;
+  if (!Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT,
+                          (WPARAM) pNotification, 0))
+    delete pNotification;
 
   }   // end of CMUSHclientDoc::ContinueSSLHandshake
 
