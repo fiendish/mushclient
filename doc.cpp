@@ -5000,15 +5000,23 @@ CString CMUSHclientDoc::RecallText (const CString strSearchString,   // what to 
                                     const CString strRecallLinePreamble)
     {
 CString strMessage;
-t_regexp * regexp = NULL;          // compiled regular expression
+std::unique_ptr<t_regexp> regexp;   // compiled regular expression
 int iCurrentLine;
 
   // compile regular expression if needed
   if (bRegexp)
-    regexp = regcomp (strSearchString, (bMatchCase ? 0 : PCRE_CASELESS) | (m_bUTF_8 ? PCRE_UTF8 : 0));
+    regexp.reset (regcomp (strSearchString,
+                           (bMatchCase ? 0 : PCRE_CASELESS) |
+                           (m_bUTF_8 ? PCRE_UTF8 : 0)));
 
 CString strFindString = strSearchString;
 CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
+
+  class CRecallStatusGuard
+    {
+    public:
+      ~CRecallStatusGuard () { Frame.SetStatusNormal (); }
+    } statusGuard;
 
   Frame.SetStatusMessageNow (strStatus);
 
@@ -5017,12 +5025,13 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
   long nToGo = m_LineList.GetCount ();
   iCurrentLine = 0;
   
-  CProgressDlg * pProgressDlg = NULL;// progress dialog
+  std::unique_ptr<CProgressDlg> pProgressDlg; // progress dialog
 
   if (nToGo > 500)
     {
-    pProgressDlg = new CProgressDlg;
-    pProgressDlg->Create ();
+    pProgressDlg.reset (new CProgressDlg);
+    if (!pProgressDlg->Create ())
+      AfxThrowResourceException ();
     pProgressDlg->SetStatus (strStatus);
     pProgressDlg->SetRange (0, nToGo);     
     pProgressDlg->SetWindowText (Translate ("Recalling..."));                              
@@ -5116,7 +5125,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
         {
   // if case-insensitive search wanted, force this line to lower case
 
-        if (regexec (regexp, strSearchLine))
+        if (regexec (regexp.get (), strSearchLine))
           {
           if (!strRecallLinePreamble.IsEmpty ())
             {
@@ -5158,11 +5167,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
 
   Frame.SetStatusNormal (); 
 
-  if (pProgressDlg)
-    {
-    delete pProgressDlg;
-    pProgressDlg = NULL;
-    }
+  pProgressDlg.reset ();
 
 
   if (strMessage.IsEmpty ())
