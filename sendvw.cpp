@@ -333,8 +333,8 @@ ASSERT_VALID(pDoc);
 
 	if (nChar == VK_RETURN)
   	{
-
-    pDoc->m_iCurrentActionSource = eUserTyping;
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (pDoc->m_iCurrentActionSource, eUserTyping);
 
 		CString strText;
 		GetEditCtrl().GetWindowText(strText);
@@ -382,7 +382,6 @@ ASSERT_VALID(pDoc);
 // cancel any previous message on the status line
     pDoc->ShowStatusLine ();
 
-    pDoc->m_iCurrentActionSource = eUnknownActionSource;
     return;
 
   	} // end of return key
@@ -670,11 +669,10 @@ void CSendView::SendCommand (const CString strOriginalCommand,
     // break up auto-say string into a list, terminated by newlines
     CStringList strList;
     StringToList (strFullCommand, ENDLINE, strList);
-    pDoc->m_bEnableAutoSay = false; // disable to prevent loop
-
-    // disable command stacking
-    unsigned short bSaveCommandStack = pDoc->m_enable_command_stack;
-    pDoc->m_enable_command_stack = false;
+    CValueStateGuard<unsigned short> autoSayGuard
+      (pDoc->m_bEnableAutoSay, false); // disable to prevent loop
+    CValueStateGuard<unsigned short> commandStackGuard
+      (pDoc->m_enable_command_stack, false);
 
     for (POSITION command_pos = strList.GetHeadPosition (); command_pos; )
       {
@@ -684,7 +682,8 @@ void CSendView::SendCommand (const CString strOriginalCommand,
         {
         // evaluate aliases, speed walking, command stacking etc.
 
-        pDoc->m_iExecutionDepth = 0;    // hand-typed command, assume depth zero
+        CValueStateGuard<int> executionDepthGuard
+          (pDoc->m_iExecutionDepth, 0); // hand-typed command
 
         // execution is now done separately :)
 
@@ -706,16 +705,14 @@ void CSendView::SendCommand (const CString strOriginalCommand,
         }
       }
 
-    pDoc->m_bEnableAutoSay = true; // re-enable it
-    pDoc->m_enable_command_stack = bSaveCommandStack; // re-enable it
-
     } // end of auto say
   else
     {  // not auto-say
 
     // evaluate aliases, speed walking, command stacking etc.
 
-    pDoc->m_iExecutionDepth = 0;    // hand-typed command, assume depth zero
+    CValueStateGuard<int> executionDepthGuard
+      (pDoc->m_iExecutionDepth, 0); // hand-typed command
 
     // execution is now done separately :)
 
@@ -773,6 +770,8 @@ void CSendView::SendMacro (int whichone)
 
 // send the command in the appropriate way
 
+  try
+    {
   switch (pDoc->m_macro_type [whichone])
   {
   case REPLACE_COMMAND: 
@@ -789,9 +788,11 @@ void CSendView::SendMacro (int whichone)
 
   case SEND_NOW:        
 
-        pDoc->m_iCurrentActionSource = eUserMacro;
+        {
+        CValueStateGuard<unsigned short> actionSourceGuard
+          (pDoc->m_iCurrentActionSource, eUserMacro);
         SendCommand (pDoc->m_macros [whichone], TRUE, ! pDoc->m_bDoNotAddMacrosToCommandHistory);
-        pDoc->m_iCurrentActionSource = eUnknownActionSource;
+        }
         break;
 
   case ADD_TO_COMMAND:  
@@ -802,6 +803,13 @@ void CSendView::SendMacro (int whichone)
   default:              
         break;  // do nothing
   } // end of switch
+    }
+  catch (...)
+    {
+    if (IsWorldDocumentLive (pDoc, iDocumentNumber))
+      pDoc->m_bEnableAutoSay = bSavedAutoSay;
+    throw;
+    }
 
 // restore auto-say
 
@@ -1056,8 +1064,8 @@ ASSERT_VALID(pDoc);
 
 // turn auto-say off, they obviously don't want to say west, examine, etc.
 
-  BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
-  pDoc->m_bEnableAutoSay = FALSE;
+  CValueStateGuard<unsigned short> autoSayGuard
+    (pDoc->m_bEnableAutoSay, FALSE);
 
 const char * sValues [eKeypad_Max_Items] =
   {
@@ -1112,17 +1120,13 @@ int iIndex = -1;
     {
     if (pDoc->m_keypad_enable)
       {
-      pDoc->m_iCurrentActionSource = eUserKeypad;
+      CValueStateGuard<unsigned short> actionSourceGuard
+        (pDoc->m_iCurrentActionSource, eUserKeypad);
       SendCommand (pDoc->m_keypad [iIndex], TRUE, FALSE);    // do not keep in history window
-      pDoc->m_iCurrentActionSource = eUnknownActionSource;
       }
     else
       GetEditCtrl().ReplaceSel (sValues [iIndex], TRUE);
     }
-
-// restore auto-say
-
-  pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   return TRUE;
 
@@ -2055,6 +2059,8 @@ CString strCurrent;
 
 //save old config
 bool old_bTabCompletionSpace = pDoc->m_bTabCompletionSpace;
+CValueStateGuard<unsigned short> tabCompletionSpaceGuard
+  (pDoc->m_bTabCompletionSpace, pDoc->m_bTabCompletionSpace);
 
   // find where cursor is
   
