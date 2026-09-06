@@ -698,6 +698,10 @@ void CMUSHclientDoc::OutputOutstandingLines (void)
   COLORREF iOldNoteColourFore = m_iNoteColourFore;
   COLORREF iOldNoteColourBack = m_iNoteColourBack;
   unsigned short  iOldNoteStyle = m_iNoteStyle;
+  CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+  CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+  CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
+  CValueStateGuard<unsigned short> noteStyleGuard (m_iNoteStyle, m_iNoteStyle);
 
   m_bNotesInRGB = true;
 
@@ -1282,13 +1286,9 @@ CString str = strText;
 
   if (!m_bPluginProcessingSend)
     {
-    m_bPluginProcessingSend = true;  // so we don't go into a loop
+    CBoolStateGuard processingGuard (m_bPluginProcessingSend, true);
     if (!SendToAllPluginCallbacks (ON_PLUGIN_SEND, str.Left (str.GetLength () - 2)))
-      {
-      m_bPluginProcessingSend = false;
       return;     // plugin declines to send this line
-      }
-    m_bPluginProcessingSend = false;
     }
 
 // count number of times we sent this
@@ -1321,9 +1321,8 @@ CString str = strText;
 
   if (!m_bPluginProcessingSent)
     {
-    m_bPluginProcessingSent = true;  // so we don't go into a loop
+    CBoolStateGuard processingGuard (m_bPluginProcessingSent, true);
     SendToAllPluginCallbacks (ON_PLUGIN_SENT, str.Left (str.GetLength () - 2));
-    m_bPluginProcessingSent = false;
     }
 
 // echo sent text if required
@@ -1928,13 +1927,14 @@ CString strLine (lpszText, size);
     if (m_bDebugIncomingPackets && !fake)
       Debug_Packets ("Incoming", lpszText, size, m_iInputPacketCount);
 
-    m_iCurrentActionSource = eInputFromServer;
+    {
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (m_iCurrentActionSource, eInputFromServer);
 
     // let plugin change the input packet unless we have faked an input line from MXP processing or similar
     if (!fake)
       SendToAllPluginCallbacksRtn (ON_PLUGIN_PACKET_RECEIVED, strLine);
-
-    m_iCurrentActionSource = eUnknownActionSource;
+    }
 
     // change line to what the plugin(s) left it at
     lpszText = strLine;
@@ -6682,14 +6682,10 @@ void CMUSHclientDoc::SendTo (
 
     case eSendToExecute:
         {
-        // save log-my-input flag
-        short bSavedLogFlag = m_log_input;
         // if alias (or whatever) doesn't want to be logged, turn it off
-        if (bOmitFromLog)
-           m_log_input = false;
+        CValueStateGuard<short> logInputGuard
+          (m_log_input, bOmitFromLog ? false : m_log_input);
         Execute (strSendText);    // execute it
-        // put flag back
-        m_log_input = bSavedLogFlag;
         }
         break;
 
@@ -7968,21 +7964,17 @@ void CMUSHclientDoc::Screendraw  (const long iType,
                                   const long iLog,
                                   const char * sText)
   {
-static bool bInScreendraw = false;
-
   // don't recurse into infinite loops
-  if (bInScreendraw)
+  if (m_bInScreendraw)
     return;
 
-  bInScreendraw = true;
+  CBoolStateGuard screendrawGuard (m_bInScreendraw, true);
   SendToAllPluginCallbacks (ON_PLUGIN_SCREENDRAW,
                             iType,
                             iLog,
                             sText,
                             false,
                             false);
-  bInScreendraw = false;
-
   }  // end of CMUSHclientDoc::Screendraw 
 
 
