@@ -928,6 +928,8 @@ bool bChanged;
     	  return ePluginCannotSetOption;  // not available for writing at all    
 
       // ------ preliminary validation before setting the option
+      DISPID newDispid = DISPID_UNKNOWN;
+      bool bUpdateDispid = false;
 
       if (strOptionName == "script")
         {
@@ -936,12 +938,11 @@ bool bChanged;
 
         if (GetScriptEngine () && !strValue.IsEmpty ())
           {
-          DISPID dispid = DISPID_UNKNOWN;
           CString strMessage;
-          dispid = GetProcedureDispid (strValue, "Timer", TimerName, strMessage);
-          if (dispid == DISPID_UNKNOWN)
+          newDispid = GetProcedureDispid (strValue, "Timer", TimerName, strMessage);
+          if (newDispid == DISPID_UNKNOWN)
             return eScriptNameNotLocated;
-          Timer_item->dispid  = dispid;   // update dispatch ID
+          bUpdateDispid = true;
           }
         } // end of option "script"
 
@@ -954,6 +955,12 @@ bool bChanged;
                         (char *) Timer_item,  
                         strValue,
                         bChanged);
+
+      if (iResult != eOK)
+        return iResult;
+
+      if (bUpdateDispid)
+        Timer_item->dispid = newDispid;
 
       if (bChanged)
         {

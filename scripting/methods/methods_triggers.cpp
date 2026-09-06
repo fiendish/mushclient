@@ -770,12 +770,11 @@ bool bChanged;
     	return ePluginCannotSetOption;  // not available for writing at all    
 
     // ------ preliminary validation before setting the option
+    std::unique_ptr<t_regexp> newRegexp;
 
     if (strOptionName == "multi_line" ||
         strOptionName == "ignore_case")
       {
-      t_regexp * regexp = NULL;
-
       CString strRegexp;
 
       if (trigger_item->bRegexp)
@@ -794,10 +793,10 @@ bool bChanged;
         if (strOptionName == "ignore_case")
           bIgnoreCase = iValue;
 
-        regexp = regcomp (strRegexp, (bIgnoreCase ? PCRE_CASELESS : 0) |
-                                     (bMultiLine  ? PCRE_MULTILINE : 0) |
-                                     (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                     );
+        newRegexp.reset (regcomp (strRegexp, (bIgnoreCase ? PCRE_CASELESS : 0) |
+                                             (bMultiLine  ? PCRE_MULTILINE : 0) |
+                                             (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                             ));
         }   // end of try
       catch(CException* e)
         {
@@ -805,9 +804,9 @@ bool bChanged;
         return eBadRegularExpression;
         } // end of catch
 
-      delete trigger_item->regexp;    // get rid of old one
-      trigger_item->regexp = regexp;
       }   // end of option multi_line or ignore_case
+
+    unsigned short iOldSequence = trigger_item->iSequence;
 
     iResult = SetBaseOptionItem (iItem,
                         TriggerOptionsTable,
@@ -816,15 +815,34 @@ bool bChanged;
                         iValue,
                         bChanged);
 
+    if (iResult != eOK)
+      return iResult;
+
+    if (strOptionName == "sequence")
+      {
+      try
+        {
+        SortTriggers ();
+        }
+      catch (...)
+        {
+        trigger_item->iSequence = iOldSequence;
+        throw;
+        }
+      }
+
+    if (newRegexp.get ())
+      {
+      delete trigger_item->regexp;
+      trigger_item->regexp = newRegexp.release ();
+      }
+
     if (bChanged)
       {
       if (!m_CurrentPlugin) // plugin mods don't really count
         SetModifiedFlag (TRUE);   // document has changed
       trigger_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
       }
-
-    if (strOptionName == "sequence")
-      SortTriggers ();
 
     return iResult;
 
@@ -845,14 +863,15 @@ bool bChanged;
     	  return ePluginCannotSetOption;  // not available for writing at all    
 
       // ------ preliminary validation before setting the option
+      std::unique_ptr<t_regexp> newRegexp;
+      DISPID newDispid = DISPID_UNKNOWN;
+      bool bUpdateDispid = false;
 
       // cannot have null match text
       if (strOptionName == "match")
         {
         if (strValue.IsEmpty ())
           return eTriggerCannotBeEmpty;
-
-        t_regexp * regexp = NULL;
 
         CString strRegexp; 
 
@@ -864,10 +883,10 @@ bool bChanged;
         // compile regular expression
         try 
           {
-          regexp = regcomp (strRegexp, (trigger_item->ignore_case ? PCRE_CASELESS : 0) |
-                                       (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
-                                       (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                       );
+          newRegexp.reset (regcomp (strRegexp, (trigger_item->ignore_case ? PCRE_CASELESS : 0) |
+                                               (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
+                                               (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                               ));
           }   // end of try
         catch(CException* e)
           {
@@ -875,9 +894,6 @@ bool bChanged;
           return eBadRegularExpression;
           } // end of catch
       
-        delete trigger_item->regexp;    // get rid of old one
-        trigger_item->regexp = regexp;
-
         } // end of option "match"  
       else if (strOptionName == "script")
         {
@@ -886,12 +902,11 @@ bool bChanged;
 
         if (GetScriptEngine () && !strValue.IsEmpty ())
           {
-          DISPID dispid = DISPID_UNKNOWN;
           CString strMessage;
-          dispid = GetProcedureDispid (strValue, "trigger", TriggerName, strMessage);
-          if (dispid == DISPID_UNKNOWN)
+          newDispid = GetProcedureDispid (strValue, "trigger", TriggerName, strMessage);
+          if (newDispid == DISPID_UNKNOWN)
             return eScriptNameNotLocated;
-          trigger_item->dispid  = dispid;   // update dispatch ID
+          bUpdateDispid = true;
           }
         } // end of option "script"
 
@@ -904,6 +919,18 @@ bool bChanged;
                         (char *) trigger_item,  
                         strValue,
                         bChanged);
+
+      if (iResult != eOK)
+        return iResult;
+
+      if (newRegexp.get ())
+        {
+        delete trigger_item->regexp;
+        trigger_item->regexp = newRegexp.release ();
+        }
+
+      if (bUpdateDispid)
+        trigger_item->dispid = newDispid;
 
       if (bChanged)
         {
