@@ -875,7 +875,7 @@ CCmdHistory dlg;
 
   dlg.m_msgList = &m_msgList;
   dlg.m_sendview = this;
-  dlg.m_pHistoryFindInfo = m_pHistoryFindInfo;    // for finding
+  dlg.SetFindInfo (m_pHistoryFindInfo);    // saved search settings
   dlg.m_pDoc = pDoc;            // for confirming replacement of typing
   dlg.m_iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
   dlg.m_hSendView = GetSafeHwnd ();
