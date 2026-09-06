@@ -86,6 +86,7 @@
 #include <map>
 #include <set>
 #include <list>
+#include <memory>
 #include <algorithm>
 #include <functional>
 #include <iostream>

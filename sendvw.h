@@ -52,7 +52,8 @@ public:
 
 // stuff for finding in the input buffer
 
-  CFindInfo m_HistoryFindInfo;
+  // Keep saved search settings alive while a history dialog is open.
+  std::shared_ptr<CFindInfo> m_pHistoryFindInfo;
 
 // Operations
 public:
@@ -75,7 +76,9 @@ public:
 
   void NotifyPluginCommandChanged ();
 
-  void AddToCommandHistory (const CString & strCommand);
+  void AddToCommandHistory (const CString & strCommand,
+                            const bool bRespectNoEcho = true,
+                            const bool bResetHistoryPosition = true);
 
   int GetCommandWindowDesiredHeight (const int iCurrentHeight);
   void AdjustCommandWindowSize (void);

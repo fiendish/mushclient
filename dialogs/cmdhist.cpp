@@ -22,8 +22,35 @@ CCmdHistory::CCmdHistory(CWnd* pParent /*=NULL*/)
 {
 	//{{AFX_DATA_INIT(CCmdHistory)
 	//}}AFX_DATA_INIT
+  m_msgList = NULL;
+  m_sendview = NULL;
+  m_pDoc = NULL;
+  m_iDocumentNumber = 0;
+  m_hSendView = NULL;
 }
 
+
+// Copy settings without sharing a cursor, match list, or owned search resources.
+static void CopyFindSettings (CFindInfo & destination, const CFindInfo & source)
+  {
+  destination.m_strTitle = source.m_strTitle;
+  destination.m_bCanGoBackwards = source.m_bCanGoBackwards;
+  destination.m_bForwards = source.m_bForwards;
+  destination.m_bMatchCase = source.m_bMatchCase;
+  destination.m_bRegexp = source.m_bRegexp;
+  destination.m_bUTF8 = source.m_bUTF8;
+  destination.m_iControlColumns = source.m_iControlColumns;
+  destination.m_bRepeatOnSameLine = source.m_bRepeatOnSameLine;
+  destination.m_strFindStringList.RemoveAll ();
+  for (POSITION pos = source.m_strFindStringList.GetHeadPosition (); pos; )
+    destination.m_strFindStringList.AddTail (source.m_strFindStringList.GetNext (pos));
+  }
+
+void CCmdHistory::SetFindInfo (const std::shared_ptr<CFindInfo> & pFindInfo)
+  {
+  m_pHistoryFindInfo = pFindInfo;
+  CopyFindSettings (m_HistoryFindInfo, *pFindInfo);
+  }
 
 void CCmdHistory::DoDataExchange(CDataExchange* pDX)
 {
@@ -40,6 +67,7 @@ int count = 0;
 
    pList->SetRedraw (FALSE);
    pList->ResetContent ();
+   m_msgListSnapshot.RemoveAll ();
 
   CString str;
   POSITION pos = m_msgList->GetHeadPosition ();
@@ -47,21 +75,24 @@ int count = 0;
   while (pos)
     {
     int nItem;
-    POSITION itemPos = pos;
     str = m_msgList->GetNext (pos);
+    CString strDisplay = str;
 
     // truncate long strings or we might get a nasty crash with long strings
 
-    if (str.GetLength () > 500)
+    if (strDisplay.GetLength () > 500)
       {
-      str = str.Left (500);
-      str += " ...";
+      strDisplay = strDisplay.Left (500);
+      strDisplay += " ...";
       }
 
-    nItem = pList->AddString(str);  // add to list (truncate to 500 chars)
+    nItem = pList->AddString(strDisplay);  // add to list (truncate to 500 chars)
     if (nItem != LB_ERR  && nItem != LB_ERRSPACE)
-      pList->SetItemData (nItem, (DWORD) itemPos);   // remember all about this string
-    count++;
+      {
+      POSITION itemPos = m_msgListSnapshot.AddTail (str);
+      pList->SetItemData (nItem, (DWORD) itemPos);
+      count++;
+      }
     }
 
    pList->SetCurSel(count - 1);
@@ -70,6 +101,27 @@ int count = 0;
     }   // end of loading the dialog
 
 }
+
+bool CCmdHistory::IsContextLive (void) const
+  {
+  if (!m_pDoc || !m_sendview || !m_hSendView)
+    return false;
+
+  bool bDocumentLive = false;
+  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pDoc == m_pDoc && pDoc->m_iUniqueDocumentNumber == m_iDocumentNumber)
+      {
+      bDocumentLive = true;
+      break;
+      }
+    }
+
+  return bDocumentLive && ::IsWindow (m_hSendView) &&
+         CWnd::FromHandlePermanent (m_hSendView) == m_sendview;
+  }
 
 
 BEGIN_MESSAGE_MAP(CCmdHistory, CDialog)
@@ -98,12 +150,24 @@ CString str;
 if (selection == LB_ERR)
   return;
 
+if (!IsContextLive ())
+  {
+  CDialog::OnCancel ();
+  return;
+  }
+
 POSITION pos = (POSITION) pList->GetItemData (selection);
-str = m_msgList->GetAt (pos);
+str = m_msgListSnapshot.GetAt (pos);
 
 // check they want to wipe out their typing
 
-if (m_sendview->CheckTyping (m_pDoc, str))
+const bool bKeepTyping = m_sendview->CheckTyping (m_pDoc, str);
+if (!IsContextLive ())
+  {
+  CDialog::OnCancel ();
+  return;
+  }
+if (bKeepTyping)
   return;
 
 m_sendview->SetCommand (str);
@@ -139,16 +203,48 @@ void CCmdHistory::DoFind (bool bAgain)
 CListBox* pList = (CListBox*) GetDlgItem (IDC_COMMANDS);
 ASSERT (pList);
 
-m_pHistoryFindInfo->m_bAgain = bAgain;
-m_pHistoryFindInfo->m_nTotalLines = m_msgList->GetCount ();
+if (!IsContextLive ())
+  {
+  CDialog::OnCancel ();
+  return;
+  }
 
-bool found = FindRoutine (m_msgList,             // passed back to callback routines
-                          *m_pHistoryFindInfo,   // finding structure
+// Find Next needs a new search when no search text is saved.
+m_HistoryFindInfo.m_bAgain = bAgain &&
+    !m_HistoryFindInfo.m_strFindStringList.IsEmpty ();
+m_HistoryFindInfo.m_nTotalLines = m_msgListSnapshot.GetCount ();
+int selection = pList->GetCurSel ();
+if (selection != LB_ERR)
+  m_HistoryFindInfo.m_nCurrentLine = selection;
+
+// Find Next can use saved settings before this dialog has compiled the pattern.
+if (bAgain && m_HistoryFindInfo.m_bRegexp &&
+    !m_HistoryFindInfo.m_regexp && !m_HistoryFindInfo.m_strFindStringList.IsEmpty ())
+  m_HistoryFindInfo.m_regexp = regcomp (m_HistoryFindInfo.m_strFindStringList.GetHead (),
+      (m_HistoryFindInfo.m_bMatchCase ? 0 : PCRE_CASELESS) |
+      (m_HistoryFindInfo.m_bUTF8 ? PCRE_UTF8 : 0));
+
+bool found = FindRoutine (&m_msgListSnapshot,    // passed back to callback routines
+                          m_HistoryFindInfo,     // finding structure
                           InitiateSearch,        // how to re-initiate a find
                           GetNextLine);          // get the next line
+
+// FindRoutine can process messages that close the world or destroy the send view.
+if (!IsContextLive ())
+  {
+  CDialog::OnCancel ();
+  return;
+  }
+
+m_HistoryFindInfo.m_pFindPosition = NULL;
+CopyFindSettings (*m_pHistoryFindInfo, m_HistoryFindInfo);
+
+// Get the control again after the nested message loops.
+pList = (CListBox*) GetDlgItem (IDC_COMMANDS);
+ASSERT (pList);
 	
   if (found)
-    pList->SetCurSel (m_pHistoryFindInfo->m_nCurrentLine);
+    pList->SetCurSel (m_HistoryFindInfo.m_nCurrentLine);
   else
     pList->SetCurSel (-1);
 
@@ -221,8 +317,14 @@ CString str;
 if (selection == LB_ERR)
   return;
 
+if (!IsContextLive ())
+  {
+  CDialog::OnCancel ();
+  return;
+  }
+
 POSITION pos = (POSITION) pList->GetItemData (selection);
-str = m_msgList->GetAt (pos);
+str = m_msgListSnapshot.GetAt (pos);
 
 m_sendview->SendCommand (str, TRUE);
 	
@@ -238,8 +340,14 @@ CString str;
   if (selection == LB_ERR)
     return;
 
+  if (!IsContextLive ())
+    {
+    CDialog::OnCancel ();
+    return;
+    }
+
   POSITION pos = (POSITION) pList->GetItemData (selection);
-  str = m_msgList->GetAt (pos);
+  str = m_msgListSnapshot.GetAt (pos);
 
   // edit current input window
   CreateTextWindow ((LPCTSTR) str,     // command
