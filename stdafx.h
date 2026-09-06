@@ -92,6 +92,7 @@
 #include <iostream>
 #include <iterator>
 #include <sstream>
+#include <memory>
 #pragma warning (pop)
 
 #ifdef LUA_52
@@ -390,6 +391,25 @@ class CValueStateGuard
 
 // translates "send to" numbers
 CString GetSendToString (const unsigned short iWhere);
+
+class CBoolStateGuard
+  {
+  public:
+  CBoolStateGuard (bool & bValue, const bool bNewValue)
+    : m_bValue (bValue), m_bSavedValue (bValue)
+    {
+    m_bValue = bNewValue;
+    }
+
+  ~CBoolStateGuard ()
+    {
+    m_bValue = m_bSavedValue;
+    }
+
+  private:
+  bool & m_bValue;
+  bool m_bSavedValue;
+  };
 
 // translates connection status to text
 CString GetConnectionStatus (const int iStatus);
