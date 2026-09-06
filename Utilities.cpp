@@ -236,6 +236,15 @@ int i;
 
 } // end of FixupEscapeSequences
 
+void SetFileDialogFileName (CFileDialog & dialog, CString & buffer,
+                            const CString & initialName)
+  {
+  buffer = initialName;
+  int iBufferLength = MAX (_MAX_PATH, buffer.GetLength () + 1);
+  dialog.m_ofn.nMaxFile = iBufferLength;
+  dialog.m_ofn.lpstrFile = buffer.GetBuffer (iBufferLength);
+  }
+
 
 
 

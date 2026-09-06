@@ -2961,15 +2961,15 @@ if (!m_bLogRaw)
 
 
   filedlg.m_ofn.lpstrTitle = "Log file name";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
   if (App.platform == VER_PLATFORM_WIN32s)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
+    SetFileDialogFileName (filedlg, filename, "");
   else
-    strcpy (filedlg.m_ofn.lpstrFile, suggested_name);
+    SetFileDialogFileName (filedlg, filename, suggested_name);
 
   ChangeToFileBrowsingDirectory ();
 	int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;
@@ -3780,12 +3780,12 @@ CString filename;
   str = "File to paste into ";
   str += m_mush_name;
   filedlg.m_ofn.lpstrTitle = str;
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-  strcpy (filedlg.m_ofn.lpstrFile, "");
+  SetFileDialogFileName (filedlg, filename, "");
 
   ChangeToFileBrowsingDirectory ();
 	int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
