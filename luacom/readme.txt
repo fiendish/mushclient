@@ -1,17 +1,17 @@
-LuaCOM built as follows:
+LuaCOM source: https://github.com/fiendish/luacom
+Revision: 96f9e5bfacd8aec6c5e98d85e55854188eba7412
 
-1. Download recent version from http://github.com/davidm/luacom/
+Copy the files from src/library into this directory, along with
+include/luacom.h and COPYRIGHT.
 
+Local changes in luacom.cpp:
 
-2. Edit: LuaCompat.h and add the following lines to the start of it:
+1. In luacom_RegisterObject, disable the InprocServer32 and ScriptFile
+   registry entries. MUSHclient does not register LuaCOM as an in-process
+   server. Keep LocalServer32 registration enabled.
 
-// pragmas added by Nick Gammon
-#pragma warning ( disable : 4100)  // unreferenced formal parameter
-#pragma warning ( disable : 4189)  // warning C4189: 'iVersion' : local variable is initialized but not referenced
-#pragma warning ( disable : 4244)  // conversion from 'int' to 'unsigned short', possible loss of data
-#pragma warning ( disable : 4310)  // cast truncates constant value
-#pragma warning ( disable : 4245)  // conversion from 'long' to 'unsigned long', signed/unsigned mismatch
-#pragma warning ( disable : 4127)  // conditional expression is constant
-#pragma warning ( disable : 4701)  // local variable 'xxx' may be used without having been initialized
-#pragma warning ( disable : 4702)  // unreachable code
-#pragma warning ( disable : 4710)  // function 'x' not inlined
+2. In luacom_open, disable automatic loading of luacom5.lua and the
+   generated luacom.loh code. MUSHclient controls loading of Lua helper code.
+
+3. In luacom_StartMessageLoop, reject the call when the mushclient_embedded
+   registry flag is set. MUSHclient uses its own message loop.
