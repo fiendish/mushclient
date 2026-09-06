@@ -1071,6 +1071,13 @@ BOOL CMUSHclientApp::OnIdle(LONG lCount)
     CMUSHclientDoc* pDoc =
       (CMUSHclientDoc*) m_pWorldDocTemplate->GetNextDoc(pos);
 
+    if (pDoc->m_bPluginListChangedPending &&
+        !pDoc->m_bInPluginListChanged)
+      {
+      pDoc->PluginListChanged ();
+      return 1;
+      }
+
     if (pDoc->m_bScriptFileChangedPending &&
         !pDoc->m_bInScriptFileChanged)
       {

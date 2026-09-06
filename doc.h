@@ -1335,6 +1335,10 @@ public:
   bool        m_bPluginProcessingCommand; // plugin is doing ON_PLUGIN_COMMAND
   bool        m_bPluginProcessingSend; // plugin is doing ON_PLUGIN_SEND
   bool        m_bPluginProcessingSent; // plugin is doing ON_PLUGIN_SENT
+  bool        m_bInPluginListChanged;
+  bool        m_bPluginListChangedPending;
+  int         m_iPluginListChangedDeferralDepth;
+  bool        m_bPluginListChangedDeferred;
 
   CString     m_strLastCommandSent;   // for spam prevention
   int         m_iLastCommandCount;    // number of times last command sent
@@ -2123,6 +2127,10 @@ public:
                     const char * sText);
 
   void PluginListChanged (void);
+  void BeginPluginListChangedDeferral (void);
+  bool EndPluginListChangedDeferral (void);
+  CPlugin * GetPluginInstance (LPCTSTR PluginID,
+                               __int64 iPluginInstanceNumber);
 
   CString RecallText (const CString strSearchString,   // what to search for
                       const bool bMatchCase,

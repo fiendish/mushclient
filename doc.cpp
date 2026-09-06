@@ -7880,15 +7880,10 @@ bool CMUSHclientDoc::PlaySoundFile (CString strSound)
   // stop infinite loops
   if (!m_bInPlaySoundFilePlugin)
     {
-    m_bInPlaySoundFilePlugin = true;
+    CBoolStateGuard playSoundGuard (m_bInPlaySoundFilePlugin, true);
     
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInPlaySoundFilePlugin = false;
-        return true;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInPlaySoundFilePlugin = false;
+      return true;   // handled by plugin? don't do our own sound
     }   // of not in plugin already
 
   // default sound-play mechanism
@@ -7902,16 +7897,11 @@ void CMUSHclientDoc::CancelSound (void)
   // stop infinite loops
   if (!m_bInCancelSoundFilePlugin)
     {
-    m_bInCancelSoundFilePlugin = true;
+    CBoolStateGuard cancelSoundGuard (m_bInCancelSoundFilePlugin, true);
 
     CString strSound;   // deliberately the empty string
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInCancelSoundFilePlugin = false;
-        return;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInCancelSoundFilePlugin = false;
+      return;   // handled by plugin? don't do our own sound
     } // end of not in plugin already
 
   // default sound-cancel mechanism

@@ -78,6 +78,7 @@ class CPlugin :public CObject
   CString m_strSource;        // include file that contains this plugin
   CString m_strDirectory;     // directory source is in (m_strSource minus the actual filename)
   CString m_strID;            // unique ID
+  __int64 m_iPluginInstanceNumber; // identifies this loaded plugin instance
   CTime   m_tDateWritten;     // date written
   CTime   m_tDateModified;    // date last modified
   double  m_dVersion;         // plugin version
@@ -108,6 +109,7 @@ class CPlugin :public CObject
   long m_iLoadOrder;            // sequence in which plugins are processed
   LONGLONG m_iScriptTimeTaken;  // time taken to execute scripts
   bool m_bSavingStateNow;       // to prevent infinite loops
+  long m_iActiveScriptCalls;    // nested calls currently using this plugin
 
   // Lua note - for Lua the DISPID is a flag indicating whether or not
   // the routine exists. It is set to DISPID_UNKNOWN if the last call caused an error
@@ -143,8 +145,79 @@ class CPlugin :public CObject
 
   };
 
+class CPluginCallGuard
+  {
+  public:
+  CPluginCallGuard (CPlugin * pPlugin, const bool bAllowNull = false)
+    : m_pPlugin (pPlugin)
+    {
+    ASSERT (m_pPlugin || bAllowNull);
+    if (m_pPlugin)
+      m_pPlugin->m_iActiveScriptCalls++;
+    }
+
+  ~CPluginCallGuard ()
+    {
+    if (m_pPlugin)
+      {
+      ASSERT (m_pPlugin->m_iActiveScriptCalls > 0);
+      m_pPlugin->m_iActiveScriptCalls--;
+      }
+    }
+
+  private:
+  CPlugin * m_pPlugin;
+  };
+
+class CPluginContextGuard
+  {
+  public:
+  CPluginContextGuard (CMUSHclientDoc * pDoc, CPlugin * pPlugin,
+                       const bool bManageCallingID = false,
+                       const bool bResetNoteStyle = false);
+  ~CPluginContextGuard ();
+
+  private:
+  CMUSHclientDoc * m_pDoc;
+  CPlugin * m_pPlugin;
+  CPlugin * m_pSavedPlugin;
+  CString m_strSavedCallingPluginID;
+  unsigned short m_iSavedNoteStyle;
+  bool m_bManageCallingID;
+  bool m_bResetNoteStyle;
+  };
+
+class CPluginNotesGuard
+  {
+  public:
+  CPluginNotesGuard (CMUSHclientDoc * pDoc);
+  ~CPluginNotesGuard ();
+
+  private:
+  CMUSHclientDoc * m_pDoc;
+  bool m_bSavedNotesNotWanted;
+  };
+
 typedef list<CPlugin*> CPluginList;
 typedef CPluginList::iterator PluginListIterator;
+
+class CPluginInstanceIdentity
+  {
+  public:
+  CPluginInstanceIdentity (CPlugin * pPlugin)
+    : m_strID (pPlugin->m_strID),
+      m_iPluginInstanceNumber (pPlugin->m_iPluginInstanceNumber) {}
+
+  CString m_strID;
+  __int64 m_iPluginInstanceNumber;
+  };
+
+typedef vector<CPluginInstanceIdentity> CPluginInstanceSnapshot;
+void GetPluginInstanceSnapshot (const CPluginList & plugins,
+                                CPluginInstanceSnapshot & snapshot);
+void GetPluginSequenceSnapshots (const CPluginList & plugins,
+                                 CPluginInstanceSnapshot & negativeSequence,
+                                 CPluginInstanceSnapshot & nonnegativeSequence);
 
 // Unary predicate for use in find_if to find a plugin by name
 //  ... not case-sensitive
