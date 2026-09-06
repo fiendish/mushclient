@@ -31,6 +31,8 @@ CChatSocket::CChatSocket(CMUSHclientDoc* pDoc)
   m_pGetHostStruct = NULL;
   ZeroMemory (&m_ServerAddr, sizeof m_ServerAddr);
   m_bDeleteMe = false;  
+  m_bInReceive = false;
+  m_bReceivePending = false;
   m_bIncoming = false;
   m_bIgnore = false;
   m_bCanSnoop = false;          
@@ -167,6 +169,34 @@ void CChatSocket::StopFileTransfer (const bool bAbort)
 
 
 void CChatSocket::OnReceive(int nErrorCode)
+  {
+  if (m_bInReceive)
+    {
+    m_bReceivePending = true;
+    return;
+    }
+
+  m_bInReceive = true;
+  try
+    {
+    do
+      {
+      m_bReceivePending = false;
+      ReceiveOneNotification (nErrorCode);
+      } while (m_bReceivePending && !m_bDeleteMe);
+    }
+  catch (...)
+    {
+    m_bInReceive = false;
+    m_bReceivePending = false;
+    throw;
+    }
+
+  m_bInReceive = false;
+  m_bReceivePending = false;
+  }
+
+void CChatSocket::ReceiveOneNotification(int nErrorCode)
 {
 
 char buff [1000];
