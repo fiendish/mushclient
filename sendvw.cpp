@@ -39,6 +39,19 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 static CString RandomString();
 
+static bool IsWorldDocumentLive (const CMUSHclientDoc * pExpectedDoc,
+                                 const __int64 iDocumentNumber)
+  {
+  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pDoc == pExpectedDoc && pDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+      return true;
+    }
+  return false;
+  }
+
 /////////////////////////////////////////////////////////////////////////////
 // CSendView
 
@@ -256,10 +269,11 @@ END_MESSAGE_MAP()
 // CSendView construction/destruction
 
 CSendView::CSendView()
+  : m_pHistoryFindInfo (new CFindInfo)
 {
   m_HistoryPosition = NULL;
   m_inputcount = 0;
-  m_HistoryFindInfo.m_strTitle = "Find in command history...";
+  m_pHistoryFindInfo->m_strTitle = "Find in command history...";
   m_iHistoryStatus = eAtBottom;
   m_backbr = NULL;
   m_bNotifyingPluginCommandChanged = false;
@@ -751,11 +765,14 @@ void CSendView::SendMacro (int whichone)
 
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
-  CValueStateGuard<unsigned short> autoSayGuard
-    (pDoc->m_bEnableAutoSay, FALSE);
+  const __int64 iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+  BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
+  pDoc->m_bEnableAutoSay = FALSE;
 
 // send the command in the appropriate way
 
+  try
+    {
   switch (pDoc->m_macro_type [whichone])
   {
   case REPLACE_COMMAND: 
@@ -787,6 +804,18 @@ void CSendView::SendMacro (int whichone)
   default:              
         break;  // do nothing
   } // end of switch
+    }
+  catch (...)
+    {
+    if (IsWorldDocumentLive (pDoc, iDocumentNumber))
+      pDoc->m_bEnableAutoSay = bSavedAutoSay;
+    throw;
+    }
+
+// restore auto-say
+
+  if (IsWorldDocumentLive (pDoc, iDocumentNumber))
+    pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   } // end of SendMacro
 
@@ -855,7 +884,7 @@ CCmdHistory dlg;
 
   dlg.m_msgList = &m_msgList;
   dlg.m_sendview = this;
-  dlg.m_pHistoryFindInfo = &m_HistoryFindInfo;    // for finding
+  dlg.SetFindInfo (m_pHistoryFindInfo);    // saved search settings
   dlg.m_pDoc = pDoc;            // for confirming replacement of typing
   dlg.m_iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
   dlg.m_hSendView = GetSafeHwnd ();
@@ -1300,7 +1329,7 @@ ASSERT_VALID(pDoc);
   pCmdUI->Enable (pDoc->m_iConnectPhase == eConnectConnectedToMud);    // not if session closed
 }
 
-// returns true if they don't want their typing replaced
+// Returns true if typing must not be replaced, including when its context has closed.
 
 bool CSendView::CheckTyping (CMUSHclientDoc* pDoc, CString strReplacement)
   {
@@ -1341,8 +1370,18 @@ CString strCurrent;
     CString strMsg;
     strMsg = TFormat ("Replace your typing of\n\n\"%s\"\n\nwith\n\n\"%s\"?",
                    (LPCTSTR) strCurrent, (LPCTSTR) strReplacement);
-    if (::UMessageBox (strMsg, MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2)
-        == IDCANCEL)
+    const __int64 iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+    const HWND hSendView = GetSafeHwnd ();
+    const int iResult = ::UMessageBox (strMsg,
+                         MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2);
+
+    // The confirmation can process messages that destroy the document or this view.
+    if (!IsWorldDocumentLive (pDoc, iDocumentNumber) ||
+        !::IsWindow (hSendView) ||
+        CWnd::FromHandlePermanent (hSendView) != this)
+      return true;
+
+    if (iResult == IDCANCEL)
       {
         m_iHistoryStatus = eAtBottom;   // we are still at bottom therefore
         m_HistoryPosition = NULL;
@@ -2150,9 +2189,9 @@ void CSendView::OnDisplayClearCommandHistory()
   m_HistoryPosition = NULL;
   m_iHistoryStatus = eAtBottom;
   m_inputcount = 0;
-  m_HistoryFindInfo.m_pFindPosition = NULL;
-  m_HistoryFindInfo.m_nCurrentLine = 0;
-  m_HistoryFindInfo.m_bAgain = FALSE;  
+  m_pHistoryFindInfo->m_pFindPosition = NULL;
+  m_pHistoryFindInfo->m_nCurrentLine = 0;
+  m_pHistoryFindInfo->m_bAgain = FALSE;
   m_strPartialCommand.Empty ();
   m_last_command.Empty ();
   
@@ -2422,12 +2461,12 @@ ASSERT_VALID(pDoc);
         m_HistoryPosition = NULL;
         m_iHistoryStatus = eAtTop;
         }
-      if (m_HistoryFindInfo.m_pFindPosition == oldHead)
-        m_HistoryFindInfo.m_pFindPosition = NULL;
+      if (m_pHistoryFindInfo->m_pFindPosition == oldHead)
+        m_pHistoryFindInfo->m_pFindPosition = NULL;
       m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
-      m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
-      if (m_HistoryFindInfo.m_nCurrentLine < 0)
-        m_HistoryFindInfo.m_nCurrentLine = 0;
+      m_pHistoryFindInfo->m_nCurrentLine--;     // adjust for a "find again"
+      if (m_pHistoryFindInfo->m_nCurrentLine < 0)
+        m_pHistoryFindInfo->m_nCurrentLine = 0;
       }
     else
       m_inputcount++;

@@ -13,10 +13,13 @@ public:
   CStringList * m_msgList;
   CStringList m_msgListSnapshot;
   CSendView * m_sendview;
-  CFindInfo * m_pHistoryFindInfo;
+  std::shared_ptr<CFindInfo> m_pHistoryFindInfo;
+  CFindInfo m_HistoryFindInfo;
   CMUSHclientDoc* m_pDoc;
   __int64 m_iDocumentNumber;
   HWND m_hSendView;
+
+  void SetFindInfo (const std::shared_ptr<CFindInfo> & pFindInfo);
 
 // Dialog Data
 	//{{AFX_DATA(CCmdHistory)
