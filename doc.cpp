@@ -2726,7 +2726,7 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
   // get unlabelled trigger's internal name
   const char * pLabel = trigger_item->strLabel;
   if (pLabel [0] == 0)
-     pLabel = GetTriggerRevMap () [trigger_item].c_str ();
+     pLabel = trigger_item->strInternalName;
 
   if (GetScriptEngine () && GetScriptEngine ()->IsLua ())
     {
@@ -2734,7 +2734,7 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
     list<string> sparams;
     sparams.push_back (pLabel);
     sparams.push_back ((LPCTSTR) strCurrentLine);
-    trigger_item->bExecutingScript = true;     // cannot be deleted now
+    CTriggerExecutionGuard executingGuard (this, trigger_item);
     GetScriptEngine ()->ExecuteLua (trigger_item->dispid, 
                                    trigger_item->strProcedure, 
                                    eTriggerFired,
@@ -2746,7 +2746,6 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
                                    trigger_item->regexp,
                                    NULL,        // no map of strings
                                    &StyledLine);  // but we *do* have a styled line
-    trigger_item->bExecutingScript = false;     // can be deleted now
     return;
     }   // end of Lua
 
@@ -2790,7 +2789,7 @@ long i = 1;
   sa.PutElement (&i, &v);
   args [eWildcards] = sa;
 
-  trigger_item->bExecutingScript = true;     // cannot be deleted now
+  CTriggerExecutionGuard executingGuard (this, trigger_item);
   ExecuteScript (trigger_item->dispid,  
                  trigger_item->strProcedure,
                  eTriggerFired,
@@ -2798,8 +2797,6 @@ long i = 1;
                  strReason,
                  params, 
                  trigger_item->nInvocationCount); 
-  trigger_item->bExecutingScript = false;     // can be deleted now
-
   } // end of CMUSHclientDoc::ExecuteTriggerScript 
 
 void CMUSHclientDoc::ExecuteHotspotScript (DISPID & dispid,  // dispatch ID, will be set to DISPID_UNKNOWN on an error
@@ -6216,32 +6213,46 @@ int CompareTrigger (const void * elem1, const void * elem2)
   }   // end of CompareTrigger
 
 
-void  CMUSHclientDoc::SortTriggers (void)
+void CMUSHclientDoc::BuildTriggerIndexes (
+  vector<CTrigger *> & triggerArray,
+  CTriggerRevMap & triggerRevMap,
+  const set<CTrigger *> * pExclude)
   {
-
-int iCount = GetTriggerMap ().GetCount ();
-int i;
 CString strTriggerName;
 CTrigger * pTrigger;
 POSITION pos;
 
-  GetTriggerArray ().SetSize (iCount);
-  GetTriggerRevMap ().clear ();
+  triggerArray.reserve (GetTriggerMap ().GetCount ());
 
   // extract pointers into a simple array
-  for (i = 0, pos = GetTriggerMap ().GetStartPosition(); pos; i++)
+  for (pos = GetTriggerMap ().GetStartPosition(); pos; )
     {
      GetTriggerMap ().GetNextAssoc (pos, strTriggerName, pTrigger);
-     GetTriggerArray ().SetAt (i, pTrigger);
-     GetTriggerRevMap () [pTrigger] = strTriggerName;
+     if (pExclude && pExclude->find (pTrigger) != pExclude->end ())
+       continue;
+     triggerArray.push_back (pTrigger);
+     triggerRevMap [pTrigger] = strTriggerName;
     }
 
-
   // sort the array
-  qsort (GetTriggerArray ().GetData (), 
-         iCount,
-         sizeof (CTrigger *),
-         CompareTrigger);
+  if (triggerArray.size () > 1)
+    qsort (&triggerArray [0],
+           triggerArray.size (),
+           sizeof (CTrigger *),
+           CompareTrigger);
+  }
+
+void  CMUSHclientDoc::SortTriggers (const set<CTrigger *> * pExclude)
+  {
+  CTriggerRevMap newTriggerRevMap;
+  vector<CTrigger *> newTriggerArray;
+  BuildTriggerIndexes (newTriggerArray, newTriggerRevMap, pExclude);
+
+  // build the replacement indexes before changing either live index
+  GetTriggerArray ().SetSize (newTriggerArray.size ());
+  for (size_t i = 0; i < newTriggerArray.size (); i++)
+    GetTriggerArray ().SetAt (i, newTriggerArray [i]);
+  GetTriggerRevMap ().swap (newTriggerRevMap);
 
   } // end of CMUSHclientDoc::SortTriggers
 
@@ -6268,34 +6279,135 @@ static int CompareAlias (const void * elem1, const void * elem2)
   }   // end of CompareAlias
 
 
-void  CMUSHclientDoc::SortAliases (void)
+void CMUSHclientDoc::BuildAliasIndexes (
+  vector<CAlias *> & aliasArray,
+  CAliasRevMap & aliasRevMap,
+  const set<CAlias *> * pExclude)
   {
-
-int iCount = GetAliasMap ().GetCount ();
-int i;
 CString strAliasName;
 CAlias * pAlias;
 POSITION pos;
 
-  GetAliasArray ().SetSize (iCount);
-  GetAliasRevMap ().clear ();
+  aliasArray.reserve (GetAliasMap ().GetCount ());
 
   // extract pointers into a simple array
-  for (i = 0, pos = GetAliasMap ().GetStartPosition(); pos; i++)
+  for (pos = GetAliasMap ().GetStartPosition(); pos; )
     {
      GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
-     GetAliasArray ().SetAt (i, pAlias); 
-     GetAliasRevMap () [pAlias] = strAliasName;
+     if (pExclude && pExclude->find (pAlias) != pExclude->end ())
+       continue;
+     aliasArray.push_back (pAlias);
+     aliasRevMap [pAlias] = strAliasName;
     }
 
-
   // sort the array
-  qsort (GetAliasArray ().GetData (), 
-         iCount,
-         sizeof (CAlias *),
-         CompareAlias);
+  if (aliasArray.size () > 1)
+    qsort (&aliasArray [0],
+           aliasArray.size (),
+           sizeof (CAlias *),
+           CompareAlias);
+  }
+
+void  CMUSHclientDoc::SortAliases (const set<CAlias *> * pExclude)
+  {
+  CAliasRevMap newAliasRevMap;
+  vector<CAlias *> newAliasArray;
+  BuildAliasIndexes (newAliasArray, newAliasRevMap, pExclude);
+
+  // build the replacement indexes before changing either live index
+  GetAliasArray ().SetSize (newAliasArray.size ());
+  for (size_t i = 0; i < newAliasArray.size (); i++)
+    GetAliasArray ().SetAt (i, newAliasArray [i]);
+  GetAliasRevMap ().swap (newAliasRevMap);
 
   } // end of CMUSHclientDoc::SortAliases
+
+void CMUSHclientDoc::RetireAlias (CAlias * pAlias)
+  {
+  if (!pAlias)
+    return;
+  if (!pAlias->bExecutingScript)
+    {
+    delete pAlias;
+    return;
+    }
+  pAlias->pNextRetired = m_pRetiredAliases;
+  m_pRetiredAliases = pAlias;
+  }
+
+void CMUSHclientDoc::RetireTrigger (CTrigger * pTrigger)
+  {
+  if (!pTrigger)
+    return;
+  if (!pTrigger->bExecutingScript)
+    {
+    delete pTrigger;
+    return;
+    }
+  pTrigger->pNextRetired = m_pRetiredTriggers;
+  m_pRetiredTriggers = pTrigger;
+  }
+
+void CMUSHclientDoc::RetireTimer (CTimer * pTimer)
+  {
+  if (!pTimer)
+    return;
+  if (!pTimer->bExecutingScript)
+    {
+    delete pTimer;
+    return;
+    }
+  pTimer->pNextRetired = m_pRetiredTimers;
+  m_pRetiredTimers = pTimer;
+  }
+
+void CMUSHclientDoc::DeleteRetiredAliases ()
+  {
+  CAlias ** ppAlias = &m_pRetiredAliases;
+  while (*ppAlias)
+    {
+    CAlias * pAlias = *ppAlias;
+    if (pAlias->bExecutingScript)
+      ppAlias = &pAlias->pNextRetired;
+    else
+      {
+      *ppAlias = pAlias->pNextRetired;
+      delete pAlias;
+      }
+    }
+  }
+
+void CMUSHclientDoc::DeleteRetiredTriggers ()
+  {
+  CTrigger ** ppTrigger = &m_pRetiredTriggers;
+  while (*ppTrigger)
+    {
+    CTrigger * pTrigger = *ppTrigger;
+    if (pTrigger->bExecutingScript)
+      ppTrigger = &pTrigger->pNextRetired;
+    else
+      {
+      *ppTrigger = pTrigger->pNextRetired;
+      delete pTrigger;
+      }
+    }
+  }
+
+void CMUSHclientDoc::DeleteRetiredTimers ()
+  {
+  CTimer ** ppTimer = &m_pRetiredTimers;
+  while (*ppTimer)
+    {
+    CTimer * pTimer = *ppTimer;
+    if (pTimer->bExecutingScript)
+      ppTimer = &pTimer->pNextRetired;
+    else
+      {
+      *ppTimer = pTimer->pNextRetired;
+      delete pTimer;
+      }
+    }
+  }
 
 
 
