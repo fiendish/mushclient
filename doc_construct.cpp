@@ -221,6 +221,7 @@ int i;
   m_InputFontHeight = 0;
   m_InputFontWidth = 0;
   m_total_lines = 0;
+  m_iOutputGeneration = 0;
   m_newlines_received = 0;
   m_last_line_with_IAC_GA = 0;
   m_nTotalLinesSent = 0;
@@ -272,6 +273,10 @@ int i;
   m_bInParagraph = false;
   m_bMXP_script = false;
   m_bPreMode = false;
+  m_iMXPParagraphOwner = 0;
+  m_iMXPPreOwner = 0;
+  m_iMXPScriptOwner = 0;
+  m_iMXPListOwner = 0;
   m_iMXP_defaultMode = eMXP_open;
   m_iMXP_mode = m_iMXP_defaultMode;
   m_cLastChar = 0;
@@ -396,6 +401,7 @@ int i;
   
   m_iMXPerrors = 0;     
   m_iMXPtags = 0;       
+  m_iMXPGeneration = 0;
   m_iMXPentities = 0;   
 
   // scripting support
