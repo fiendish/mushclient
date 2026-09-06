@@ -1157,10 +1157,16 @@ CRect rect;
   // recreate background colour if necessary  
   if (m_backcolour != pDoc->m_input_background_colour)
     {
+    CBrush * pNewBrush = new CBrush (pDoc->m_input_background_colour);
+    if (!pNewBrush->GetSafeHandle ())
+      {
+      delete pNewBrush;
+      AfxThrowResourceException ();
+      }
     if (m_backbr)
       m_backbr->DeleteObject ();
     delete m_backbr;
-    m_backbr = new CBrush (pDoc->m_input_background_colour);
+    m_backbr = pNewBrush;
     m_backcolour = pDoc->m_input_background_colour;
     }
 
@@ -1240,10 +1246,16 @@ void CSendView::OnInitialUpdate()
 
   m_owner_frame->FixUpSplitterBar ();
   
+  CBrush * pNewBrush = new CBrush (pDoc->m_input_background_colour);
+  if (!pNewBrush->GetSafeHandle ())
+    {
+    delete pNewBrush;
+    AfxThrowResourceException ();
+    }
   if (m_backbr)
     m_backbr->DeleteObject ();
   delete m_backbr;
-  m_backbr = new CBrush (pDoc->m_input_background_colour);
+  m_backbr = pNewBrush;
   m_backcolour = pDoc->m_input_background_colour;
 
   // if they want auto-command size, put back to 1
