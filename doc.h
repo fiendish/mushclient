@@ -68,6 +68,19 @@ class CTextDocument;
 class UDPsocket;
 class COutputAppendTransaction;
 
+template <class T>
+struct CXMLLoadChange
+  {
+  CXMLLoadChange () : pOld (NULL), pNew (NULL),
+    iNewCreationNumber (0), bApplied (false),
+    bRollbackOwnsNew (false) {}
+  CString strName;
+  T * pOld;
+  T * pNew;
+  __int64 iNewCreationNumber;
+  bool bApplied;
+  bool bRollbackOwnsNew;
+  };
 
 #define ESC '\x1B'
 
@@ -491,11 +504,14 @@ class ScriptItem
   ScriptItem (CPlugin * pPlugin,
               const string sText, 
               const string sSource) :
-        pWhichPlugin  (pPlugin), 
+        sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
+        iPluginInstanceNumber
+          (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
         sScriptText   (sText), 
         sScriptSource (sSource) {};
 
-  CPlugin * pWhichPlugin;        // which plugin
+  const string sPluginID;        // which plugin, or empty for the world
+  const __int64 iPluginInstanceNumber;
   const string sScriptText;      // the script to execute
   const string sScriptSource;    // what it is, eg. "Trigger X"
   };
@@ -508,12 +524,18 @@ class OneShotItem
 
   // constructor
   OneShotItem (CPlugin * pPlugin,
-              const string sKey) :
-        pWhichPlugin  (pPlugin), 
-        sItemKey   (sKey) {};
+              const string sKey,
+              const __int64 iCreationNumber) :
+        sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
+        iPluginInstanceNumber
+          (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
+        sItemKey   (sKey),
+        iCreationNumber (iCreationNumber) {};
 
-  CPlugin * pWhichPlugin;     // which plugin
+  const string sPluginID;     // which plugin, or empty for the world
+  const __int64 iPluginInstanceNumber;
   const string sItemKey;      // the key to delete
+  const __int64 iCreationNumber; // exact object instance that fired
   };
 
 typedef list<OneShotItem> OneShotItemMap;
@@ -696,11 +718,25 @@ public:
   CAliasMap m_AliasMap;
   CAliasArray m_AliasArray;       // array of aliases for sequencing
   CAliasRevMap m_AliasRevMap;     // for getting name back from pointer
-  CTriggerMap m_TriggerMap;       
+  CAlias * m_pRetiredAliases;  // replaced while their script was active
+  CTriggerMap m_TriggerMap;
   CTriggerArray m_TriggerArray;   // array of triggers for sequencing
   CTriggerRevMap m_TriggerRevMap; // for getting name back from pointer
+  CTrigger * m_pRetiredTriggers;  // replaced while their script was active
   CTimerMap m_TimerMap;
   CTimerRevMap m_TimerRevMap;     // for getting name back from pointer
+  CTimer * m_pRetiredTimers;  // replaced while their script was active
+
+  // Temporary targets used while a replacement set is parsed. The live maps
+  // and runtime indexes stay unchanged until the complete set is valid.
+  CAliasMap * m_pSetLoadAliasMap;
+  CAliasArray * m_pSetLoadAliasArray;
+  CAliasRevMap * m_pSetLoadAliasRevMap;
+  CTriggerMap * m_pSetLoadTriggerMap;
+  CTriggerArray * m_pSetLoadTriggerArray;
+  CTriggerRevMap * m_pSetLoadTriggerRevMap;
+  CTimerMap * m_pSetLoadTimerMap;
+  CTimerRevMap * m_pSetLoadTimerRevMap;
 
 
 // new in version 7
@@ -1347,6 +1383,7 @@ public:
   bool        m_bPluginListChangedPending;
   int         m_iPluginListChangedDeferralDepth;
   bool        m_bPluginListChangedDeferred;
+  bool        m_bInScreendraw;
 
   CString     m_strLastCommandSent;   // for spam prevention
   int         m_iLastCommandCount;    // number of times last command sent
@@ -1612,7 +1649,7 @@ public:
                             bool & bNoLog,
                             bool & bNoOutput,
                             bool & bChangedColour,
-                            CTriggerList & triggerList,
+                            OneShotItemMap & triggerList,
                             CString & strExtraOutput,
                             ScriptItemMap & mapDeferredScripts,
                             OneShotItemMap & mapOneShotItems);
@@ -1621,7 +1658,7 @@ public:
                             const bool bCountThem,
                             bool & bOmitFromLog,
                             bool & bEchoAlias,
-                            CAliasList & AliasList,
+                            OneShotItemMap & AliasList,
                             OneShotItemMap & mapOneShotItems);
 
   void WriteToLog (const char * text, size_t len);
@@ -1758,19 +1795,21 @@ public:
   UINT Load_Triggers_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
-  bool Load_One_Trigger_XML (CXMLelement & node, 
+  bool Load_One_Trigger_XML (CXMLelement & node,
     const unsigned long iMask,
-    const long iVersion, 
-    bool bUseDefault, 
-    const unsigned long iFlags);
+    const long iVersion,
+    bool bUseDefault,
+    const unsigned long iFlags,
+    CXMLLoadChange<CTrigger> & change);
   UINT Load_Aliases_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
-  bool Load_One_Alias_XML (CXMLelement & node, 
+  bool Load_One_Alias_XML (CXMLelement & node,
     const unsigned long iMask,
-    const long iVersion, 
-    bool bUseDefault, 
-    const unsigned long iFlags);
+    const long iVersion,
+    bool bUseDefault,
+    const unsigned long iFlags,
+    CXMLLoadChange<CAlias> & change);
   UINT Load_Variables_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
@@ -1782,11 +1821,12 @@ public:
   UINT Load_Timers_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
-  bool Load_One_Timer_XML (CXMLelement & node, 
+  bool Load_One_Timer_XML (CXMLelement & node,
     const unsigned long iMask,
-    const long iVersion, 
-    bool bUseDefault, 
-    const unsigned long iFlags);
+    const long iVersion,
+    bool bUseDefault,
+    const unsigned long iFlags,
+    CXMLLoadChange<CTimer> & change);
   UINT Load_Macros_XML (CXMLelement & parent, 
     const unsigned long iFlags);
   void Load_One_Macro_XML (CXMLelement & node, 
@@ -1830,11 +1870,25 @@ public:
   void InternalLoadPlugin (const CString & strName);
 
   // set up trigger array after adding a trigger or two
-  void SortTriggers (void);
+  void SortTriggers (const set<CTrigger *> * pExclude = NULL);
+  void BuildTriggerIndexes (vector<CTrigger *> & triggerArray,
+                            CTriggerRevMap & triggerRevMap,
+                            const set<CTrigger *> * pExclude = NULL);
   // set up alias array after adding an alias or two
-  void SortAliases (void);
+  void SortAliases (const set<CAlias *> * pExclude = NULL);
+  void BuildAliasIndexes (vector<CAlias *> & aliasArray,
+                          CAliasRevMap & aliasRevMap,
+                          const set<CAlias *> * pExclude = NULL);
   // set up timer reverse map after adding timers
-  void SortTimers (void);
+  void SortTimers (const set<CTimer *> * pExclude = NULL);
+  void BuildTimerIndex (CTimerRevMap & timerRevMap,
+                        const set<CTimer *> * pExclude = NULL);
+  void RetireAlias (CAlias * pAlias);
+  void RetireTrigger (CTrigger * pTrigger);
+  void RetireTimer (CTimer * pTimer);
+  void DeleteRetiredAliases ();
+  void DeleteRetiredTriggers ();
+  void DeleteRetiredTimers ();
 
   BOOL Load_Set (const int set_type, 
                  CString strFileName,
@@ -1847,11 +1901,11 @@ public:
                         bool & bOmitFromLog,
                         const bool bTest = false);
 
-  CTrigger * EvaluateTrigger (const CString & input, 
-                              CString & output, 
-                              int & iItem,
+  CTrigger * EvaluateTrigger (const CString & input,
+                              CString & output,
                               int & iStartCol,
-                              int & iEndCol);
+                              int & iEndCol,
+                              CTrigger * trigger_item);
 
   CString FixSendText (const CString strSource, 
                             const int iSendTo,
@@ -2214,7 +2268,9 @@ public:
   // helper routines to get the appropriate map
   CTriggerMap & GetTriggerMap (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadTriggerMap)
+      return *m_pSetLoadTriggerMap;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerMap;
     else
       return m_TriggerMap;
@@ -2222,7 +2278,9 @@ public:
 
   CTriggerArray & GetTriggerArray (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadTriggerArray)
+      return *m_pSetLoadTriggerArray;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerArray;
     else
       return m_TriggerArray;
@@ -2230,7 +2288,9 @@ public:
 
   CTriggerRevMap & GetTriggerRevMap (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadTriggerRevMap)
+      return *m_pSetLoadTriggerRevMap;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerRevMap;
     else
       return m_TriggerRevMap;
@@ -2238,7 +2298,9 @@ public:
 
   CAliasMap & GetAliasMap (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadAliasMap)
+      return *m_pSetLoadAliasMap;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasMap;
     else
       return m_AliasMap;
@@ -2246,7 +2308,9 @@ public:
 
   CAliasArray & GetAliasArray (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadAliasArray)
+      return *m_pSetLoadAliasArray;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasArray;
     else
       return m_AliasArray;
@@ -2254,7 +2318,9 @@ public:
 
   CAliasRevMap & GetAliasRevMap (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadAliasRevMap)
+      return *m_pSetLoadAliasRevMap;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasRevMap;
     else
       return m_AliasRevMap;
@@ -2262,7 +2328,9 @@ public:
 
   CTimerMap & GetTimerMap (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadTimerMap)
+      return *m_pSetLoadTimerMap;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TimerMap;
     else
       return m_TimerMap;
@@ -2270,7 +2338,9 @@ public:
 
   CTimerRevMap & GetTimerRevMap (void)
     {
-    if (m_CurrentPlugin)
+    if (m_pSetLoadTimerRevMap)
+      return *m_pSetLoadTimerRevMap;
+    else if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TimerRevMap;
     else
       return m_TimerRevMap;
@@ -2997,6 +3067,61 @@ class COutputAppendTransaction
 
 /////////////////////////////////////////////////////////////////////////////
 
+class CAliasExecutionGuard
+  {
+  public:
+  CAliasExecutionGuard (CMUSHclientDoc * pDoc, CAlias * pAlias) :
+      m_pDoc (pDoc), m_pAlias (pAlias), m_bSavedValue (pAlias->bExecutingScript)
+    { m_pAlias->bExecutingScript = true; }
+  ~CAliasExecutionGuard ()
+    {
+    m_pAlias->bExecutingScript = m_bSavedValue;
+    m_pDoc->DeleteRetiredAliases ();
+    }
+
+  private:
+  CMUSHclientDoc * m_pDoc;
+  CAlias * m_pAlias;
+  bool m_bSavedValue;
+  };
+
+class CTriggerExecutionGuard
+  {
+  public:
+  CTriggerExecutionGuard (CMUSHclientDoc * pDoc, CTrigger * pTrigger) :
+      m_pDoc (pDoc), m_pTrigger (pTrigger), m_bSavedValue (pTrigger->bExecutingScript)
+    { m_pTrigger->bExecutingScript = true; }
+  ~CTriggerExecutionGuard ()
+    {
+    m_pTrigger->bExecutingScript = m_bSavedValue;
+    m_pDoc->DeleteRetiredTriggers ();
+    }
+
+  private:
+  CMUSHclientDoc * m_pDoc;
+  CTrigger * m_pTrigger;
+  bool m_bSavedValue;
+  };
+
+class CTimerExecutionGuard
+  {
+  public:
+  CTimerExecutionGuard (CMUSHclientDoc * pDoc, CTimer * pTimer) :
+      m_pDoc (pDoc), m_pTimer (pTimer), m_bSavedValue (pTimer->bExecutingScript)
+    { m_pTimer->bExecutingScript = true; }
+  ~CTimerExecutionGuard ()
+    {
+    m_pTimer->bExecutingScript = m_bSavedValue;
+    m_pDoc->DeleteRetiredTimers ();
+    }
+
+  private:
+  CMUSHclientDoc * m_pDoc;
+  CTimer * m_pTimer;
+  bool m_bSavedValue;
+  };
+
+/////////////////////////////////////////////////////////////////////////////
 
 
 // MXP-oriented utilities

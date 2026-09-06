@@ -918,6 +918,8 @@ bool bError = true;
 
 void CMUSHclientDoc::OnFilePluginwizard() 
 {
+  CPluginContextGuard pluginContextGuard (this, NULL);
+
   // TODO: The property sheet attached to your project
   // via this function is not hooked up to any message
   // handler.  In order to actually use the property sheet,
@@ -1336,83 +1338,152 @@ void CMUSHclientDoc::OnFilePluginwizard()
 
     if (propSheet.m_Page1.m_bRemoveItems)
       {
-      // ---------- triggers ----------
+      vector<CString> triggerNames;
+      vector<CString> aliasNames;
+      vector<CString> timerNames;
+      set<CTrigger *> triggersToDelete;
+      set<CAlias *> aliasesToDelete;
+      set<CTimer *> timersToDelete;
 
-      iCount = 0;
       for (pos = m_TriggerMap.GetStartPosition(); pos; )
-        {                                               
+        {
         CTrigger * t;
-        m_TriggerMap.GetNextAssoc (pos, strName, t);  
+        m_TriggerMap.GetNextAssoc (pos, strName, t);
         if (t->bSelected)
           {
-          iCount++;
-          // delete its pointer
-          delete t;
-          // now delete its entry
-          m_TriggerMap.RemoveKey (strName);
+          triggerNames.push_back (strName);
+          triggersToDelete.insert (t);
           }   // end of selected trigger
-    
-        // sort remaining ones, show document modified
-        if (iCount)
-          {
-          m_CurrentPlugin = NULL;
-          SortTriggers ();
-          SetModifiedFlag (TRUE);   // document has changed
-          }
-
         }  // end of doing all triggers
 
-      // ---------- aliases ----------
-
-      iCount = 0;
       for (pos = m_AliasMap.GetStartPosition(); pos; )
-        {                                               
+        {
         CAlias * a;
-        m_AliasMap.GetNextAssoc (pos, strName, a);  
+        m_AliasMap.GetNextAssoc (pos, strName, a);
         if (a->bSelected)
           {
-          iCount++;
-          // delete its pointer
-          delete a;
-          // now delete its entry
-          m_AliasMap.RemoveKey (strName);
+          aliasNames.push_back (strName);
+          aliasesToDelete.insert (a);
           }   // end of selected Alias
-    
-        //  show document modified
-        if (iCount)
-          {
-          m_CurrentPlugin = NULL;
-          SortAliases ();
-          SetModifiedFlag (TRUE);   // document has changed
-          }
-
         }  // end of doing all aliases
 
-      // ---------- timers ----------
-
-      iCount = 0;
       for (pos = m_TimerMap.GetStartPosition(); pos; )
-        {                                               
+        {
         CTimer * t;
-        m_TimerMap.GetNextAssoc (pos, strName, t);  
+        m_TimerMap.GetNextAssoc (pos, strName, t);
         if (t->bSelected)
           {
-          iCount++;
-          // delete its pointer
-          delete t;
-          // now delete its entry
-          m_TimerMap.RemoveKey (strName);
+          timerNames.push_back (strName);
+          timersToDelete.insert (t);
           }   // end of selected Timer
-    
-        // show document modified
-        if (iCount)
-          {
-          m_CurrentPlugin = NULL;
-          SortTimers ();
-          SetModifiedFlag (TRUE);   // document has changed
-          }
-
         }  // end of doing all Timers
+
+      m_CurrentPlugin = NULL;
+
+      // Build every replacement index before changing a live index or map.
+      vector<CTrigger *> newTriggerArray;
+      CTriggerRevMap newTriggerRevMap;
+      vector<CAlias *> newAliasArray;
+      CAliasRevMap newAliasRevMap;
+      CTimerRevMap newTimerRevMap;
+      if (!triggersToDelete.empty ())
+        BuildTriggerIndexes (newTriggerArray,
+                             newTriggerRevMap,
+                             &triggersToDelete);
+      if (!aliasesToDelete.empty ())
+        BuildAliasIndexes (newAliasArray,
+                           newAliasRevMap,
+                           &aliasesToDelete);
+      if (!timersToDelete.empty ())
+        BuildTimerIndex (newTimerRevMap, &timersToDelete);
+
+      // Grow both live arrays before publishing either replacement. Shrinking
+      // after this point does not allocate.
+      const int iOldTriggerArraySize = m_TriggerArray.GetSize ();
+      const int iOldAliasArraySize = m_AliasArray.GetSize ();
+      bool bTriggerArrayPrepared = false;
+      try
+        {
+        if (!triggersToDelete.empty ())
+          {
+          const int iPreparedSize =
+            iOldTriggerArraySize > static_cast<int> (newTriggerArray.size ()) ?
+              iOldTriggerArraySize : newTriggerArray.size ();
+          m_TriggerArray.SetSize (iPreparedSize);
+          bTriggerArrayPrepared = true;
+          }
+        if (!aliasesToDelete.empty ())
+          {
+          const int iPreparedSize =
+            iOldAliasArraySize > static_cast<int> (newAliasArray.size ()) ?
+              iOldAliasArraySize : newAliasArray.size ();
+          m_AliasArray.SetSize (iPreparedSize);
+          }
+        }
+      catch (...)
+        {
+        if (bTriggerArrayPrepared)
+          m_TriggerArray.SetSize (iOldTriggerArraySize);
+        throw;
+        }
+
+      if (!triggersToDelete.empty ())
+        {
+        m_TriggerArray.SetSize (newTriggerArray.size ());
+        for (size_t i = 0; i < newTriggerArray.size (); i++)
+          m_TriggerArray.SetAt (i, newTriggerArray [i]);
+        m_TriggerRevMap.swap (newTriggerRevMap);
+        }
+      if (!aliasesToDelete.empty ())
+        {
+        m_AliasArray.SetSize (newAliasArray.size ());
+        for (size_t i = 0; i < newAliasArray.size (); i++)
+          m_AliasArray.SetAt (i, newAliasArray [i]);
+        m_AliasRevMap.swap (newAliasRevMap);
+        }
+      if (!timersToDelete.empty ())
+        m_TimerRevMap.swap (newTimerRevMap);
+
+      if (!triggersToDelete.empty ())
+        {
+        for (vector<CString>::iterator it = triggerNames.begin ();
+             it != triggerNames.end (); it++)
+          {
+          CTrigger * t;
+          VERIFY (m_TriggerMap.Lookup (*it, t));
+          VERIFY (m_TriggerMap.RemoveKey (*it));
+          RetireTrigger (t);
+          }
+        }
+
+      if (!aliasesToDelete.empty ())
+        {
+        for (vector<CString>::iterator it = aliasNames.begin ();
+             it != aliasNames.end (); it++)
+          {
+          CAlias * a;
+          VERIFY (m_AliasMap.Lookup (*it, a));
+          VERIFY (m_AliasMap.RemoveKey (*it));
+          RetireAlias (a);
+          }
+        }
+
+      if (!timersToDelete.empty ())
+        {
+        for (vector<CString>::iterator it = timerNames.begin ();
+             it != timerNames.end (); it++)
+          {
+          CTimer * t;
+          VERIFY (m_TimerMap.Lookup (*it, t));
+          VERIFY (m_TimerMap.RemoveKey (*it));
+          RetireTimer (t);
+          }
+        }
+
+      if (!triggersToDelete.empty () ||
+          !aliasesToDelete.empty () ||
+          !timersToDelete.empty ())
+        SetModifiedFlag (TRUE);
 
       // ---------- variables ----------
 

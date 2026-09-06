@@ -1843,7 +1843,7 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
       // get unlabelled trigger's internal name
       const char * pLabel = pTrigger->strLabel;
       if (pLabel [0] == 0)
-         pLabel = GetTriggerRevMap () [pTrigger].c_str ();
+         pLabel = pTrigger->strInternalName;
 
 
       const char * pType = "Normal";
@@ -1904,7 +1904,7 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
       // get unlabelled alias's internal name
       const char * pLabel = pAlias->strLabel;
       if (pLabel [0] == 0)
-         pLabel = GetAliasRevMap () [pAlias].c_str ();
+         pLabel = pAlias->strInternalName;
 
 
       const char * pType = "Normal";
@@ -1987,9 +1987,22 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
       CTimer * pTimer = it->second;
 
       // get unlabelled timer's internal name
+      CString strTimerName;
       const char * pLabel = pTimer->strLabel;
       if (pLabel [0] == 0)
-         pLabel = GetTimerRevMap () [pTimer].c_str ();
+        {
+        CTimer * pMappedTimer;
+        for (POSITION timerpos = GetTimerMap ().GetStartPosition ();
+             timerpos; )
+          {
+          GetTimerMap ().GetNextAssoc (
+            timerpos, strTimerName, pMappedTimer);
+          if (pMappedTimer == pTimer)
+            break;
+          strTimerName.Empty ();
+          }
+        pLabel = strTimerName;
+        }
 
 
       CString strColour = enabledFore;

@@ -43,6 +43,115 @@ The purpose of this class is to make a common place for handling the lists of:
 
 */
 
+static void CopyPropertyRuntimeState (CObject * pOldItem, CObject * pNewItem,
+                                      const bool bPropertiesChanged)
+  {
+  if (pOldItem->IsKindOf (RUNTIME_CLASS (CAlias)))
+    {
+    CAlias * pOld = (CAlias *) pOldItem;
+    CAlias * pNew = (CAlias *) pNewItem;
+    pNew->nInvocationCount = pOld->nInvocationCount;
+    pNew->nMatched = pOld->nMatched;
+    pNew->wildcards = pOld->wildcards;
+    pNew->tWhenMatched = pOld->tWhenMatched;
+    pNew->bIncluded = pOld->bIncluded;
+    pNew->bSelected = pOld->bSelected;
+    pNew->iUserOption = pOld->iUserOption;
+    return;
+    }
+
+  if (pOldItem->IsKindOf (RUNTIME_CLASS (CTrigger)))
+    {
+    CTrigger * pOld = (CTrigger *) pOldItem;
+    CTrigger * pNew = (CTrigger *) pNewItem;
+    pNew->nInvocationCount = pOld->nInvocationCount;
+    pNew->nMatched = pOld->nMatched;
+    pNew->wildcards = pOld->wildcards;
+    pNew->tWhenMatched = pOld->tWhenMatched;
+    pNew->bIncluded = pOld->bIncluded;
+    pNew->bSelected = pOld->bSelected;
+    pNew->iUserOption = pOld->iUserOption;
+    if (pOld->regexp && pNew->regexp)
+      pNew->regexp->iTimeTaken = pOld->regexp->iTimeTaken;
+    return;
+    }
+
+  if (pOldItem->IsKindOf (RUNTIME_CLASS (CTimer)))
+    {
+    CTimer * pOld = (CTimer *) pOldItem;
+    CTimer * pNew = (CTimer *) pNewItem;
+    pNew->nInvocationCount = pOld->nInvocationCount;
+    pNew->nMatched = pOld->nMatched;
+    pNew->nCreateSequence = pOld->nCreateSequence;
+    if (!bPropertiesChanged || !pNew->bEnabled)
+      {
+      pNew->tFireTime = pOld->tFireTime;
+      pNew->tWhenFired = pOld->tWhenFired;
+      }
+    pNew->bIncluded = pOld->bIncluded;
+    pNew->bSelected = pOld->bSelected;
+    pNew->iUserOption = pOld->iUserOption;
+    return;
+    }
+
+  if (pOldItem->IsKindOf (RUNTIME_CLASS (CVariable)))
+    ((CVariable *) pNewItem)->bSelected = ((CVariable *) pOldItem)->bSelected;
+  }
+
+static void SetPropertyCreationNumber (CObject * pItem)
+  {
+  if (pItem->IsKindOf (RUNTIME_CLASS (CAlias)))
+    ((CAlias *) pItem)->nCreationNumber = App.GetUniqueNumber ();
+  else if (pItem->IsKindOf (RUNTIME_CLASS (CTrigger)))
+    ((CTrigger *) pItem)->nCreationNumber = App.GetUniqueNumber ();
+  else if (pItem->IsKindOf (RUNTIME_CLASS (CTimer)))
+    ((CTimer *) pItem)->nCreationNumber = App.GetUniqueNumber ();
+  }
+
+static void SortPropertyObjects (CMUSHclientDoc * pDoc, CObject * pItem,
+                                 const set<CObject *> * pExclude = NULL)
+  {
+  if (pItem->IsKindOf (RUNTIME_CLASS (CAlias)))
+    {
+    set<CAlias *> excluded;
+    if (pExclude)
+      for (set<CObject *>::const_iterator it = pExclude->begin ();
+           it != pExclude->end (); it++)
+        excluded.insert ((CAlias *) *it);
+    pDoc->SortAliases (pExclude ? &excluded : NULL);
+    }
+  else if (pItem->IsKindOf (RUNTIME_CLASS (CTrigger)))
+    {
+    set<CTrigger *> excluded;
+    if (pExclude)
+      for (set<CObject *>::const_iterator it = pExclude->begin ();
+           it != pExclude->end (); it++)
+        excluded.insert ((CTrigger *) *it);
+    pDoc->SortTriggers (pExclude ? &excluded : NULL);
+    }
+  else if (pItem->IsKindOf (RUNTIME_CLASS (CTimer)))
+    {
+    set<CTimer *> excluded;
+    if (pExclude)
+      for (set<CObject *>::const_iterator it = pExclude->begin ();
+           it != pExclude->end (); it++)
+        excluded.insert ((CTimer *) *it);
+    pDoc->SortTimers (pExclude ? &excluded : NULL);
+    }
+  }
+
+static void RetirePropertyObject (CMUSHclientDoc * pDoc, CObject * pItem)
+  {
+  if (pItem->IsKindOf (RUNTIME_CLASS (CAlias)))
+    pDoc->RetireAlias ((CAlias *) pItem);
+  else if (pItem->IsKindOf (RUNTIME_CLASS (CTrigger)))
+    pDoc->RetireTrigger ((CTrigger *) pItem);
+  else if (pItem->IsKindOf (RUNTIME_CLASS (CTimer)))
+    pDoc->RetireTimer ((CTimer *) pItem);
+  else
+    delete pItem;
+  }
+
 /////////////////////////////////////////////////////////////////////////////
 // CGenPropertyPage property page
 IMPLEMENT_DYNAMIC(CGenPropertyPage, CPropertyPage)
@@ -264,11 +373,82 @@ void CGenPropertyPage::OnAddItem(CDialog & dlg)
     return;
     }
 
-  // add new object to map
-  m_ObjectMap->SetAt (strObjectName, pItem = MakeNewObject ());
+  std::unique_ptr<CObject> pNewItem (MakeNewObject ());
+  pItem = pNewItem.get ();
+  SetPropertyCreationNumber (pItem);
 
   // unload from dialog into object's properties
   UnloadDialog (&dlg, pItem);
+
+  SetInternalName (pItem, strObjectName);  // set name so we can delete one-shot items
+
+  // create a CString for lookup purposes
+  std::unique_ptr<CString> pstrObjectName (new CString (strObjectName));
+
+  CString strDispatchMessage;
+  if (m_doc->m_ScriptEngine)
+    SetDispatchID (pItem, m_doc->GetProcedureDispid (GetScriptName (pItem),
+                                                     m_strObjectType,
+                                                     GetLabel (pItem),
+                                                     strDispatchMessage));
+
+  HTREEITEM hNewTreeItem = NULL;
+  HTREEITEM hNewTreeParent = NULL;
+  int nNewListItem = -1;
+
+  // Build the UI row before publishing the object.
+  if (m_bWantTreeControl)
+    {
+    hNewTreeItem = add_tree_item (pItem, pstrObjectName.get ());
+    hNewTreeParent = m_cTreeCtrl.GetParentItem (hNewTreeItem);
+    }
+  else
+    nNewListItem = add_list_item (pItem, pstrObjectName.get (), 0, TRUE);
+
+  // Publish the object and its runtime index as one operation.
+  try
+    {
+    m_ObjectMap->SetAt (strObjectName, pItem);
+    try
+      {
+      SortPropertyObjects (m_doc, pItem);
+      }
+    catch (...)
+      {
+      m_ObjectMap->RemoveKey (strObjectName);
+      throw;
+      }
+    }
+  catch (...)
+    {
+    bool bRemoved;
+    if (m_bWantTreeControl)
+      {
+      bRemoved = m_cTreeCtrl.DeleteItem (hNewTreeItem) != FALSE;
+      if (bRemoved)
+        CheckParentHasChildren (hNewTreeParent);
+      }
+    else
+      bRemoved = m_ctlList->DeleteItem (nNewListItem) != FALSE;
+    if (!bRemoved)
+      pstrObjectName.release ();
+    throw;
+    }
+
+  pNewItem.release ();
+  pstrObjectName.release ();
+
+  if (m_bWantTreeControl)
+    {
+    m_cTreeCtrl.SelectItem (hNewTreeItem);
+    m_cTreeCtrl.EnsureVisible (hNewTreeItem);
+    }
+  else
+    {
+    m_ctlList->SetItemState (nNewListItem, LVIS_FOCUSED | LVIS_SELECTED,
+                                      LVIS_FOCUSED | LVIS_SELECTED);
+    m_ctlList->EnsureVisible (nNewListItem, FALSE);
+    }
 
   // They can no longer cancel the property sheet, the document has changed
   CancelToClose ();
@@ -276,27 +456,6 @@ void CGenPropertyPage::OnAddItem(CDialog & dlg)
   // remember document modified if item is not temporary
   if (!CheckIfTemporary (pItem))
     m_doc->SetModifiedFlag (TRUE);
-
-  // create a CString for lookup purposes
-  CString * pstrObjectName = new CString (strObjectName);
-
-  // add this item to the list/tree view
-  if (m_bWantTreeControl)
-    {
-    HTREEITEM hItem = add_tree_item (pItem, pstrObjectName);
-    m_cTreeCtrl.SelectItem (hItem);
-    m_cTreeCtrl.EnsureVisible (hItem);    
-    }
-  else
-    {
-    int nItem = add_list_item (pItem, pstrObjectName, 0, TRUE);
-    m_ctlList->SetItemState (nItem, LVIS_FOCUSED | LVIS_SELECTED, 
-                                    LVIS_FOCUSED | LVIS_SELECTED);
-    m_ctlList->EnsureVisible (nItem, FALSE);    
-    }
-
-
-  SetInternalName (pItem, strObjectName);  // set name so we can delete one-shot items
 
   m_strSelectedItem = strObjectName;      // so it gets selected next time
 
@@ -307,18 +466,8 @@ void CGenPropertyPage::OnAddItem(CDialog & dlg)
   if (GetFilterFlag ())
     m_bReloadList = true;      // full reload because it may have changed filter requirements
 
-// get dispatch id from the script and put it into the item
-
-  if (m_doc->m_ScriptEngine)
-    {
-    CString strMessage;
-    SetDispatchID (pItem, m_doc->GetProcedureDispid (GetScriptName (pItem),
-                                                     m_strObjectType, 
-                                                     GetLabel (pItem),
-                                                     strMessage));
-    if (!strMessage.IsEmpty ())
-      ::UMessageBox (strMessage, MB_ICONINFORMATION);
-    }
+  if (!strDispatchMessage.IsEmpty ())
+    ::UMessageBox (strDispatchMessage, MB_ICONINFORMATION);
   
 }    // end of CGenPropertyPage::OnAddItem
 
@@ -476,10 +625,9 @@ CString strMsg;
     strOldObjectName.MakeLower ();
     }
       
-  // if name changed, delete and re-add it
-  if (strObjectName != strOldObjectName)     // has name changed?
+  bool bNameChanged = strObjectName != strOldObjectName;
+  if (bNameChanged)
     {
-    // here if label has changed
     CObject * new_pItem;
     if (m_ObjectMap->Lookup (strObjectName, new_pItem))
       {
@@ -490,80 +638,165 @@ CString strMsg;
       ::UMessageBox (strMsg);
       return false;
       }
-
-    // remove old entry and re-add under new name
-    m_ObjectMap->RemoveKey (*pstrObjectName);     // remove old entry
-    m_ObjectMap->SetAt (strObjectName, pItem);   // insert under new name
-
-    // delete old name in the list
-    delete pstrObjectName;
-
-    // create a new CString for lookup purposes
-    pstrObjectName = new CString (strObjectName);
-
-    // record item's new name as the list object data
-    if (hdlItem)
-      m_cTreeCtrl.SetItemData (hdlItem, (DWORD) pstrObjectName);
-    else
-      m_ctlList->SetItemData (nItem, (DWORD) pstrObjectName);
-    }   // end of label changing
-
-  SetInternalName (pItem, strObjectName);  // set internal name
+    }
 
   // see if the user changed anything, anyway
-  if (CheckIfChanged (&dlg, pItem))
+  bool bChanged = CheckIfChanged (&dlg, pItem);
+  if (!bChanged && !bNameChanged)
     {
-
-    // unload from dialog into object's properties
-    UnloadDialog (&dlg, pItem);
-
-    // They can no longer cancel the property sheet, the document has changed
-    CancelToClose ();
-    if (!CheckIfTemporary (pItem))
-      m_doc->SetModifiedFlag (TRUE);
-
-
-    if (m_bWantTreeControl)
+    if (m_doc->m_ScriptEngine)
       {
-      // group may have changed, delete and re-add
-      HTREEITEM hdlParent = m_cTreeCtrl.GetParentItem (hdlItem);
-      m_cTreeCtrl.DeleteItem (hdlItem);
-      hdlItem = add_tree_item (pItem, pstrObjectName); 
+      CString strMessage;
+      SetDispatchID (pItem,
+                     m_doc->GetProcedureDispid (GetScriptName (pItem),
+                                                 m_strObjectType,
+                                                 GetLabel (pItem),
+                                                 strMessage));
+      if (!strMessage.IsEmpty ())
+        ::UMessageBox (strMessage, MB_ICONINFORMATION);
+      }
+    return false;
+    }
 
-      // if deleting item deletes only one in group, remove group as well
-      CheckParentHasChildren (hdlParent);
+  std::unique_ptr<CObject> pReplacement (MakeNewObject ());
+  CObject * pUpdatedItem = pReplacement.get ();
+  SetPropertyCreationNumber (pUpdatedItem);
+  UnloadDialog (&dlg, pUpdatedItem);
+  CopyPropertyRuntimeState (pItem, pUpdatedItem, bChanged);
+  SetInternalName (pUpdatedItem, strObjectName);
 
-      // get its new parent
-      hdlParent = m_cTreeCtrl.GetParentItem (hdlItem);
-      m_cTreeCtrl.SetItemState (hdlParent, TVIS_EXPANDED, TVIS_EXPANDED); // expand group (parent)
+  CString strDispatchMessage;
+  if (m_doc->m_ScriptEngine)
+    SetDispatchID (pUpdatedItem,
+                   m_doc->GetProcedureDispid (GetScriptName (pUpdatedItem),
+                                               m_strObjectType,
+                                               GetLabel (pUpdatedItem),
+                                               strDispatchMessage));
 
-      // select the new item
-      m_cTreeCtrl.SelectItem (hdlItem);
-      m_cTreeCtrl.EnsureVisible (hdlItem);  // may have changed groups
+  CString strMapOldName = *pstrObjectName;
+  strMapOldName.MakeLower ();
+  std::unique_ptr<CString> pRowName (new CString (strObjectName));
+
+  set<CObject *> oldObjectToExclude;
+  if (bNameChanged)
+    oldObjectToExclude.insert (pItem);
+
+  HTREEITEM hdlOldParent = NULL;
+  HTREEITEM hdlNewItem = NULL;
+  HTREEITEM hdlNewParent = NULL;
+  int nNewItem = -1;
+  int nOldItem = nItem;
+
+  // Build the replacement UI row before publishing the replacement object.
+  if (m_bWantTreeControl)
+    {
+    hdlOldParent = m_cTreeCtrl.GetParentItem (hdlItem);
+    hdlNewItem = add_tree_item (pUpdatedItem, pRowName.get ());
+    hdlNewParent = m_cTreeCtrl.GetParentItem (hdlNewItem);
+    }
+  else
+    {
+    nNewItem = add_list_item (pUpdatedItem, pRowName.get (), nItem, TRUE);
+    nOldItem = nItem >= nNewItem ? nItem + 1 : nItem;
+    }
+
+  try
+    {
+    if (bNameChanged)
+      {
+      m_ObjectMap->SetAt (strObjectName, pUpdatedItem);
+      try
+        {
+        SortPropertyObjects (m_doc, pUpdatedItem, &oldObjectToExclude);
+        }
+      catch (...)
+        {
+        m_ObjectMap->RemoveKey (strObjectName);
+        throw;
+        }
+      m_ObjectMap->RemoveKey (strMapOldName);
       }
     else
       {
-      // re-setup list with amended details
-      int nNewItem = add_list_item (pItem, pstrObjectName, nItem, FALSE);  // replace
-      m_ctlList->RedrawItems (nNewItem, nNewItem);
+      m_ObjectMap->SetAt (strMapOldName, pUpdatedItem);
+      try
+        {
+        SortPropertyObjects (m_doc, pUpdatedItem);
+        }
+      catch (...)
+        {
+        m_ObjectMap->SetAt (strMapOldName, pItem);
+        throw;
+        }
       }
-
-    }   // end of item changing
-
-// Get dispatch id from the script and put it into the item.
-// We do this even if nothing has changed, so that we can force re-evaluation
-// of the dispatch ID, by just getting the item and pressing OK.
-
-  if (m_doc->m_ScriptEngine)
-    {
-    CString strMessage;
-    SetDispatchID (pItem, m_doc->GetProcedureDispid (GetScriptName (pItem),
-                                                     m_strObjectType, 
-                                                     GetLabel (pItem),
-                                                     strMessage));
-    if (!strMessage.IsEmpty ())
-      ::UMessageBox (strMessage, MB_ICONINFORMATION);
     }
+  catch (...)
+    {
+    bool bRemoved;
+    if (m_bWantTreeControl)
+      {
+      bRemoved = m_cTreeCtrl.DeleteItem (hdlNewItem) != FALSE;
+      if (bRemoved)
+        CheckParentHasChildren (hdlNewParent);
+      }
+    else
+      bRemoved = m_ctlList->DeleteItem (nNewItem) != FALSE;
+    if (!bRemoved)
+      pRowName.release ();
+    throw;
+    }
+
+  pReplacement.release ();
+  pRowName.release ();
+
+  // The replacement now owns the map entry. Retire the old object before UI
+  // cleanup can allocate or send notifications.
+  RetirePropertyObject (m_doc, pItem);
+  pItem = NULL;
+
+  bool bOldRowDeleted;
+  if (m_bWantTreeControl)
+    {
+    bOldRowDeleted = m_cTreeCtrl.DeleteItem (hdlItem) != FALSE;
+    if (bOldRowDeleted)
+      {
+      delete pstrObjectName;
+      pstrObjectName = NULL;
+      CheckParentHasChildren (hdlOldParent);
+      }
+    m_cTreeCtrl.SetItemState (hdlNewParent, TVIS_EXPANDED, TVIS_EXPANDED);
+    m_cTreeCtrl.SelectItem (hdlNewItem);
+    m_cTreeCtrl.EnsureVisible (hdlNewItem);
+    }
+  else
+    {
+    bOldRowDeleted = m_ctlList->DeleteItem (nOldItem) != FALSE;
+    if (bOldRowDeleted)
+      {
+      delete pstrObjectName;
+      pstrObjectName = NULL;
+      }
+    m_ctlList->SetItemState (nNewItem, LVIS_FOCUSED | LVIS_SELECTED,
+                                       LVIS_FOCUSED | LVIS_SELECTED);
+    m_ctlList->EnsureVisible (nNewItem, FALSE);
+    m_ctlList->RedrawItems (nNewItem, nNewItem);
+    }
+
+  if (!bOldRowDeleted)
+    m_bReloadList = true;
+
+  if (bChanged || bNameChanged)
+    {
+    CancelToClose ();
+    if (!CheckIfTemporary (pUpdatedItem))
+      m_doc->SetModifiedFlag (TRUE);
+    }
+
+  if (!strDispatchMessage.IsEmpty ())
+    ::UMessageBox (strDispatchMessage, MB_ICONINFORMATION);
+
+  if (!bOldRowDeleted)
+    AfxThrowResourceException ();
 
   return false;
   } // end of CGenPropertyPage::ChangeOneItem
@@ -668,11 +901,8 @@ bool CGenPropertyPage::DeleteOneItem(CString * pstrObjectName, int & iIncluded, 
   // delete from the map
   m_ObjectMap->RemoveKey (*pstrObjectName);
 
-  // delete the item itself
-  delete pItem;
-
-  // delete its item string
-  delete pstrObjectName;
+  // delete or defer the item itself
+  RetirePropertyObject (m_doc, pItem);
 
   return false; // OK return
   }
@@ -686,9 +916,7 @@ void CGenPropertyPage::OnDeleteItem()
 int iCount =  GetSelectedItemCount ();
 int iGroupCount = GetSelectedGroupCount ();
 
-int nItem,
-    i,
-    iIncluded = 0,
+int iIncluded = 0,
     iExecuting = 0;
 
   // nothing to delete so give up
@@ -712,59 +940,96 @@ int nItem,
         return;
     } // end of wanting to confirm
 
+  // Rebuild the runtime index before any selected object can be deleted.
+  set<CObject *> objectsToDelete;
+  vector<pair<HTREEITEM, CString *> > treeItemsToDelete;
+  vector<pair<int, CString *> > listItemsToDelete;
+  if (m_bWantTreeControl)
+    {
+    for (HTREEITEM hGroup = m_cTreeCtrl.GetRootItem ();
+         hGroup; hGroup = m_cTreeCtrl.GetNextSiblingItem (hGroup))
+      {
+      bool bGroupSelected =
+        (m_cTreeCtrl.GetItemState (hGroup, TVIS_SELECTED) & TVIS_SELECTED) != 0;
+      for (HTREEITEM hItem = m_cTreeCtrl.GetChildItem (hGroup);
+           hItem; hItem = m_cTreeCtrl.GetNextSiblingItem (hItem))
+        if (bGroupSelected ||
+            (m_cTreeCtrl.GetItemState (hItem, TVIS_SELECTED) & TVIS_SELECTED))
+          {
+          CString * pName = (CString *) m_cTreeCtrl.GetItemData (hItem);
+          CObject * pObject;
+          if (!pName || !m_ObjectMap->Lookup (*pName, pObject))
+            treeItemsToDelete.push_back (make_pair (hItem, pName));
+          else if (CheckIfIncluded (pObject))
+            iIncluded++;
+          else if (CheckIfExecuting (pObject))
+            iExecuting++;
+          else
+            {
+            objectsToDelete.insert (pObject);
+            treeItemsToDelete.push_back (make_pair (hItem, pName));
+            }
+          }
+      }
+    }
+  else
+    {
+    for (int iItem = -1;
+         (iItem = m_ctlList->GetNextItem (iItem, LVNI_SELECTED)) != -1;)
+      {
+      CString * pName = (CString *) m_ctlList->GetItemData (iItem);
+      CObject * pObject;
+      if (!pName || !m_ObjectMap->Lookup (*pName, pObject))
+        listItemsToDelete.push_back (make_pair (iItem, pName));
+      else if (CheckIfIncluded (pObject))
+        iIncluded++;
+      else if (CheckIfExecuting (pObject))
+        iExecuting++;
+      else
+        {
+        objectsToDelete.insert (pObject);
+        listItemsToDelete.push_back (make_pair (iItem, pName));
+        }
+      }
+    }
+
+  if (!objectsToDelete.empty ())
+    SortPropertyObjects (m_doc, *objectsToDelete.begin (), &objectsToDelete);
+
 
   // tree control ................
   if (m_bWantTreeControl)
     {
-    // go through entire tree control
-    for (HTREEITEM hGroup = m_cTreeCtrl.GetRootItem ();
-         hGroup;
-         hGroup = m_cTreeCtrl.GetNextSiblingItem (hGroup))
+    for (vector<pair<HTREEITEM, CString *> >::const_iterator it =
+           treeItemsToDelete.begin (); it != treeItemsToDelete.end (); ++it)
       {
-      bool bGroupSelected = m_cTreeCtrl.GetItemState (hGroup, TVIS_SELECTED) & TVIS_SELECTED;
+      int ignoredIncluded = 0;
+      int ignoredExecuting = 0;
+      if (!it->second ||
+          !DeleteOneItem (it->second, ignoredIncluded, ignoredExecuting))
+        if (m_cTreeCtrl.DeleteItem (it->first))
+          delete it->second;
+      }
 
-      // remember which we deleted
-      list<HTREEITEM> deletedItems;
-
-      // find selected items
-      for (HTREEITEM hItem = m_cTreeCtrl.GetChildItem (hGroup);
-          hItem;
-          hItem = m_cTreeCtrl.GetNextSiblingItem (hItem))
-            if (bGroupSelected || m_cTreeCtrl.GetItemState (hItem, TVIS_SELECTED) & TVIS_SELECTED)
-              if (!DeleteOneItem ((CString *) m_cTreeCtrl.GetItemData (hItem), iIncluded, iExecuting))
-                deletedItems.push_back (hItem);
-
-      // loop doesn't work if we delete while going through it, so do it now
-      for (list<HTREEITEM>::const_iterator it =  deletedItems.begin ();
-           it != deletedItems.end ();
-           ++it)
-          m_cTreeCtrl.DeleteItem (*it);
-
+    for (HTREEITEM hGroup = m_cTreeCtrl.GetRootItem (); hGroup; )
+      {
+      HTREEITEM hNextGroup = m_cTreeCtrl.GetNextSiblingItem (hGroup);
       CheckParentHasChildren (hGroup);
-
-      }  // end for each group
+      hGroup = hNextGroup;
+      }
     }   // end of tree control
   else
     // list control ................
     {
-    CUIntArray arySelected;
-    arySelected.SetSize (iCount);
-
-      // first, remember selected items
-    for (nItem = -1, i = 0;
-          (nItem = m_ctlList->GetNextItem(nItem, LVNI_SELECTED)) != -1;)
-           arySelected [i++] = nItem;
-
-    // we do it this way because deleting items buggers up the position in the array
-    for (i = iCount - 1; i >= 0; i--)
+    for (int i = static_cast<int> (listItemsToDelete.size ()) - 1;
+         i >= 0; i--)
       {
-      nItem = arySelected [i];
-
-      // get the lower-case name of this item's object
-      CString * pstrObjectName = (CString *) m_ctlList->GetItemData (nItem);
-
-      if (!DeleteOneItem (pstrObjectName, iIncluded, iExecuting))
-        m_ctlList->DeleteItem (nItem);
+      int ignoredIncluded = 0;
+      int ignoredExecuting = 0;
+      CString * pName = listItemsToDelete [i].second;
+      if (!pName || !DeleteOneItem (pName, ignoredIncluded, ignoredExecuting))
+        if (m_ctlList->DeleteItem (listItemsToDelete [i].first))
+          delete pName;
 
       }   // end of dealing with each selected item
 
@@ -830,11 +1095,45 @@ int CGenPropertyPage::add_list_item (CObject * pItem,
   ASSERT( pItem->IsKindOf( RUNTIME_CLASS( CObject ) ) );
   ASSERT (pstrObjectName != NULL);
 
+  if (!bInsert)
+    {
+    std::unique_ptr<CString> pReplacementName
+      (new CString (*pstrObjectName));
+    int nNewItem = AddItem (pItem, nItem, TRUE);
+    if (nNewItem < 0)
+      AfxThrowResourceException ();
+    if (!m_ctlList->SetItemData (nNewItem, (DWORD) pReplacementName.get ()))
+      {
+      m_ctlList->DeleteItem (nNewItem);
+      AfxThrowResourceException ();
+      }
+
+    int nOldItem = nItem >= nNewItem ? nItem + 1 : nItem;
+    if (!m_ctlList->DeleteItem (nOldItem))
+      {
+      if (!m_ctlList->DeleteItem (nNewItem))
+        pReplacementName.release ();
+      AfxThrowResourceException ();
+      }
+
+    pReplacementName.release ();
+    delete pstrObjectName;
+    SetModificationNumber (pItem, m_nUpdateNumber);
+    return nNewItem;
+    }
+
   // add to control
   int nNewItem = AddItem (pItem, nItem, bInsert);
+  if (nNewItem < 0)
+    AfxThrowResourceException ();
 
   // record item's name as the list object data
-  m_ctlList->SetItemData(nNewItem, (DWORD) pstrObjectName);
+  if (!m_ctlList->SetItemData(nNewItem, (DWORD) pstrObjectName))
+    {
+    if (bInsert)
+      m_ctlList->DeleteItem (nNewItem);
+    AfxThrowResourceException ();
+    }
 
   // stamp with a number so we know if it was updated without our knowledge
   SetModificationNumber (pItem, m_nUpdateNumber);
@@ -859,35 +1158,65 @@ HTREEITEM CGenPropertyPage::add_tree_item (CObject * pItem,
   if (strGroup.IsEmpty ())
     strGroup = Translate ("(ungrouped)");
 
-  // see if group exists already
-  map<CString, HTREEITEM>::const_iterator it;
-
-  it = m_GroupsMap.find (strGroup);
-
-  HTREEITEM hParent;
-
-  // if it exists, find the group tree item (the parent)
-  // if not, create it
-  if (it == m_GroupsMap.end ())
-    {
-    hParent = m_cTreeCtrl.InsertItem (strGroup,TVI_ROOT);
-    m_GroupsMap [strGroup] = hParent;
-    }
-  else
-    hParent = it->second;
-
-  // get the description for the tree control
+  // get the description before publishing a new group
   CString strDescription = GetDescription  (pItem);
 
   // truncate if ridiculously long
   if (strDescription.GetLength () > 100)
     strDescription = strDescription.Left (100) + " ...";
 
+  // see if group exists already
+  map<CString, HTREEITEM>::const_iterator it;
+
+  it = m_GroupsMap.find (strGroup);
+
+  HTREEITEM hParent;
+  bool bNewGroup = false;
+
+  // if it exists, find the group tree item (the parent)
+  // if not, create it
+  if (it == m_GroupsMap.end ())
+    {
+    hParent = m_cTreeCtrl.InsertItem (strGroup,TVI_ROOT);
+    if (!hParent)
+      AfxThrowResourceException ();
+    try
+      {
+      m_GroupsMap [strGroup] = hParent;
+      }
+    catch (...)
+      {
+      m_cTreeCtrl.DeleteItem (hParent);
+      throw;
+      }
+    bNewGroup = true;
+    }
+  else
+    hParent = it->second;
+
   // insert it
   HTREEITEM hNewItem = m_cTreeCtrl.InsertItem (strDescription, hParent);
+  if (!hNewItem)
+    {
+    if (bNewGroup)
+      {
+      m_cTreeCtrl.DeleteItem (hParent);
+      m_GroupsMap.erase (strGroup);
+      }
+    AfxThrowResourceException ();
+    }
 
   // record item's name as the list object data
-  m_cTreeCtrl.SetItemData (hNewItem, (DWORD) pstrObjectName);
+  if (!m_cTreeCtrl.SetItemData (hNewItem, (DWORD) pstrObjectName))
+    {
+    m_cTreeCtrl.DeleteItem (hNewItem);
+    if (bNewGroup)
+      {
+      m_cTreeCtrl.DeleteItem (hParent);
+      m_GroupsMap.erase (strGroup);
+      }
+    AfxThrowResourceException ();
+    }
 
   // stamp with a number so we know if it was updated without our knowledge
   SetModificationNumber (pItem, m_nUpdateNumber);
@@ -990,15 +1319,15 @@ void CGenPropertyPage::LoadList (void)
 
   // for filtering
 
-  CScriptEngine * m_ScriptEngine = NULL;    // for the filtering checks
+  std::unique_ptr<CScriptEngine> scriptEngine;    // for the filtering checks
   bool bFiltering = GetFilterFlag ();
 
   
   if (bFiltering)
     {
-    m_ScriptEngine = new CScriptEngine (m_doc, "Lua");
+    scriptEngine.reset (new CScriptEngine (m_doc, "Lua"));
 
-    if (m_ScriptEngine->CreateScriptEngine ())
+    if (scriptEngine->CreateScriptEngine ())
       bFiltering = false;
     else
       {
@@ -1007,7 +1336,7 @@ void CGenPropertyPage::LoadList (void)
        try
          {
 
-          if (m_ScriptEngine->Parse (GetFilterScript (), "Script file"))
+          if (scriptEngine->Parse (GetFilterScript (), "Script file"))
             bFiltering = false;
 
          }  // end of try
@@ -1026,7 +1355,7 @@ void CGenPropertyPage::LoadList (void)
   // if filtering, get the "filter" function on the stack
   if (bFiltering)
     {
-    L = m_ScriptEngine->L;   // make copy for convenience
+    L = scriptEngine->L;   // make copy for convenience
 
     lua_settop(L, 0);   // clear stack, just in case
 
@@ -1034,43 +1363,50 @@ void CGenPropertyPage::LoadList (void)
         bFiltering = false;
     }
 
-  // we delete from both the list and the tree in case we are switching
-  // from list view to tree view or vice-versa
+  CString strObjectName;
+  CObject * pItem;
+  vector<CString> objectNames;
 
-  // remove all old list items (we used the item data to key to the item)
+  for (POSITION pos = m_ObjectMap->GetStartPosition (); pos; )
+    {
+    m_ObjectMap->GetNextAssoc (pos, strObjectName, pItem);
+    objectNames.push_back (strObjectName);
+    }
 
+  // Keep the old controls intact until every replacement row exists. This
+  // lets an allocation or description failure remove only the new rows.
+  vector<CString *> oldListNames;
+  vector<pair<HTREEITEM, CString *> > oldTreeRows;
+  vector<CString *> newListNames;
+  vector<pair<HTREEITEM, CString *> > newTreeRows;
+
+  oldListNames.reserve (m_ctlList->GetItemCount ());
   for (int nItem = 0; nItem < m_ctlList->GetItemCount (); nItem++)
-    delete ((CString *) m_ctlList->GetItemData (nItem));
+    oldListNames.push_back ((CString *) m_ctlList->GetItemData (nItem));
 
-  m_ctlList->DeleteAllItems ();
-  
-
-  // and now all old tree items
   for (HTREEITEM hGroup = m_cTreeCtrl.GetRootItem ();
        hGroup;
        hGroup = m_cTreeCtrl.GetNextSiblingItem (hGroup))
-    {
-
     for (HTREEITEM hItem = m_cTreeCtrl.GetChildItem (hGroup);
-        hItem;
-        hItem = m_cTreeCtrl.GetNextSiblingItem (hItem))
-          delete ((CString *) m_cTreeCtrl.GetItemData (hItem));
+         hItem;
+         hItem = m_cTreeCtrl.GetNextSiblingItem (hItem))
+      oldTreeRows.push_back (
+        make_pair (hItem, (CString *) m_cTreeCtrl.GetItemData (hItem)));
 
-    }  // end for each group
+  newListNames.reserve (objectNames.size ());
+  newTreeRows.reserve (objectNames.size ());
 
-   m_cTreeCtrl.DeleteAllItems ();
-   // since all is deleted, we don't have any groups any more
-   m_GroupsMap.clear ();
-
-
-   CString strObjectName;
-   CObject * pItem;
 
 // Item data
 
-   for (POSITION pos = m_ObjectMap->GetStartPosition (); pos; )
+   try
      {
-     m_ObjectMap->GetNextAssoc (pos, strObjectName, pItem);
+   for (vector<CString>::const_iterator nameIt = objectNames.begin ();
+        nameIt != objectNames.end (); ++nameIt)
+     {
+     strObjectName = *nameIt;
+     if (!m_ObjectMap->Lookup (strObjectName, pItem))
+       continue;
      bool bUse = true;  // defaults to true if no filtering
 
      if (bFiltering)
@@ -1099,15 +1435,74 @@ void CGenPropertyPage::LoadList (void)
 
      if (bUse)  // add to list if passed filter
        {
-       CString * pstrObjectName = new CString (strObjectName);
+       // The filter can delete or replace this object. Resolve it again.
+       if (!m_ObjectMap->Lookup (strObjectName, pItem))
+         continue;
+       std::unique_ptr<CString> pstrObjectName (new CString (strObjectName));
 
        if (m_bWantTreeControl)
-         add_tree_item (pItem, pstrObjectName); 
+         {
+         HTREEITEM hNewItem = add_tree_item (pItem, pstrObjectName.get ());
+         newTreeRows.push_back (make_pair (hNewItem, pstrObjectName.get ()));
+         }
        else
-         add_list_item (pItem, pstrObjectName, 0, TRUE); 
+         {
+         add_list_item (pItem, pstrObjectName.get (), 0, TRUE);
+         newListNames.push_back (pstrObjectName.get ());
+         }
+       pstrObjectName.release ();
        iCount++;
        }
      }
+     }
+   catch (...)
+     {
+     for (int nItem = m_ctlList->GetItemCount () - 1; nItem >= 0; nItem--)
+       {
+       CString * pName = (CString *) m_ctlList->GetItemData (nItem);
+       if (find (newListNames.begin (), newListNames.end (), pName) ==
+           newListNames.end ())
+         continue;
+       if (m_ctlList->DeleteItem (nItem))
+         delete pName;
+       }
+
+     for (vector<pair<HTREEITEM, CString *> >::reverse_iterator it =
+            newTreeRows.rbegin ();
+          it != newTreeRows.rend (); ++it)
+       {
+       HTREEITEM hParent = m_cTreeCtrl.GetParentItem (it->first);
+       if (m_cTreeCtrl.DeleteItem (it->first))
+         {
+         delete it->second;
+         CheckParentHasChildren (hParent);
+         }
+       }
+     throw;
+     }
+
+  // Replacement is complete. Remove only the rows from the old view.
+  for (int nItem = m_ctlList->GetItemCount () - 1; nItem >= 0; nItem--)
+    {
+    CString * pName = (CString *) m_ctlList->GetItemData (nItem);
+    if (find (oldListNames.begin (), oldListNames.end (), pName) ==
+        oldListNames.end ())
+      continue;
+    if (!m_ctlList->DeleteItem (nItem))
+      AfxThrowResourceException ();
+    delete pName;
+    }
+
+  for (vector<pair<HTREEITEM, CString *> >::reverse_iterator it =
+         oldTreeRows.rbegin ();
+       it != oldTreeRows.rend (); ++it)
+    {
+    HTREEITEM hParent = m_cTreeCtrl.GetParentItem (it->first);
+    if (!m_cTreeCtrl.DeleteItem (it->first))
+      AfxThrowResourceException ();
+    delete it->second;
+    CheckParentHasChildren (hParent);
+    }
 
   // sort filtered items
   SortItems ();
@@ -1179,8 +1574,6 @@ void CGenPropertyPage::LoadList (void)
   if (iNotShown)
     strSummary += TFormat (" (%i item%s hidden by filter)", PLURAL (iNotShown));
   m_ctlSummary->SetWindowText (strSummary);
-
-  delete m_ScriptEngine;
 
   // show appropriate control and give it the focus, hide the other one
   if (m_bWantTreeControl)

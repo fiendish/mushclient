@@ -83,7 +83,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
       }
     }
 
-  set <string> firedTimersList;
+  map <string, __int64> firedTimersList;
   POSITION pos;
 
 // iterate through all timers for this document - first build list of them
@@ -94,7 +94,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
 
     TimerMap.GetNextAssoc (pos, strTimerName, timer_item);
 
-    if (!timer_item->bEnabled)    // ignore un-enabled timers
+    if (!timer_item->bEnabled || timer_item->bExecutingScript)
       continue;
 
     // no timer activity whilst closed or in the middle of connecting, or if not enabled
@@ -108,23 +108,44 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     if (timer_item->tFireTime > tNow)
       continue;
 
-    firedTimersList.insert ((LPCTSTR) strTimerName);       // add to list of fired timers
+    firedTimersList [(LPCTSTR) strTimerName] = timer_item->nCreationNumber;
     }
 
 
   // now process list, checking timer still exists in case a script deleted one
   // see: http://www.gammon.com.au/forum/?id=10358
 
-  for (set <string>::iterator it = firedTimersList.begin ();
+  for (map <string, __int64>::iterator it = firedTimersList.begin ();
        it != firedTimersList.end ();
        it++)
     {
     // get next fired timer from list
-    strTimerName = it->c_str ();
+    strTimerName = it->first.c_str ();
 
     // check still exists, get pointer if so
     if (!TimerMap.Lookup (strTimerName, timer_item))
       continue;
+
+    // A previous timer callback can replace, disable, or reschedule this
+    // timer. Fire only the same timer instance that was ready in the snapshot.
+    if (timer_item->nCreationNumber != it->second ||
+        !timer_item->bEnabled ||
+        timer_item->bExecutingScript)
+      continue;
+    if (!timer_item->bActiveWhenClosed &&
+        m_iConnectPhase != eConnectConnectedToMud)
+      continue;
+    if (timer_item->tFireTime > tNow)
+      continue;
+
+    CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
+    CString strTimerLabel = timer_item->strLabel;
+    if (strTimerLabel.IsEmpty ())
+      strTimerLabel = strTimerName;
+    __int64 iFiredTimerCreationNumber = timer_item->nCreationNumber;
+
+    {
+    CTimerExecutionGuard executingGuard (this, timer_item);
 
     timer_item->nMatched++;   // count timer matches
     timer_item->tWhenFired = tNow;  // when it fired
@@ -165,12 +186,11 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
       timer_item->bEnabled = false;
 
 
-// send timer message, if this timer list is "active"
+    // send timer message, if this timer list is "active"
 
     CString strExtraOutput;
-
-    timer_item->bExecutingScript = true;     // cannot be deleted now
-    m_iCurrentActionSource = eTimerFired;
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (m_iCurrentActionSource, eTimerFired);
     SendTo (timer_item->iSendTo, 
             timer_item->strContents, 
             timer_item->bOmitFromOutput, // omit from output
@@ -179,8 +199,6 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
             timer_item->strVariable,
             strExtraOutput
             );
-    m_iCurrentActionSource = eUnknownActionSource;
-    timer_item->bExecutingScript = false;     // can be deleted now
 
     // display any stuff sent to output window
 
@@ -201,16 +219,14 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
                                     (LPCTSTR) timer_item->strLabel);
 
       // get unlabelled timer's internal name
-      const char * pLabel = timer_item->strLabel;
-      if (pLabel [0] == 0)
-        pLabel = GetTimerRevMap () [timer_item].c_str ();
+      const char * pLabel = strTimerLabel;
 
       if (GetScriptEngine () && GetScriptEngine ()->IsLua ())
         {
         list<double> nparams;
         list<string> sparams;
         sparams.push_back (pLabel);
-        timer_item->bExecutingScript = true;     // cannot be deleted now
+        CTimerExecutionGuard executingGuard (this, timer_item);
         GetScriptEngine ()->ExecuteLua (timer_item->dispid, 
                                        timer_item->strProcedure, 
                                        eTimerFired,
@@ -219,7 +235,6 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
                                        nparams,
                                        sparams, 
                                        timer_item->nInvocationCount);
-        timer_item->bExecutingScript = false;     // can be deleted now
         }   // end of Lua
       else
         {
@@ -238,7 +253,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
 
   //      args [eTimerName] = strTimerName;
         args [eTimerName] = pLabel;
-        timer_item->bExecutingScript = true;     // cannot be deleted now
+        CTimerExecutionGuard executingGuard (this, timer_item);
         ExecuteScript (timer_item->dispid,  
                        timer_item->strProcedure,
                        eTimerFired,
@@ -246,10 +261,10 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
                        strReason,
                        params, 
                        timer_item->nInvocationCount);
-        timer_item->bExecutingScript = false;     // can be deleted now
-
         } // not Lua
       }     // end of having a dispatch ID
+
+    }
 
 
     // If they passed the wrong arguments to the timer routine, the dialog box
@@ -262,11 +277,14 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
 
 // if one-shot timer, delete from list
 
-    if (timer_item->bOneShot)
+    if (timer_item->nCreationNumber == iFiredTimerCreationNumber &&
+        timer_item->bOneShot)
       {
-      TimerMap.RemoveKey (strTimerName);
+      set<CTimer *> timersToDelete;
+      timersToDelete.insert (timer_item);
+      SortTimers (&timersToDelete);
+      VERIFY (TimerMap.RemoveKey (strTimerName));
       delete timer_item;
-      SortTimers ();
       }
     }   // end of processing each timer
 
@@ -318,17 +336,23 @@ void CMUSHclientDoc::CheckTimers ()
   if (m_bEnableTimers)
     {
 
-    // timer has kicked in unexpectedly - ignore it
-    if (m_CurrentPlugin)
-      return;
+  // timer has kicked in unexpectedly - ignore it
+  if (m_CurrentPlugin)
+    return;
 
-    CheckTimerList (GetTimerMap ());
-    // do plugins
-   for (PluginListIterator pit = m_PluginList.begin (); 
-         pit != m_PluginList.end (); 
-         ++pit)
+  CPluginContextGuard timerContextGuard (this, NULL);
+
+   // Do only the plugin instances that existed at the start of this tick.
+   CPluginInstanceSnapshot plugins;
+   GetPluginInstanceSnapshot (m_PluginList, plugins);
+  CheckTimerList (GetTimerMap ());
+   for (size_t iPlugin = 0; iPlugin < plugins.size (); iPlugin++)
       {
-      m_CurrentPlugin = *pit;
+      m_CurrentPlugin = GetPluginInstance (
+        plugins [iPlugin].m_strID,
+        plugins [iPlugin].m_iPluginInstanceNumber);
+      if (!m_CurrentPlugin)
+        continue;
       if (m_CurrentPlugin->m_bEnabled)
         CheckTimerList (GetTimerMap ());
       } // end of doing each plugin
@@ -372,6 +396,8 @@ void CMUSHclientDoc::CheckTickTimers ()
 
 void CMUSHclientDoc::OnGameResetalltimers() 
 {
+  CPluginContextGuard timerContextGuard (this, NULL);
+
   ResetAllTimers (GetTimerMap ());
   // do plugins
  for (PluginListIterator pit = m_PluginList.begin (); 
@@ -392,22 +418,31 @@ void CMUSHclientDoc::OnUpdateGameResetalltimers(CCmdUI* pCmdUI)
 }
 
 
-void  CMUSHclientDoc::SortTimers (void)
+void CMUSHclientDoc::BuildTimerIndex (
+  CTimerRevMap & timerRevMap,
+  const set<CTimer *> * pExclude)
   {
 
-int i;
 CString strTimerName;
 CTimer * pTimer;
 POSITION pos;
 
-  GetTimerRevMap ().clear ();
-
   // extract pointers into a simple array
-  for (i = 0, pos = GetTimerMap ().GetStartPosition(); pos; i++)
+  for (pos = GetTimerMap ().GetStartPosition(); pos; )
     {
      GetTimerMap ().GetNextAssoc (pos, strTimerName, pTimer);
-     GetTimerRevMap () [pTimer] = strTimerName;
+     if (pExclude && pExclude->find (pTimer) != pExclude->end ())
+       continue;
+     timerRevMap [pTimer] = strTimerName;
     }
+  }
+
+void  CMUSHclientDoc::SortTimers (const set<CTimer *> * pExclude)
+  {
+  CTimerRevMap newTimerRevMap;
+  BuildTimerIndex (newTimerRevMap, pExclude);
+
+  GetTimerRevMap ().swap (newTimerRevMap);
 
   } // end of CMUSHclientDoc::SortTimers
 

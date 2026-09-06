@@ -41,6 +41,18 @@ int i;
   m_TriggerMap.InitHashTable (293);  // probably won't have many more than 300 triggers
   m_TimerMap.InitHashTable (293);    // probably won't have many more than 300 timers
 
+  m_pRetiredAliases = NULL;
+  m_pRetiredTriggers = NULL;
+  m_pRetiredTimers = NULL;
+  m_pSetLoadAliasMap = NULL;
+  m_pSetLoadAliasArray = NULL;
+  m_pSetLoadAliasRevMap = NULL;
+  m_pSetLoadTriggerMap = NULL;
+  m_pSetLoadTriggerArray = NULL;
+  m_pSetLoadTriggerRevMap = NULL;
+  m_pSetLoadTimerMap = NULL;
+  m_pSetLoadTimerRevMap = NULL;
+
   SetDefaults (false);        // set up numeric/boolean defaults
   SetAlphaDefaults (false);   // set up alpha defaults
 
@@ -84,6 +96,7 @@ int i;
   m_bPluginListChangedPending = false;
   m_iPluginListChangedDeferralDepth = 0;
   m_bPluginListChangedDeferred = false;
+  m_bInScreendraw = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
   m_iConnectionAttemptNumber = 0;
@@ -573,12 +586,26 @@ int i;
   CloseLog ();    // this writes out the log file postamble as well
 
 // delete triggers
-       
-  DELETE_MAP (m_TriggerMap, CTrigger); 
+
+  while (m_pRetiredTriggers)
+    {
+    CTrigger * pTrigger = m_pRetiredTriggers;
+    m_pRetiredTriggers = pTrigger->pNextRetired;
+    delete pTrigger;
+    }
+
+  DELETE_MAP (m_TriggerMap, CTrigger);
 
 // delete aliass
 
-  DELETE_MAP (m_AliasMap, CAlias); 
+  while (m_pRetiredAliases)
+    {
+    CAlias * pAlias = m_pRetiredAliases;
+    m_pRetiredAliases = pAlias->pNextRetired;
+    delete pAlias;
+    }
+
+  DELETE_MAP (m_AliasMap, CAlias);
 
 // delete lines list
 
@@ -586,7 +613,14 @@ int i;
 
 // delete timer map
 
-  DELETE_MAP (m_TimerMap, CTimer); 
+  while (m_pRetiredTimers)
+    {
+    CTimer * pTimer = m_pRetiredTimers;
+    m_pRetiredTimers = pTimer->pNextRetired;
+    delete pTimer;
+    }
+
+  DELETE_MAP (m_TimerMap, CTimer);
   
 // delete variables map
 
