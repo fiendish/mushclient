@@ -22,26 +22,33 @@
 long CMUSHclientDoc::SetVariable(LPCTSTR VariableName, LPCTSTR Contents) 
 {
 CString strVariableName = VariableName;
-CVariable * variable_item;
+CVariable * variable_item = NULL;
 long nStatus;
 
   // return if bad name
   if (nStatus = CheckObjectName (strVariableName))
     return nStatus;
 
-  // get rid of old variable, if any
-  if (GetVariableMap ().Lookup (strVariableName, variable_item))
-    delete variable_item;
+  CVariable * old_variable_item = NULL;
+  GetVariableMap ().Lookup (strVariableName, old_variable_item);
 
-  // create new variable item and insert in variable map
-  GetVariableMap ().SetAt (strVariableName, variable_item = new CVariable);
+  variable_item = new CVariable;
+  try
+    {
+    variable_item->nUpdateNumber = App.GetUniqueNumber ();   // for concurrency checks
+    variable_item->strLabel = VariableName;
+    variable_item->strContents = Contents;
+    GetVariableMap ().SetAt (strVariableName, variable_item);
+    }
+  catch (...)
+    {
+    delete variable_item;
+    throw;
+    }
+
+  delete old_variable_item;
   m_bVariablesChanged = true;
 //  SetModifiedFlag (TRUE); // set flag instead now
-  variable_item->nUpdateNumber = App.GetUniqueNumber ();   // for concurrency checks
-
-  // set up variable item contents
-  variable_item->strLabel = VariableName;
-  variable_item->strContents = Contents;
 
 	return eOK;
 }    // end of CMUSHclientDoc::SetVariable
