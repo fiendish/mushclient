@@ -82,6 +82,7 @@ public:
   string m_sPreviousMiniWindow;
 
   BOOL m_mousedover;
+  bool m_bInSelectionChanged;
 
 // Operations
 public:

@@ -84,6 +84,7 @@ int i;
   m_bPluginListChangedPending = false;
   m_iPluginListChangedDeferralDepth = 0;
   m_bPluginListChangedDeferred = false;
+  m_bInScreendraw = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
   m_iConnectionAttemptNumber = 0;

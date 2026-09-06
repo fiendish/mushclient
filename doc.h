@@ -1339,6 +1339,7 @@ public:
   bool        m_bPluginListChangedPending;
   int         m_iPluginListChangedDeferralDepth;
   bool        m_bPluginListChangedDeferred;
+  bool        m_bInScreendraw;
 
   CString     m_strLastCommandSent;   // for spam prevention
   int         m_iLastCommandCount;    // number of times last command sent
