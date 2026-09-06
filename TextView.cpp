@@ -186,11 +186,17 @@ void CTextView::OnInitialUpdate()
 	
   SetTheFont ();
 	
+  CBrush * pNewBrush = new CBrush (pDoc->m_backColour);
+  if (!pNewBrush->GetSafeHandle ())
+    {
+    delete pNewBrush;
+    AfxThrowResourceException ();
+    }
   if (m_backbr)
     m_backbr->DeleteObject ();
   delete m_backbr;
 
-  m_backbr = new CBrush (pDoc->m_backColour);
+  m_backbr = pNewBrush;
   m_backcolour = pDoc->m_backColour;
 
 }
@@ -761,10 +767,16 @@ CRect rect;
   // recreate background colour if necessary  
   if (m_backcolour != pDoc->m_backColour)
     {
+    CBrush * pNewBrush = new CBrush (pDoc->m_backColour);
+    if (!pNewBrush->GetSafeHandle ())
+      {
+      delete pNewBrush;
+      AfxThrowResourceException ();
+      }
     if (m_backbr)
       m_backbr->DeleteObject ();
     delete m_backbr;
-    m_backbr = new CBrush (pDoc->m_backColour);
+    m_backbr = pNewBrush;
     m_backcolour = pDoc->m_backColour;
     }
  
