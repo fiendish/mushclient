@@ -4115,7 +4115,10 @@ t_print_control_block pcb;
 
   print_end_page (pcb);
   
-  print_end_document (pcb);
+  if (pcb.cancelled)
+    print_abort_document (pcb);
+  else
+    print_end_document (pcb);
   printDocumentGuard.Finish ();
 
   if (pcb.cancelled)
