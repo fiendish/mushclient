@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repository": "https://github.com/fiendish/luacom.git",
-  "revision": "aef6c830c9327133647251217759fc89159f5c0d",
+  "revision": "aec689c7781cb51b0f114b44c35ee4599c2ac0bf",
   "patches": [
     "patches/0001-retain-host-registration.patch",
     "patches/0002-retain-host-script-loading.patch",
