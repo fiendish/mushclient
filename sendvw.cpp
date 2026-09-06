@@ -513,7 +513,9 @@ void CSendView::OnKeysPrevcommand()
   if (m_HistoryPosition &&   
       !strCommand.IsEmpty () &&
       pDoc->m_bAutoRepeat && 
-      m_iHistoryStatus == eAtBottom)
+      m_iHistoryStatus == eAtBottom &&
+      !m_bChanged &&
+      strCommand == m_msgList.GetAt (m_HistoryPosition))
     m_msgList.GetPrev (m_HistoryPosition);
 
   if (m_HistoryPosition)
@@ -859,6 +861,8 @@ CCmdHistory dlg;
   dlg.m_sendview = this;
   dlg.m_pHistoryFindInfo = &m_HistoryFindInfo;    // for finding
   dlg.m_pDoc = pDoc;            // for confirming replacement of typing
+  dlg.m_iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+  dlg.m_hSendView = GetSafeHwnd ();
 
   dlg.DoModal ();
 
@@ -1347,20 +1351,7 @@ CString strCurrent;
 
   // do not record null commands, or ones identical to the previous one
 
-    if (!str.IsEmpty () && str != m_last_command)
-      {
-      if (m_inputcount >= pDoc->m_nHistoryLines)
-        {
-        m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
-        m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
-        if (m_HistoryFindInfo.m_nCurrentLine < 0)
-          m_HistoryFindInfo.m_nCurrentLine = 0;
-        }
-      else
-        m_inputcount++;
-      m_msgList.AddTail (str);
-      m_last_command = str;
-      }  // end command different
+    AddToCommandHistory (str, false, false);
     }     // end if save deleted command
 
   return false;
@@ -1634,20 +1625,7 @@ ASSERT_VALID(pDoc);
 
     // do not record null commands, or ones identical to the previous one
 
-      if (!str.IsEmpty () && str != m_last_command)
-        {
-        if (m_inputcount >= pDoc->m_nHistoryLines)
-          {
-          m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
-          m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
-          if (m_HistoryFindInfo.m_nCurrentLine < 0)
-            m_HistoryFindInfo.m_nCurrentLine = 0;
-          }
-        else
-          m_inputcount++;
-        m_msgList.AddTail (str);
-        m_last_command = str;
-        }
+      AddToCommandHistory (str, false, false);
       }
 
   	GetEditCtrl().SetWindowText ("");
@@ -2158,6 +2136,7 @@ void CSendView::OnDisplayClearCommandHistory()
   // OK, do it ...
 	m_msgList.RemoveAll ();
   m_HistoryPosition = NULL;
+  m_iHistoryStatus = eAtBottom;
   m_inputcount = 0;
   m_HistoryFindInfo.m_pFindPosition = NULL;
   m_HistoryFindInfo.m_nCurrentLine = 0;
@@ -2408,7 +2387,9 @@ ASSERT_VALID(pDoc);
 }   // end of CSendView::OnEditCtrlZ
 
 
-void CSendView::AddToCommandHistory (const CString & strCommand)
+void CSendView::AddToCommandHistory (const CString & strCommand,
+                                     const bool bRespectNoEcho,
+                                     const bool bResetHistoryPosition)
   {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
@@ -2418,10 +2399,19 @@ ASSERT_VALID(pDoc);
 
   if (!strCommand.IsEmpty () && 
       strCommand != m_last_command &&
-      !(pDoc->m_bNoEcho && !pDoc->m_bAlwaysRecordCommandHistory)) 
+      (!bRespectNoEcho ||
+       !(pDoc->m_bNoEcho && !pDoc->m_bAlwaysRecordCommandHistory)))
     {
     if (m_inputcount >= pDoc->m_nHistoryLines)
       {
+      POSITION oldHead = m_msgList.GetHeadPosition ();
+      if (m_HistoryPosition == oldHead)
+        {
+        m_HistoryPosition = NULL;
+        m_iHistoryStatus = eAtTop;
+        }
+      if (m_HistoryFindInfo.m_pFindPosition == oldHead)
+        m_HistoryFindInfo.m_pFindPosition = NULL;
       m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
       m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
       if (m_HistoryFindInfo.m_nCurrentLine < 0)
@@ -2433,9 +2423,12 @@ ASSERT_VALID(pDoc);
     m_last_command = strCommand;
     }
 
-  // history starts at bottom of list again - especially as we may have discarded lines
-  m_HistoryPosition = NULL;
-  m_iHistoryStatus = eAtBottom;
+  // Sending a command starts history at the bottom. Appending alone does not.
+  if (bResetHistoryPosition)
+    {
+    m_HistoryPosition = NULL;
+    m_iHistoryStatus = eAtBottom;
+    }
 
   } // end of  CSendView::AddToCommandHistory 
 
