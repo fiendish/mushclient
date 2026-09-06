@@ -93,7 +93,10 @@ static int mycompress (lua_State *L)
   c_stream.total_in = 0;
 
   if (deflateInit (&c_stream, method) != Z_OK)
-      luaL_error (L, "could not initialize compression engine");
+    {
+    free (compr);
+    return luaL_error (L, "could not initialize compression engine");
+    }
 
   c_stream.next_out = compr;
   c_stream.avail_out = (uInt)comprLen;
@@ -101,10 +104,17 @@ static int mycompress (lua_State *L)
 
   // we can do it in one pass, hopefully ;)
   if (deflate (&c_stream, Z_FINISH) != Z_STREAM_END)
-    luaL_error (L, "error on compression");
+    {
+    deflateEnd (&c_stream);
+    free (compr);
+    return luaL_error (L, "error on compression");
+    }
 
   if (deflateEnd (&c_stream) != Z_OK)
-    luaL_error (L, "error on compression wrapup");
+    {
+    free (compr);
+    return luaL_error (L, "error on compression wrapup");
+    }
 
   lua_pushlstring (L, compr, c_stream.total_out);
 
