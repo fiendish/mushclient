@@ -339,6 +339,7 @@ class CLine : public CObject
          const bool bUnicode 
          );   // constructor
   ~CLine ();    // destructor
+  void ResizeText (const int iNewSize);
 
   };
 

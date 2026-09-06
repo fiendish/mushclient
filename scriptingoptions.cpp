@@ -537,22 +537,10 @@ long iResult = SetBaseOptionItem (iItem,
     {
     if (m_pCurrentLine)     // a new world might not have a line yet
       {
-      // save current line text
-      CString strLine = CString (m_pCurrentLine->text, m_pCurrentLine->len);
-
-#ifdef USE_REALLOC
-      m_pCurrentLine->text  = (char *) 
-            realloc (m_pCurrentLine->text, 
-                     MAX (m_pCurrentLine->len, Value) 
-                     * sizeof (char));  
-#else
-      delete [] m_pCurrentLine->text;
-      m_pCurrentLine->text = new char [MAX (m_pCurrentLine->len, Value)];
-#endif
-
-      // put text back
-      memcpy (m_pCurrentLine->text, (LPCTSTR) strLine, m_pCurrentLine->len);
-      ASSERT (m_pCurrentLine->text);
+      int iMemoryAllocated = MAX (m_pCurrentLine->len, Value);
+      if (m_bUTF_8)
+        iMemoryAllocated *= 4;
+      m_pCurrentLine->ResizeText (iMemoryAllocated);
       }   // end of having a current line
     SendWindowSizes (Value);
     }
