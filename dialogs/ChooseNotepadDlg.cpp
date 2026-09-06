@@ -25,6 +25,7 @@ CChooseNotepadDlg::CChooseNotepadDlg(CWnd* pParent /*=NULL*/)
 	//}}AFX_DATA_INIT
  m_pWorld = NULL;
  m_pTextDocument = NULL;
+ m_iWorldDocumentNumber = 0;
 
 }
 
@@ -41,16 +42,22 @@ void CChooseNotepadDlg::DoDataExchange(CDataExchange* pDX)
   if (!pDX->m_bSaveAndValidate)
     {   // loading
 
+    CMUSHclientDoc * pWorld = GetLiveWorld ();
+    if (!pWorld)
+      return;
+
+    m_NotepadDocumentNumbers.RemoveAll ();
+
     for (docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
         docPos != NULL; )
       {
       int nItem;
 
-      CTextDocument * pDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+      CTextDocument * pDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
       // ignore unrelated worlds
-      if (pDoc->m_pRelatedWorld != m_pWorld ||
-          pDoc->m_iUniqueDocumentNumber != m_pWorld->m_iUniqueDocumentNumber)
+      if (pDoc->m_pRelatedWorld != pWorld ||
+          pDoc->m_iUniqueDocumentNumber != m_iWorldDocumentNumber)
         continue;
 
       CString strTitle = pDoc->GetPathName ();
@@ -62,13 +69,53 @@ void CChooseNotepadDlg::DoDataExchange(CDataExchange* pDX)
       nItem = m_ctlNotepadList.AddString (strTitle);
 
       if (nItem != LB_ERR  && nItem != LB_ERRSPACE )
-         m_ctlNotepadList.SetItemData (nItem, (DWORD) pDoc);
+        {
+        int iDocument = m_NotepadDocumentNumbers.Add (pDoc->m_iTextDocumentNumber);
+        m_ctlNotepadList.SetItemData (nItem, (DWORD) iDocument);
+        }
 
       } // end of doing each document
 
     }   // end of loading
 
 }
+
+CMUSHclientDoc * CChooseNotepadDlg::GetLiveWorld (void) const
+  {
+  if (!m_pWorld)
+    return NULL;
+
+  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
+    {
+    CMUSHclientDoc * pWorld =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pWorld == m_pWorld &&
+        pWorld->m_iUniqueDocumentNumber == m_iWorldDocumentNumber)
+      return pWorld;
+    }
+
+  return NULL;
+  }
+
+CTextDocument * CChooseNotepadDlg::GetNotepadForIndex (const int iIndex) const
+  {
+  CMUSHclientDoc * pWorld = GetLiveWorld ();
+  if (!pWorld || iIndex < 0 || iIndex >= m_NotepadDocumentNumbers.GetSize ())
+    return NULL;
+
+  __int64 iDocumentNumber = m_NotepadDocumentNumbers [iIndex];
+  for (POSITION pos = App.m_pNormalDocTemplate->GetFirstDocPosition(); pos; )
+    {
+    CTextDocument * pDoc =
+      (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc (pos);
+    if (pDoc->m_iTextDocumentNumber == iDocumentNumber &&
+        pDoc->m_pRelatedWorld == pWorld &&
+        pDoc->m_iUniqueDocumentNumber == m_iWorldDocumentNumber)
+      return pDoc;
+    }
+
+  return NULL;
+  }
 
 
 BEGIN_MESSAGE_MAP(CChooseNotepadDlg, CDialog)
@@ -90,7 +137,12 @@ int nItem = m_ctlNotepadList.GetCurSel ();
   if (nItem == LB_ERR)
     return;
 
-  m_pTextDocument = (CTextDocument *) m_ctlNotepadList.GetItemData (nItem);
+  m_pTextDocument = GetNotepadForIndex ((int) m_ctlNotepadList.GetItemData (nItem));
+  if (!m_pTextDocument)
+    {
+    m_ctlNotepadList.DeleteString (nItem);
+    return;
+    }
 
   OnOK ();
 	
