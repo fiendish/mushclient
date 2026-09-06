@@ -1180,11 +1180,14 @@ long CMUSHclientDoc::ChatSendFile(long ID, LPCTSTR FileName)
   pSocket->m_strOurFileName = strName;
 
          
+  CFile * pNewFile = NULL;
+  unsigned char * pNewFileBuffer = NULL;
+  long iNewFileSize = 0;
   try
     {
-    pSocket->m_pFile = new CFile (strName, CFile::modeRead | CFile::shareDenyWrite); // open file
-    pSocket->m_pFileBuffer = new unsigned char [pSocket->m_iFileBlockSize]; // get buffer    
-    pSocket->m_iFileSize = pSocket->m_pFile->GetLength ();
+    pNewFile = new CFile (strName, CFile::modeRead | CFile::shareDenyWrite); // open file
+    pNewFileBuffer = new unsigned char [pSocket->m_iFileBlockSize]; // get buffer
+    iNewFileSize = pNewFile->GetLength ();
     
     } // end of try block
 
@@ -1192,15 +1195,29 @@ long CMUSHclientDoc::ChatSendFile(long ID, LPCTSTR FileName)
     {
     ChatNote (eChatFile, TFormat ("File %s cannot be opened.", (LPCTSTR) strName));
     e->Delete ();
-    // reset the two fields we changed so far
+    // reset the fields changed before opening the file
     pSocket->m_strOurFileName.Empty ();
     pSocket->m_iFileSize = 0;
 
-    delete pSocket->m_pFile;    // in case it was set up
-    delete [] pSocket->m_pFileBuffer;  // and get rid of buffer
+    delete pNewFile;
+    delete [] pNewFileBuffer;
 
     return eFileNotFound;
     } // end of catching a file exception
+  catch (...)
+    {
+    delete pNewFile;
+    delete [] pNewFileBuffer;
+    pSocket->m_strOurFileName.Empty ();
+    pSocket->m_iFileSize = 0;
+    throw;
+    }
+
+  delete pSocket->m_pFile;
+  delete [] pSocket->m_pFileBuffer;
+  pSocket->m_pFile = pNewFile;
+  pSocket->m_pFileBuffer = pNewFileBuffer;
+  pSocket->m_iFileSize = iNewFileSize;
 
   // find last part of file name (ie. actual file name, not full path)
   pSocket->m_strSenderFileName = pSocket->m_pFile->GetFileName ();
