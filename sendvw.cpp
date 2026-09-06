@@ -1361,7 +1361,7 @@ CString strCurrent;
 
   // do not record null commands, or ones identical to the previous one
 
-    AddToCommandHistory (str, false);
+    AddToCommandHistory (str, false, false);
     }     // end if save deleted command
 
   return false;
@@ -1635,7 +1635,7 @@ ASSERT_VALID(pDoc);
 
     // do not record null commands, or ones identical to the previous one
 
-      AddToCommandHistory (str, false);
+      AddToCommandHistory (str, false, false);
       }
 
   	GetEditCtrl().SetWindowText ("");
@@ -2400,7 +2400,8 @@ ASSERT_VALID(pDoc);
 
 
 void CSendView::AddToCommandHistory (const CString & strCommand,
-                                     const bool bRespectNoEcho)
+                                     const bool bRespectNoEcho,
+                                     const bool bResetHistoryPosition)
   {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
@@ -2415,6 +2416,14 @@ ASSERT_VALID(pDoc);
     {
     if (m_inputcount >= pDoc->m_nHistoryLines)
       {
+      POSITION oldHead = m_msgList.GetHeadPosition ();
+      if (m_HistoryPosition == oldHead)
+        {
+        m_HistoryPosition = NULL;
+        m_iHistoryStatus = eAtTop;
+        }
+      if (m_HistoryFindInfo.m_pFindPosition == oldHead)
+        m_HistoryFindInfo.m_pFindPosition = NULL;
       m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
       m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
       if (m_HistoryFindInfo.m_nCurrentLine < 0)
@@ -2426,9 +2435,12 @@ ASSERT_VALID(pDoc);
     m_last_command = strCommand;
     }
 
-  // history starts at bottom of list again - especially as we may have discarded lines
-  m_HistoryPosition = NULL;
-  m_iHistoryStatus = eAtBottom;
+  // Sending a command starts history at the bottom. Appending alone does not.
+  if (bResetHistoryPosition)
+    {
+    m_HistoryPosition = NULL;
+    m_iHistoryStatus = eAtBottom;
+    }
 
   } // end of  CSendView::AddToCommandHistory 
 

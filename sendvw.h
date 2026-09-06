@@ -77,7 +77,8 @@ public:
   void NotifyPluginCommandChanged ();
 
   void AddToCommandHistory (const CString & strCommand,
-                            const bool bRespectNoEcho = true);
+                            const bool bRespectNoEcho = true,
+                            const bool bResetHistoryPosition = true);
 
   int GetCommandWindowDesiredHeight (const int iCurrentHeight);
   void AdjustCommandWindowSize (void);

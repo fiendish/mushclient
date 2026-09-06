@@ -70,7 +70,7 @@ void CMUSHclientDoc::AddToCommandHistory (LPCTSTR Message)
   {
   CSendView * pmyView = GetCommandView ();
   if (pmyView)
-    pmyView->AddToCommandHistory (Message, false);
+    pmyView->AddToCommandHistory (Message, false, false);
 
   } // end of CMUSHclientDoc::AddToCommandHistory
 
