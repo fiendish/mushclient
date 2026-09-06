@@ -21,6 +21,7 @@ static char const * const rcsid = "$Id: luacom$";
 #include <stdio.h>
 #include <math.h>
 #include <new>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -2337,25 +2338,130 @@ static int call_event(lua_State *L)
 }
 
 
-static int luacom_RoundTrip(lua_State *L) {
-  VARIANTARG v;
-  VariantInit(&v);
+namespace
+{
+struct RoundTripContext
+{
+  RoundTripContext() : handler(NULL) { VariantInit(&value); }
+  ~RoundTripContext() { VariantClear(&value); }
 
-  tLuaCOMTypeHandler handler(NULL);
+  tLuaCOMTypeHandler handler;
+  VARIANTARG value;
+  std::exception_ptr exception;
+};
+
+struct RoundTripErrorContext
+{
+  RoundTripErrorContext() : fallback(NULL) {}
+
+  void format()
+  {
+    try
+    {
+      try
+      {
+        std::rethrow_exception(exception);
+      }
+      catch(tLuaCOMException& e)
+      {
+        message = e.getMessage();
+      }
+      catch(const std::bad_alloc&)
+      {
+        fallback = "Memory allocation error";
+      }
+      catch(const std::exception& e)
+      {
+        message = e.what();
+      }
+    }
+    catch(const std::bad_alloc&)
+    {
+      // Formatting an error must also work when C++ allocation fails.
+      fallback = "Memory allocation error";
+    }
+    exception = std::exception_ptr();
+  }
+
+  std::exception_ptr exception;
+  tStringBuffer message;
+  const char* fallback;
+};
+
+int protectedRoundTrip(lua_State* L)
+{
+  RoundTripContext* context = static_cast<RoundTripContext*>(
+    lua_touserdata(L, lua_upvalueindex(1)));
   try
   {
-    handler.lua2com(L, 1, v);
-    handler.com2lua(L, v);
+    context->handler.lua2com(L, 1, context->value);
+    context->handler.com2lua(L, context->value);
+    return 1;
   }
-  catch(...)
+  catch(const tLuaCOMException&)
   {
-    VariantClear(&v);
-    throw;
+    context->exception = std::current_exception();
+  }
+  catch(const std::exception&)
+  {
+    context->exception = std::current_exception();
+  }
+  // Lua's own exceptions must reach lua_pcall in C++ Lua builds.
+  return 0;
+}
+
+int reportRoundTripError(lua_State* L)
+{
+  RoundTripErrorContext* context = static_cast<RoundTripErrorContext*>(
+    lua_touserdata(L, lua_upvalueindex(1)));
+  luacom_APIerror(L, context->fallback ? context->fallback :
+                    static_cast<const char*>(context->message));
+  return 0;
+}
+}
+
+static int luacom_RoundTrip(lua_State *L)
+{
+  const int argument_count = lua_gettop(L);
+  if(!lua_checkstack(L, argument_count + 3))
+  {
+    luacom_APIerror(L, "Not enough Lua stack space for RoundTrip.");
+    return 0;
   }
 
-  VariantClear(&v);
+  int status;
+  int result_count = 1;
+  {
+    RoundTripErrorContext error;
+    // Allocate both closures before conversion can acquire COM resources.
+    lua_pushlightuserdata(L, &error);
+    lua_pushcclosure(L, reportRoundTripError, 1);
+    {
+      RoundTripContext context;
+      lua_pushlightuserdata(L, &context);
+      lua_pushcclosure(L, protectedRoundTrip, 1);
+      for(int i = 1; i <= argument_count; i++)
+        lua_pushvalue(L, i);
 
-  return 1;
+      status = lua_pcall(L, argument_count, 1, 0);
+      error.exception = context.exception;
+    }
+    // The variant and handler are gone before API error reporting begins.
+    if(error.exception)
+    {
+      lua_pop(L, 1); // discard the missing result supplied by lua_pcall
+      error.format();
+      status = lua_pcall(L, 0, 0, 0);
+      result_count = 0;
+    }
+    else
+      lua_remove(L, argument_count + 1); // discard the unused error closure
+  }
+
+  // Error reporting can also raise a Lua error. All C++ owners are gone here.
+  if(status != 0)
+    return lua_error(L);
+  return result_count;
 }
 
 
