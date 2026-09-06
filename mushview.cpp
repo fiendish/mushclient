@@ -6612,7 +6612,6 @@ void CMUSHView::OnSysCommand(UINT nID, LPARAM lParam)
 void CMUSHView::Send_Mouse_Event_To_Plugin (DISPID iDispatchID,
                                             CMiniWindow & miniwindow,
                                             const string m_sPluginID, 
-                                            const __int64 iPluginInstanceNumber,
                                             const string sRoutineName, 
                                             const string HotspotId,
                                             long Flags,
@@ -6668,12 +6667,11 @@ if (m_sPluginID.empty ())
 
   } // end of no plugin
 
-CPlugin * pPlugin = pDoc->GetPluginInstance (m_sPluginID.c_str (),
-                                             iPluginInstanceNumber);
+CPlugin * pPlugin = pDoc->GetPlugin (m_sPluginID.c_str ());
 
   if (!pPlugin) 
     {
-    pDoc->Trace ("Mouse event (%s): Plugin instance is no longer loaded: %s",
+    pDoc->Trace ("Mouse event (%s): Plugin is no longer loaded: %s",
                  HotspotId.c_str (), m_sPluginID.c_str ());
     return;                       
     }
@@ -6828,7 +6826,6 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_MoveCallback,
                                       *prev_mw,
                                       prev_mw->m_sCallbackPlugin,
-                                      prev_mw->m_iCallbackPluginInstanceNumber,
                                       it->second->m_sMoveCallback, 
                                       prev_mw->m_sMouseDownHotspot,
                                       prev_mw->m_FlagsOnMouseDown);
@@ -6878,7 +6875,6 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseOver,
                                       *old_mw,
                                       old_mw->m_sCallbackPlugin,
-                                      old_mw->m_iCallbackPluginInstanceNumber,
                                       it->second->m_sCancelMouseOver, 
                                       sOldMouseOverHotspot);
           }
@@ -6913,7 +6909,6 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
         Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseOver,
                                     *mw,
                                     mw->m_sCallbackPlugin,
-                                    mw->m_iCallbackPluginInstanceNumber,
                                     it->second->m_sCancelMouseOver, 
                                     sOldMouseOverHotspotInThisWindow);
         }
@@ -6947,7 +6942,6 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
         Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseOver,
                                     *mw,
                                     mw->m_sCallbackPlugin, 
-                                    mw->m_iCallbackPluginInstanceNumber,
                                     pHotspot->m_sMouseOver, 
                                     sHotspotId);
         // activate tooltip if possible
@@ -6994,7 +6988,6 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
           Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseOver,
                                       *mw,
                                       mw->m_sCallbackPlugin, 
-                                      mw->m_iCallbackPluginInstanceNumber,
                                       pHotspot->m_sMouseOver, 
                                       sHotspotId, MW_MOUSE_NOT_FIRST);
           }
@@ -7064,7 +7057,6 @@ bool CMUSHView::Mouse_Down_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long 
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseOver, 
                                       *old_mw,
                                       old_mw->m_sCallbackPlugin,
-                                      old_mw->m_iCallbackPluginInstanceNumber,
                                       it->second->m_sCancelMouseOver, 
                                       sOldMouseOverHotspot); 
           }
@@ -7097,7 +7089,6 @@ bool CMUSHView::Mouse_Down_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long 
       Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseDown, 
                                   *mw,
                                   mw->m_sCallbackPlugin, 
-                                  mw->m_iCallbackPluginInstanceNumber,
                                   pHotspot->m_sMouseDown, 
                                   sHotspotId,
                                   flags);   // LH / RH mouse?
@@ -7187,7 +7178,6 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_ReleaseCallback, 
                                       *prev_mw,
                                       prev_mw->m_sCallbackPlugin,
-                                      prev_mw->m_iCallbackPluginInstanceNumber,
                                       it->second->m_sReleaseCallback, 
                                       sOldMouseDownHotspot,
                                       prev_mw->m_FlagsOnMouseDown);
@@ -7233,7 +7223,6 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseDown, 
                                       *old_mw,
                                       old_mw->m_sCallbackPlugin,
-                                      old_mw->m_iCallbackPluginInstanceNumber,
                                       it->second->m_sCancelMouseDown, 
                                       sOldMouseDownHotspot,
                                       old_mw->m_FlagsOnMouseDown);
@@ -7279,7 +7268,6 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
         Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseDown, 
                                     *mw,
                                     mw->m_sCallbackPlugin,
-                                    mw->m_iCallbackPluginInstanceNumber,
                                     it->second->m_sCancelMouseDown, 
                                     sOldMouseDownHotspotInThisWindow,
                                     mw->m_FlagsOnMouseDown);
@@ -7303,7 +7291,6 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
         Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseUp, 
                                     *mw,
                                     mw->m_sCallbackPlugin, 
-                                    mw->m_iCallbackPluginInstanceNumber,
                                     pHotspot->m_sMouseUp, 
                                     sHotspotId, 
                                     mw->m_FlagsOnMouseDown);  // LH / RH / middle mouse?
@@ -7797,7 +7784,6 @@ bool CMUSHView::Mouse_Wheel_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long
     Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_ScrollwheelCallback,
                                 *mw,
                                 mw->m_sCallbackPlugin, 
-                                mw->m_iCallbackPluginInstanceNumber,
                                 pHotspot->m_sScrollwheelCallback, 
                                 sHotspotId,
                                 delta);

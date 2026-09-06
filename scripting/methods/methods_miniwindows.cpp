@@ -577,12 +577,10 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
   CBoolStateGuard addingHotspotGuard (mw->m_bAddingHotspot, true);
 
   string sPluginID;
-  __int64 iPluginInstanceNumber = 0;
 
   if (m_CurrentPlugin)
     {
     sPluginID = m_CurrentPlugin->m_strID;
-    iPluginInstanceNumber = m_CurrentPlugin->m_iPluginInstanceNumber;
     }
 
   long status;
@@ -590,7 +588,6 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
   status = mw->AddHotspot (this,
                            HotspotId,
                            sPluginID,
-                           iPluginInstanceNumber,
                            Left, Top, Right, Bottom,
                            MouseOver,
                            CancelMouseOver,
@@ -1458,16 +1455,13 @@ long CMUSHclientDoc::WindowDragHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR 
     return eNoSuchWindow;
 
   string sPluginID;
-  __int64 iPluginInstanceNumber = 0;
 
   if (m_CurrentPlugin)
     {
     sPluginID = m_CurrentPlugin->m_strID;
-    iPluginInstanceNumber = m_CurrentPlugin->m_iPluginInstanceNumber;
     }
 
   return it->second->DragHandler (this, HotspotId, sPluginID,
-                                  iPluginInstanceNumber,
                                   MoveCallback, ReleaseCallback, Flags);
 }   // end of CMUSHclientDoc::WindowDragHandler
 
@@ -1480,16 +1474,13 @@ long CMUSHclientDoc::WindowScrollwheelHandler(LPCTSTR Name, LPCTSTR HotspotId, L
     return eNoSuchWindow;
 
   string sPluginID;
-  __int64 iPluginInstanceNumber = 0;
 
   if (m_CurrentPlugin)
     {
     sPluginID = m_CurrentPlugin->m_strID;
-    iPluginInstanceNumber = m_CurrentPlugin->m_iPluginInstanceNumber;
     }
 
   return it->second->ScrollwheelHandler (this, HotspotId, sPluginID,
-                                         iPluginInstanceNumber,
                                          MoveCallback);
 }   // end of CMUSHclientDoc::WindowScrollwheelHandler
 

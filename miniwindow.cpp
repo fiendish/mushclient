@@ -29,8 +29,7 @@ CMiniWindow::CMiniWindow ()  :
           m_FlagsOnMouseDown (0),
           m_ZOrder (0),
           m_bExecutingScript (false),
-          m_bAddingHotspot (false),
-          m_iCallbackPluginInstanceNumber (0)
+          m_bAddingHotspot (false)
   {
   pdc = new CDC;
   pdc->CreateCompatibleDC(NULL);
@@ -1726,7 +1725,6 @@ long CMiniWindow::Position(long Left, long Top,
 long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
                              LPCTSTR HotspotId,
                              string sPluginID,
-                             __int64 iPluginInstanceNumber,
                              long Left, long Top, long Right, long Bottom,
                              LPCTSTR MouseOver,
                              LPCTSTR CancelMouseOver,
@@ -1750,9 +1748,7 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
     return eInvalidObjectLabel;
 
   // can't switch plugins here :)
-  if (!m_sCallbackPlugin.empty () &&
-      (m_sCallbackPlugin != sPluginID ||
-       m_iCallbackPluginInstanceNumber != iPluginInstanceNumber))
+  if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
   HotspotMapIterator it = m_Hotspots.find (HotspotId);
@@ -1786,7 +1782,6 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
   delete pOldHotspot;
 
   m_sCallbackPlugin.swap (sPluginID);
-  m_iCallbackPluginInstanceNumber = iPluginInstanceNumber;
 
   if (m_sMouseOverHotspot == HotspotId)
     m_sMouseOverHotspot.erase ();
@@ -1819,7 +1814,6 @@ long CMiniWindow::DeleteHotspot(LPCTSTR HotspotId)
   if (m_Hotspots.empty ())
     {
     m_sCallbackPlugin.erase ();
-    m_iCallbackPluginInstanceNumber = 0;
     }
 
   return eOK;
@@ -1866,7 +1860,6 @@ long CMiniWindow::DeleteAllHotspots()
   m_sMouseOverHotspot.erase ();
   m_sMouseDownHotspot.erase ();
   m_sCallbackPlugin.erase ();
-  m_iCallbackPluginInstanceNumber = 0;
   return eOK;
   }    // end of CMiniWindow::DeleteAllHotspots
 
@@ -3895,7 +3888,6 @@ CPoint menupoint (Left, Top);
 
 long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
                               string sPluginID,
-                              __int64 iPluginInstanceNumber,
                               LPCTSTR MoveCallback,
                               LPCTSTR ReleaseCallback, long Flags)
   {
@@ -3906,9 +3898,7 @@ long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
     return eInvalidObjectLabel;
 
   // can't switch plugins here :)
-  if (!m_sCallbackPlugin.empty () &&
-      (m_sCallbackPlugin != sPluginID ||
-       m_iCallbackPluginInstanceNumber != iPluginInstanceNumber))
+  if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
   HotspotMapIterator it = m_Hotspots.find (HotspotId);
@@ -4235,7 +4225,6 @@ long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
 long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
                                      LPCTSTR HotspotId,
                                      string sPluginID,
-                                     __int64 iPluginInstanceNumber,
                                      LPCTSTR MoveCallback)
   {
 
@@ -4243,9 +4232,7 @@ long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
     return eInvalidObjectLabel;
 
   // can't switch plugins here :)
-  if (!m_sCallbackPlugin.empty () &&
-      (m_sCallbackPlugin != sPluginID ||
-       m_iCallbackPluginInstanceNumber != iPluginInstanceNumber))
+  if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
   HotspotMapIterator it = m_Hotspots.find (HotspotId);
