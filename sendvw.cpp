@@ -39,6 +39,19 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 static CString RandomString();
 
+static bool IsWorldDocumentLive (const CMUSHclientDoc * pExpectedDoc,
+                                 const __int64 iDocumentNumber)
+  {
+  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pDoc == pExpectedDoc && pDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+      return true;
+    }
+  return false;
+  }
+
 /////////////////////////////////////////////////////////////////////////////
 // CSendView
 
@@ -754,6 +767,7 @@ void CSendView::SendMacro (int whichone)
 
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
+  const __int64 iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
   BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
   pDoc->m_bEnableAutoSay = FALSE;
 
@@ -791,7 +805,8 @@ void CSendView::SendMacro (int whichone)
 
 // restore auto-say
 
-  pDoc->m_bEnableAutoSay = bSavedAutoSay;
+  if (IsWorldDocumentLive (pDoc, iDocumentNumber))
+    pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   } // end of SendMacro
 
@@ -1291,7 +1306,7 @@ ASSERT_VALID(pDoc);
   pCmdUI->Enable (pDoc->m_iConnectPhase == eConnectConnectedToMud);    // not if session closed
 }
 
-// returns true if they don't want their typing replaced
+// Returns true if typing must not be replaced, including when its context has closed.
 
 bool CSendView::CheckTyping (CMUSHclientDoc* pDoc, CString strReplacement)
   {
@@ -1332,8 +1347,18 @@ CString strCurrent;
     CString strMsg;
     strMsg = TFormat ("Replace your typing of\n\n\"%s\"\n\nwith\n\n\"%s\"?",
                    (LPCTSTR) strCurrent, (LPCTSTR) strReplacement);
-    if (::UMessageBox (strMsg, MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2)
-        == IDCANCEL)
+    const __int64 iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+    const HWND hSendView = GetSafeHwnd ();
+    const int iResult = ::UMessageBox (strMsg,
+                         MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2);
+
+    // The confirmation can process messages that destroy the document or this view.
+    if (!IsWorldDocumentLive (pDoc, iDocumentNumber) ||
+        !::IsWindow (hSendView) ||
+        CWnd::FromHandlePermanent (hSendView) != this)
+      return true;
+
+    if (iResult == IDCANCEL)
       {
         m_iHistoryStatus = eAtBottom;   // we are still at bottom therefore
         m_HistoryPosition = NULL;

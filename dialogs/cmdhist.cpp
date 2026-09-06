@@ -139,7 +139,13 @@ str = m_msgListSnapshot.GetAt (pos);
 
 // check they want to wipe out their typing
 
-if (m_sendview->CheckTyping (m_pDoc, str))
+const bool bKeepTyping = m_sendview->CheckTyping (m_pDoc, str);
+if (!IsContextLive ())
+  {
+  CDialog::OnCancel ();
+  return;
+  }
+if (bKeepTyping)
   return;
 
 m_sendview->SetCommand (str);
