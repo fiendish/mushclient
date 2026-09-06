@@ -93,6 +93,7 @@
 #include <iterator>
 #include <sstream>
 #include <memory>
+#include <exception>
 #pragma warning (pop)
 
 #ifdef LUA_52
