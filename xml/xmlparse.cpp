@@ -195,11 +195,20 @@ void CXMLparser::BuildStructure (CFile * file)
     // find required buffer length
     int length = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q, (m_xmlLength - 2) / 2, 
                     NULL, 0, NULL, NULL);
+    if (length <= 0)
+      ThrowErrorException ("Could not convert Unicode XML file");
+
     // make a new string with enough length to hold it
     char * p = buf2.GetBuffer (length);
     // convert it
-    WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q, (m_xmlLength - 2) / 2, 
-              p, length, NULL, NULL);
+    int iConverted = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q,
+                                          (m_xmlLength - 2) / 2,
+                                          p, length, NULL, NULL);
+    if (iConverted != length)
+      {
+      buf2.ReleaseBuffer (0);
+      ThrowErrorException ("Could not convert Unicode XML file");
+      }
     buf2.ReleaseBuffer (length);
     // copy to our buffer
     m_strxmlBuffer = buf2;
