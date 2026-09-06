@@ -17,6 +17,16 @@ static void require(bool condition, const char *message)
     }
 }
 
+static int failures = 0;
+static void check(bool condition, const char *message)
+{
+    if (!condition)
+    {
+        fprintf(stderr, "FAIL: %s\n", message);
+        ++failures;
+    }
+}
+
 static int CALLBACK compare(LPARAM first, LPARAM second, LPARAM direction)
 {
     return ((first > second) - (first < second)) * (int)direction;
@@ -74,27 +84,28 @@ int main()
         require(ListView_SortItems(list, compare, direction) != FALSE, "Sort rows");
 
         int actualMark = ListView_GetSelectionMark(list);
-        require(mark < 0 ? actualMark == -1 :
+        printf("CASE: controls=%d mark=%d focus=%d direction=%d final_mark=%d\n",
+            COMMON_CONTROLS_VERSION, mark, focus, direction, actualMark);
+        fflush(stdout);
+        check(mark < 0 ? actualMark == -1 :
             actualMark >= 0 && identity(list, actualMark) == ids[mark],
             "Sorting preserves marked identity");
         int actualFocus = ListView_GetNextItem(list, -1, LVNI_FOCUSED);
-        require(focus < 0 ? actualFocus == -1 :
+        check(focus < 0 ? actualFocus == -1 :
             actualFocus >= 0 && identity(list, actualFocus) == ids[focus],
             "Sorting preserves focused identity");
         for (int row = 0; row < 3; ++row)
         {
             LPARAM id = identity(list, row);
-            require(id == (direction > 0 ? (row + 1) * 10 : (3 - row) * 10),
+            check(id == (direction > 0 ? (row + 1) * 10 : (3 - row) * 10),
                 "Rows have the requested order");
-            require(!!ListView_GetItemState(list, row, LVIS_SELECTED) == (id != 10),
+            check(!!ListView_GetItemState(list, row, LVIS_SELECTED) == (id != 10),
                 "Sorting preserves selected identities");
         }
-        printf("PASS: controls=%d mark=%d focus=%d direction=%d final_mark=%d\n",
-            COMMON_CONTROLS_VERSION, mark, focus, direction, actualMark);
         require(DestroyWindow(list) != FALSE, "Destroy list");
         ++cases;
     }
     require(DestroyWindow(parent) != FALSE, "Destroy parent");
-    printf("PASS: %d cases using the real Windows list control\n", cases);
-    return 0;
+    printf("%d cases, %d failed assertions using the real Windows list control\n", cases, failures);
+    return failures ? 1 : 0;
 }
