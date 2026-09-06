@@ -151,11 +151,14 @@ CListCtrl & pList = GetListCtrl ();
 
 //  TRACE ("Activity window being updated\n");
 
-  m_bUpdateLockout = TRUE;
+  CValueStateGuard<BOOL> updateLockoutGuard (m_bUpdateLockout, TRUE);
 
   App.m_bUpdateActivity = FALSE;
 
   App.m_timeLastActivityUpdate = CTime::GetCurrentTime();
+
+  try
+    {
 
 // if the list has the same number of worlds (and they are the same
 // worlds), then we can not bother deleting the list and re-adding it
@@ -180,7 +183,7 @@ CListCtrl & pList = GetListCtrl ();
          bInserting = true;
          break;
          }
-       if ((DWORD) pDoc != pList.GetItemData (nItem))
+       if (GetWorldForIndex ((int) pList.GetItemData (nItem)) != pDoc)
          {
          bInserting = true;
          break;
@@ -191,7 +194,10 @@ CListCtrl & pList = GetListCtrl ();
     bInserting = true;    // different counts, must re-do list
 
   if (bInserting)
+    {
     pList.DeleteAllItems ();
+    m_DocumentNumbers.RemoveAll ();
+    }
 
 // add all documents to the list
 
@@ -259,7 +265,10 @@ CListCtrl & pList = GetListCtrl ();
 		pList.SetItemText(nItem, eColumnDuration, strDuration);
 
     if (bInserting)
-      pList.SetItemData(nItem, (DWORD) pDoc);
+      {
+      int iDocument = m_DocumentNumbers.Add (pDoc->m_iUniqueDocumentNumber);
+      pList.SetItemData(nItem, (DWORD) iDocument);
+      }
 
     LVITEM lvitem;
 
@@ -282,9 +291,14 @@ CListCtrl & pList = GetListCtrl ();
 
 // make sure in same order that we left them
 
-  pList.SortItems (CompareFunc, m_reverse << 8 | m_last_col); 
+  pList.SortItems (CompareFunc, (LPARAM) this);
 
-  m_bUpdateLockout = FALSE;
+    }
+  catch (...)
+    {
+    App.m_bUpdateActivity = TRUE;
+    throw;
+    }
 
 }     // end of CActivityView::OnUpdate
 
@@ -429,6 +443,10 @@ void CActivityView::OnColumnclick(NMHDR* pNMHDR, LRESULT* pResult)
 
   int col = pNMListView->iSubItem;
 
+  // A closed world remains in the list until the deferred activity refresh.
+  if (App.m_bUpdateActivity)
+    OnUpdate (NULL, 0, NULL);
+
   if (col == m_last_col)
     m_reverse = !m_reverse;
   else
@@ -436,7 +454,7 @@ void CActivityView::OnColumnclick(NMHDR* pNMHDR, LRESULT* pResult)
 
   m_last_col = col;
     
-  GetListCtrl ().SortItems (CompareFunc, m_reverse << 8 | m_last_col); 
+  GetListCtrl ().SortItems (CompareFunc, (LPARAM) this);
 	
 	*pResult = 0;
 }
@@ -447,12 +465,22 @@ int CALLBACK CActivityView::CompareFunc ( LPARAM lParam1,
                                           LPARAM lParamSort)
   { 
 
- CMUSHclientDoc * item1 = (CMUSHclientDoc *) lParam1;
- CMUSHclientDoc * item2 = (CMUSHclientDoc *) lParam2;
+ CActivityView * pView = (CActivityView *) lParamSort;
+ CMUSHclientDoc * item1 = pView->GetWorldForIndex ((int) lParam1);
+ CMUSHclientDoc * item2 = pView->GetWorldForIndex ((int) lParam2);
+
+ if (!item1 || !item2)
+   {
+   __int64 iDocument1 = lParam1 >= 0 && lParam1 < pView->m_DocumentNumbers.GetSize () ?
+                         pView->m_DocumentNumbers [(int) lParam1] : 0;
+   __int64 iDocument2 = lParam2 >= 0 && lParam2 < pView->m_DocumentNumbers.GetSize () ?
+                         pView->m_DocumentNumbers [(int) lParam2] : 0;
+   return iDocument1 < iDocument2 ? -1 : iDocument1 > iDocument2 ? 1 : 0;
+   }
 
 int iResult = 0;
 
-  switch (lParamSort & 0xFF)   // which sort key
+  switch (pView->m_last_col)   // which sort key
     {
     case eColumnSeq: 
                 if (item1->m_view_number < item2->m_view_number)
@@ -519,7 +547,7 @@ int iResult = 0;
 
 // if reverse sort wanted, reverse sense of result
 
-  if (lParamSort & 0xFF00)
+  if (pView->m_reverse)
     iResult *= -1;
 
   return iResult;
@@ -613,9 +641,30 @@ int nItem = GetListCtrl ().GetNextItem(-1, LVNI_SELECTED);
   if (nItem == -1)
     return NULL;   // no item selected
 
-  return (CMUSHclientDoc*) GetListCtrl ().GetItemData (nItem);
+  return GetWorldForIndex ((int) GetListCtrl ().GetItemData (nItem));
 
-  } // end of  CActivityView::GetSelectedWorld
+  } // end of CActivityView::GetSelectedWorld
+
+CMUSHclientDoc * CActivityView::GetWorldForIndex (const int iIndex) const
+  {
+
+  if (iIndex < 0 || iIndex >= m_DocumentNumbers.GetSize ())
+    return NULL;
+
+  __int64 iDocumentNumber = m_DocumentNumbers [iIndex];
+
+  POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition ();
+  while (pos)
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+      return pDoc;
+    }
+
+  return NULL;
+
+  } // end of CActivityView::GetWorldForIndex
 
 void CActivityView::OnPopupSaveworlddetailsas() 
 {
