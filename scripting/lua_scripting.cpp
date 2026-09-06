@@ -166,6 +166,9 @@ static void BuildLuaTables (lua_State * L)
 // sigh - luacom_open returns void
 int luacom_open_glue (lua_State *L)
   {
+  lua_pushliteral (L, "mushclient_embedded");
+  lua_pushboolean (L, 1);
+  lua_settable (L, LUA_REGISTRYINDEX);
   luacom_open (L);
   return 0;
   }
