@@ -1591,29 +1591,13 @@ void CMUSHclientDoc:: SavePrefsP14 (CPrefsP14 &page14)
 
   if (m_pCurrentLine)     // a new world might not have a line yet
     {
-    // save current line text
-    CString strLine = CString (m_pCurrentLine->text, m_pCurrentLine->len);
-
+    int iMemoryAllocated;
     if (m_bUTF_8)
-      m_pCurrentLine->iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn) * 4;
+      iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn) * 4;
     else
-      m_pCurrentLine->iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn);
+      iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn);
 
-#ifdef USE_REALLOC
-
-    m_pCurrentLine->text  = (char *) realloc (m_pCurrentLine->text, 
-                                              m_pCurrentLine->iMemoryAllocated);  
-
-#else
-    delete [] m_pCurrentLine->text;
-    m_pCurrentLine->text = new char [m_pCurrentLine->iMemoryAllocated];
-#endif
-
-    // check we got it
-    ASSERT (m_pCurrentLine->text);
-
-    // put text back
-    memcpy (m_pCurrentLine->text, (LPCTSTR) strLine, m_pCurrentLine->len);
+    m_pCurrentLine->ResizeText (iMemoryAllocated);
     }   // end of having a current line
 
   if (m_nWrapColumn != page14.m_nWrapColumn)

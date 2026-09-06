@@ -3304,21 +3304,10 @@ void CMUSHView::AutoWrapWindowWidth (CMUSHclientDoc* pDoc)
 
     if (pDoc->m_pCurrentLine)     // a new world might not have a line yet
       {
-      // save current line text
-      CString strLine = CString (pDoc->m_pCurrentLine->text, pDoc->m_pCurrentLine->len);
-
-  #ifdef USE_REALLOC
-      pDoc->m_pCurrentLine->text  = (char *) realloc (pDoc->m_pCurrentLine->text, 
-                                               MAX (pDoc->m_pCurrentLine->len, iWidth) 
-                                               * sizeof (char));
-  #else
-      delete [] pDoc->m_pCurrentLine->text;
-      pDoc->m_pCurrentLine->text = new char [MAX (pDoc->m_pCurrentLine->len, iWidth)];
-  #endif
-
-      // put text back
-      memcpy (pDoc->m_pCurrentLine->text, (LPCTSTR) strLine, pDoc->m_pCurrentLine->len);
-      ASSERT (pDoc->m_pCurrentLine->text);
+      int iMemoryAllocated = MAX (pDoc->m_pCurrentLine->len, iWidth);
+      if (pDoc->m_bUTF_8)
+        iMemoryAllocated *= 4;
+      pDoc->m_pCurrentLine->ResizeText (iMemoryAllocated);
     
       }   // end of having a current line
 

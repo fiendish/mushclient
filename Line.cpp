@@ -56,14 +56,27 @@ CLine::CLine (const long nLineNumber,
     AfxThrowMemoryException ();
   flags = 0;      // no special flags yet (ie. normal output line)
 
-  CStyle * pStyle; 
+  try
+    {
+    std::unique_ptr<CStyle> pStyle (NEWSTYLE);
+    pStyle->iFlags = iFlags;
+    pStyle->iForeColour = iForeColour;
+    pStyle->iBackColour = iBackColour;
 
-  // have at least one style item in the list
-  styleList.AddTail (pStyle = NEWSTYLE);
-
-  pStyle->iFlags = iFlags;
-  pStyle->iForeColour = iForeColour;
-  pStyle->iBackColour = iBackColour;
+    // have at least one style item in the list
+    styleList.AddTail (pStyle.get ());
+    pStyle.release ();
+    }
+  catch (...)
+    {
+#ifdef USE_REALLOC
+    free (text);
+#else
+    delete [] text;
+#endif
+    text = NULL;
+    throw;
+    }
 
   }   // end of CLine::CLine
 
@@ -85,6 +98,26 @@ CLine::~CLine ()
   styleList.RemoveAll();
 
   }
+
+void CLine::ResizeText (const int iNewSize)
+  {
+  ASSERT (iNewSize >= len);
+
+#ifdef USE_REALLOC
+  char * pNewText = (char *) realloc (text, iNewSize);
+  if (!pNewText)
+    AfxThrowMemoryException ();
+#else
+  char * pNewText = new char [iNewSize];
+  if (!pNewText)
+    AfxThrowMemoryException ();
+  memcpy (pNewText, text, len);
+  delete [] text;
+#endif
+
+  text = pNewText;
+  iMemoryAllocated = iNewSize;
+  } // end of CLine::ResizeText
 
 // for tracking down style allocation errors
 
