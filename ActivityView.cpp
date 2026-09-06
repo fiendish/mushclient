@@ -469,17 +469,25 @@ int CALLBACK CActivityView::CompareFunc ( LPARAM lParam1,
  CMUSHclientDoc * item1 = pView->GetWorldForIndex ((int) lParam1);
  CMUSHclientDoc * item2 = pView->GetWorldForIndex ((int) lParam2);
 
- if (!item1 || !item2)
-   {
-   __int64 iDocument1 = lParam1 >= 0 && lParam1 < pView->m_DocumentNumbers.GetSize () ?
-                         pView->m_DocumentNumbers [(int) lParam1] : 0;
-   __int64 iDocument2 = lParam2 >= 0 && lParam2 < pView->m_DocumentNumbers.GetSize () ?
-                         pView->m_DocumentNumbers [(int) lParam2] : 0;
-   return iDocument1 < iDocument2 ? -1 : iDocument1 > iDocument2 ? 1 : 0;
-   }
-
 int iResult = 0;
 
+ if (!item1 || !item2)
+   {
+   // Keep unresolved rows in a separate group so mixed comparisons agree.
+   if (item1)
+     iResult = -1;
+   else if (item2)
+     iResult = 1;
+   else
+     {
+     __int64 iDocument1 = lParam1 >= 0 && lParam1 < pView->m_DocumentNumbers.GetSize () ?
+                           pView->m_DocumentNumbers [(int) lParam1] : 0;
+     __int64 iDocument2 = lParam2 >= 0 && lParam2 < pView->m_DocumentNumbers.GetSize () ?
+                           pView->m_DocumentNumbers [(int) lParam2] : 0;
+     iResult = iDocument1 < iDocument2 ? -1 : iDocument1 > iDocument2 ? 1 : 0;
+     }
+   }
+ else
   switch (pView->m_last_col)   // which sort key
     {
     case eColumnSeq: 
