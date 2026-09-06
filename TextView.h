@@ -44,6 +44,8 @@ public:
 // Overrides
 
   virtual void SerializeRaw(CArchive& ar);
+  virtual BOOL OnCmdMsg(UINT nID, int nCode, void* pExtra,
+                        AFX_CMDHANDLERINFO* pHandlerInfo);
 
   void OpenLuaDelayed ();
   void OpenLua ();

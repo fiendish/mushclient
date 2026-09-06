@@ -82,6 +82,8 @@ int i;
   m_bPluginProcessingSent = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
+  m_iConnectionAttemptNumber = 0;
+  m_iNameLookupGeneration = 0;
   m_iNextChatID = 0;
   m_tLastMessageTime = 0;
   m_tLastGroupMessageTime = 0;
@@ -389,6 +391,7 @@ int i;
   m_ScriptEngine = NULL;
 
   m_bInScriptFileChanged = false;
+  m_bScriptFileChangedPending = false;
   m_pThread = NULL;
   m_bSyntaxErrorOnly = false;
 

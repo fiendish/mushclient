@@ -294,11 +294,11 @@ void CMUSHclientDoc::DisableScripting (void)
 
 // ------------------- script file change monitoring thread -------------------------
 
-void CMUSHclientDoc::ThreadFunc(LPVOID pParam)
+unsigned __stdcall CMUSHclientDoc::ThreadFunc(void * pParam)
 {
   CThreadData*	pData = (CThreadData*) pParam;
 	char * strDir = pData->m_strFilename;
-  DWORD pDoc = pData->m_pDoc;
+  __int64 iDocumentNumber = pData->m_iDocumentNumber;
 	char * p = strrchr (strDir, '\\');
 	if (!p)
 		p = strrchr (strDir, ':');   // why?
@@ -316,7 +316,7 @@ void CMUSHclientDoc::ThreadFunc(LPVOID pParam)
 
   // Return now if ::FindFirstChangeNotification failed.
   if (hChange == INVALID_HANDLE_VALUE)
-    return;
+    return 0;
 
 	HANDLE	aHandles[2];
 	aHandles[0] = hChange;
@@ -330,10 +330,16 @@ void CMUSHclientDoc::ThreadFunc(LPVOID pParam)
 		switch ((::WaitForMultipleObjects(2, aHandles, FALSE, INFINITE)))
 		{
 		case 0:
+			{
 			// Respond to a change notification.
-			::PostMessage(hWnd, WM_USER_SCRIPT_FILE_CONTENTS_CHANGED, (WPARAM) pDoc, 0);
+			CFileChangeNotification * pNotification = new CFileChangeNotification;
+      pNotification->m_iDocumentNumber = iDocumentNumber;
+      if (!::PostMessage(hWnd, WM_USER_SCRIPT_FILE_CONTENTS_CHANGED,
+                         (WPARAM) pNotification, 0))
+        delete pNotification;
 			::FindNextChangeNotification(hChange);
 			break;
+			}
 
 		default:
 			// Kill this thread (m_event became signaled).
@@ -344,7 +350,7 @@ void CMUSHclientDoc::ThreadFunc(LPVOID pParam)
 
 	// Close the file change notification handle and return.
 	::FindCloseChangeNotification(hChange);
-	return;
+	return 0;
 }
 
 // Create script source file monitoring thread
@@ -354,14 +360,30 @@ void CMUSHclientDoc::CreateMonitoringThread()
   KillThread (m_pThread, m_eventScriptFileChanged);
 
 	CThreadData*	pData = new CThreadData;
+  try
+    {
 	pData->m_strFilename = new char [m_strScriptFilename.GetLength () + 1];
+    }
+  catch (...)
+    {
+    delete pData;
+    throw;
+    }
   strcpy (pData->m_strFilename, m_strScriptFilename);
 	pData->m_hWnd = Frame.GetSafeHwnd ();
 	pData->m_hEvent = m_eventScriptFileChanged;
-  pData->m_pDoc = (DWORD) this;
+  pData->m_iDocumentNumber = m_iUniqueDocumentNumber;
 	m_eventScriptFileChanged.ResetEvent();
 
-	m_pThread = (HANDLE) _beginthread (ThreadFunc, 0, pData);
+  uintptr_t iThread = _beginthreadex (NULL, 0, ThreadFunc, pData, 0, NULL);
+  if (iThread == 0)
+    {
+    delete [] pData->m_strFilename;
+    delete pData;
+    AfxThrowResourceException ();
+    }
+
+	m_pThread = (HANDLE) iThread;
   SetThreadPriority (m_pThread, THREAD_PRIORITY_IDLE);
 
 	// Thread will delete data object
@@ -388,7 +410,7 @@ void CMUSHclientDoc::OnScriptFileChanged(const bool bForce)
   if (!bForce && m_nReloadOption == eReloadNever)
     return;
 
-  m_bInScriptFileChanged = true;
+  CBoolStateGuard scriptFileChangedGuard (m_bInScriptFileChanged, true);
 
 	// Check if this script file has changed
 	CFileStatus	status;
@@ -407,7 +429,6 @@ void CMUSHclientDoc::OnScriptFileChanged(const bool bForce)
       } // end of approving modification or wanting it anyway
     } // end of time changing
 
-	m_bInScriptFileChanged = false;
 }
 
 

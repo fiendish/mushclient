@@ -35,12 +35,17 @@ public:
 	HANDLE	m_pThread;			// Notification thread
 	CEvent  m_eventFileChanged;		// file changed thread event
   bool m_bInFileChanged;
+  bool m_bFileChangedPending;
+  int m_iActiveOperations;
+  bool m_bClosePending;
+  bool m_bCloseQueued;
   CTime m_timeFileMod;
 
   CString m_strTitle;
   CMUSHclientDoc * m_pRelatedWorld; // which world it belongs to, if any
 
    __int64 m_iUniqueDocumentNumber;    // to confirm we have the right doc
+   __int64 m_iTextDocumentNumber;      // identifies this text document instance
    CString m_strFontName;        // window font
    LONG     m_iFontSize;
    LONG     m_iFontWeight;
@@ -92,6 +97,8 @@ public:
   void CreateMonitoringThread(const char * sName);
   void SetTheFont (void);
   void SetReadOnly (BOOL bReadOnly);
+  void BeginOperation (void);
+  void EndOperation (void);
 
 	// Generated message map functions
 protected:
@@ -103,6 +110,26 @@ protected:
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
 };
+
+class CTextDocumentOperationGuard
+  {
+  public:
+    CTextDocumentOperationGuard (CTextDocument * pDoc) : m_pDoc (pDoc)
+      {
+      ASSERT (m_pDoc);
+      m_pDoc->BeginOperation ();
+      }
+
+    ~CTextDocumentOperationGuard ()
+      {
+      m_pDoc->EndOperation ();
+      }
+
+  private:
+    CTextDocument * m_pDoc;
+    CTextDocumentOperationGuard (const CTextDocumentOperationGuard &);
+    CTextDocumentOperationGuard & operator= (const CTextDocumentOperationGuard &);
+  };
 
 //{{AFX_INSERT_LOCATION}}
 // Microsoft Visual C++ will insert additional declarations immediately before the previous line.
