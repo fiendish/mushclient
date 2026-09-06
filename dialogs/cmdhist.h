@@ -13,7 +13,7 @@ public:
   CStringList * m_msgList;
   CStringList m_msgListSnapshot;
   CSendView * m_sendview;
-  CFindInfo * m_pHistoryFindInfo;
+  std::shared_ptr<CFindInfo> m_pHistoryFindInfo;
   CMUSHclientDoc* m_pDoc;
   __int64 m_iDocumentNumber;
   HWND m_hSendView;

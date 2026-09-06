@@ -24,7 +24,6 @@ CCmdHistory::CCmdHistory(CWnd* pParent /*=NULL*/)
 	//}}AFX_DATA_INIT
   m_msgList = NULL;
   m_sendview = NULL;
-  m_pHistoryFindInfo = NULL;
   m_pDoc = NULL;
   m_iDocumentNumber = 0;
   m_hSendView = NULL;
@@ -193,7 +192,18 @@ bool found = FindRoutine (&m_msgListSnapshot,    // passed back to callback rout
                           InitiateSearch,        // how to re-initiate a find
                           GetNextLine);          // get the next line
 
+// FindRoutine can process messages that close the world or destroy the send view.
+if (!IsContextLive ())
+  {
+  CDialog::OnCancel ();
+  return;
+  }
+
 m_pHistoryFindInfo->m_pFindPosition = NULL;
+
+// Get the control again after the nested message loops.
+pList = (CListBox*) GetDlgItem (IDC_COMMANDS);
+ASSERT (pList);
 	
   if (found)
     pList->SetCurSel (m_pHistoryFindInfo->m_nCurrentLine);

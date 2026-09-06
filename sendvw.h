@@ -52,7 +52,8 @@ public:
 
 // stuff for finding in the input buffer
 
-  CFindInfo m_HistoryFindInfo;
+  // Keep search state alive while a history dialog is open.
+  std::shared_ptr<CFindInfo> m_pHistoryFindInfo;
 
 // Operations
 public:

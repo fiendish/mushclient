@@ -256,10 +256,11 @@ END_MESSAGE_MAP()
 // CSendView construction/destruction
 
 CSendView::CSendView()
+  : m_pHistoryFindInfo (new CFindInfo)
 {
   m_HistoryPosition = NULL;
   m_inputcount = 0;
-  m_HistoryFindInfo.m_strTitle = "Find in command history...";
+  m_pHistoryFindInfo->m_strTitle = "Find in command history...";
   m_iHistoryStatus = eAtBottom;
   m_backbr = NULL;
 }
@@ -859,7 +860,7 @@ CCmdHistory dlg;
 
   dlg.m_msgList = &m_msgList;
   dlg.m_sendview = this;
-  dlg.m_pHistoryFindInfo = &m_HistoryFindInfo;    // for finding
+  dlg.m_pHistoryFindInfo = m_pHistoryFindInfo;    // for finding
   dlg.m_pDoc = pDoc;            // for confirming replacement of typing
   dlg.m_iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
   dlg.m_hSendView = GetSafeHwnd ();
@@ -2138,9 +2139,9 @@ void CSendView::OnDisplayClearCommandHistory()
   m_HistoryPosition = NULL;
   m_iHistoryStatus = eAtBottom;
   m_inputcount = 0;
-  m_HistoryFindInfo.m_pFindPosition = NULL;
-  m_HistoryFindInfo.m_nCurrentLine = 0;
-  m_HistoryFindInfo.m_bAgain = FALSE;  
+  m_pHistoryFindInfo->m_pFindPosition = NULL;
+  m_pHistoryFindInfo->m_nCurrentLine = 0;
+  m_pHistoryFindInfo->m_bAgain = FALSE;
   m_strPartialCommand.Empty ();
   m_last_command.Empty ();
   
@@ -2410,12 +2411,12 @@ ASSERT_VALID(pDoc);
         m_HistoryPosition = NULL;
         m_iHistoryStatus = eAtTop;
         }
-      if (m_HistoryFindInfo.m_pFindPosition == oldHead)
-        m_HistoryFindInfo.m_pFindPosition = NULL;
+      if (m_pHistoryFindInfo->m_pFindPosition == oldHead)
+        m_pHistoryFindInfo->m_pFindPosition = NULL;
       m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
-      m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
-      if (m_HistoryFindInfo.m_nCurrentLine < 0)
-        m_HistoryFindInfo.m_nCurrentLine = 0;
+      m_pHistoryFindInfo->m_nCurrentLine--;     // adjust for a "find again"
+      if (m_pHistoryFindInfo->m_nCurrentLine < 0)
+        m_pHistoryFindInfo->m_nCurrentLine = 0;
       }
     else
       m_inputcount++;
