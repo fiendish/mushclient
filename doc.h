@@ -1546,22 +1546,29 @@ public:
   void MXP_Attlist (CString strName, CString strTag);
   void MXP_StartTag (CString strTag);
   void MXP_EndTag (CString strTag);
-  void MXP_CloseTag (CString strTag, const bool bOpen = false);
+  bool MXP_PrepareCloseTag (CString strTag, const bool bOpen,
+                            const __int64 iExpectedOpeningStyleCreationNumber,
+                            const vector<int> & closeActions,
+                            const CActiveTag * pActiveTag,
+                            CPreparedMXPClose & preparedClose);
+  void MXP_FinishCloseTag (const CPreparedMXPClose & preparedClose);
   void MXP_CloseOpenTags (void);
   void MXP_CloseAllTags (void);
   void MXP_On (const bool bPueblo = false, const bool bManual = false);     // turning MXP/Pueblo on
   void MXP_Off (const bool bCompletely = false);  // turning MXP off
-  void MXP_OpenAtomicTag (const CString strTag,   // name
+  bool MXP_OpenAtomicTag (const CString strTag,   // name
                           int iAction,            // action code
                           CStyle * pStyle,        // style it should modify
+                          CStyle * & pResultStyle, // exact style owned by this action
                           CString & strAction,    // new action
                           CString & strHint,      // new hint
                           CString & strVariable,  // new variable
-                          CArgumentList & ArgumentList);  // args
-  void MXP_CloseAtomicTag (const int iAction, 
-                           const CString & strText,
-                           const POSITION firstlinepos,
-                           const POSITION firststylepos);
+                          CArgumentList & ArgumentList,
+                          const __int64 iStateOwner,
+                          COutputAppendTransaction * pOutputTransaction,
+                          vector<CDeferredMXPMessage> & deferredMessages);  // args
+  void MXP_CloseAtomicTag (const int iAction,
+                           const CPreparedMXPClose & preparedClose);
   CString MXP_GetEntity (CString & strName);
   bool BuildArgumentList (CArgumentList & ArgumentList, 
                           CString strTag);
