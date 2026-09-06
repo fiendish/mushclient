@@ -1058,12 +1058,6 @@ transaction.SetStyle (pNewStyle);
     if (pNewStyle)
       {
       RememberStyle (pNewStyle);
-      if (pNewStyle->pAction)
-        {
-        strAction = pNewStyle->pAction->m_strAction;
-        strHint =  pNewStyle->pAction->m_strHint;
-        strVariable = pNewStyle->pAction->m_strVariable;
-        }
       }
 
     if (pNewStyle)
