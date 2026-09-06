@@ -1204,7 +1204,7 @@ static int luacom_RegisterObject(lua_State *L)
       "LocalServer32",
       ModulePath);
 
-#if 0 // MUSHclient does not register LuaCOM as an in-process server.
+#if 0       // NJG
     if(scriptFile) {
       luacom_SetRegKeyValue(
         CLSID,
@@ -1215,7 +1215,7 @@ static int luacom_RegisterObject(lua_State *L)
       "ScriptFile",
       scriptFile);
     }
-#endif
+#endif // NJG
 
     if(control) {
       luacom_SetRegKeyValue(
@@ -2663,7 +2663,7 @@ LUACOM_API void luacom_open(lua_State *L)
   lua_pushboolean(L, 0);
   luaCompat_moduleSet(L, MODULENAME, LUACOM_SHOULD_ABORT_API);
 
-#if 0 // MUSHclient controls loading of Lua helper code.
+  /* NJG
   // loadls the lua code that implements the remaining
   // features of LuaCOM
   int status = 0;
@@ -2682,7 +2682,7 @@ LUACOM_API void luacom_open(lua_State *L)
     fprintf(stderr, "luacom.dll error: %s\n", msg ? msg : "unknown");
     lua_error(L);
   }
-#endif
+  */
 
   idxDispatch = (void*)&luacom_runningInprocess;
 
