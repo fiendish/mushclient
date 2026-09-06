@@ -1220,8 +1220,10 @@ void CMUSHclientDoc::SendMsg(CString strText,
     // it needs to be queued if queuing is requested
     // it also needs to be queued regardless if there is already something in the queue
 
-    if (m_iSpeedWalkDelay &&
-        (bQueueIt || !m_QueuedCommandsList.IsEmpty ()) )
+    bool bQueueIsDraining = m_pTimerWnd && m_pTimerWnd->m_bProcessingQueue;
+    if (bQueueIsDraining ||
+        (m_iSpeedWalkDelay &&
+         (bQueueIt || !m_QueuedCommandsList.IsEmpty ())))
       {
       CString strEchoFlag;
 
@@ -1243,7 +1245,12 @@ void CMUSHclientDoc::SendMsg(CString strText,
         strEchoFlag.MakeLower ();
 
       // queue it
-      m_QueuedCommandsList.AddTail (strEchoFlag + strLine);
+      CString strQueuedCommand = strEchoFlag + strLine;
+      if (m_bPluginProcessingSend)
+        strQueuedCommand.SetAt (0,
+          (char) ((unsigned char) strQueuedCommand [0] |
+                  QUEUE_SUPPRESS_PLUGIN_SEND));
+      m_QueuedCommandsList.AddTail (strQueuedCommand);
 
       }    // end of having a speedwalk delay
     else
