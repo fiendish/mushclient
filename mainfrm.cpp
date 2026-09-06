@@ -1752,7 +1752,7 @@ void CMainFrame::DoFileOpen (void)
                  NULL);        // parent window
 
 	dlgFile.m_ofn.lpstrTitle = title;
-	dlgFile.m_ofn.lpstrFile = fileName.GetBuffer(_MAX_PATH);
+	SetFileDialogFileName (dlgFile, fileName, strSuggestedName);
 
   // use default world file directory
   dlgFile.m_ofn.lpstrInitialDir = Make_Absolute_Path (App.m_strDefaultWorldFileDirectory);

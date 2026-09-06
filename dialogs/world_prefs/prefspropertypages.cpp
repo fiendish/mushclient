@@ -5172,12 +5172,12 @@ DWORD length;
                        NULL);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "File to load notes from";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-  strcpy (filedlg.m_ofn.lpstrFile, "");
+  SetFileDialogFileName (filedlg, filename, "");
 
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
@@ -5242,15 +5242,15 @@ CString str;
                        NULL);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "File to save notes into";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
   if (App.platform == VER_PLATFORM_WIN32s)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
+    SetFileDialogFileName (filedlg, filename, "");
   else
-    strcpy (filedlg.m_ofn.lpstrFile, suggested_name);
+    SetFileDialogFileName (filedlg, filename, suggested_name);
 
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
@@ -6069,13 +6069,12 @@ CString filename;
                        this);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "Select sound to play";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-
-  strcpy (filedlg.m_ofn.lpstrFile, m_strBeepSound);
+  SetFileDialogFileName (filedlg, filename, m_strBeepSound);
     
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
@@ -9004,19 +9003,15 @@ CString filename;
                        this);  // parent window
 
   filedlg.m_ofn.lpstrTitle = "Select sound to play";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-
-  if (App.platform == VER_PLATFORM_WIN32s)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
-  else
-    strcpy (filedlg.m_ofn.lpstrFile, m_sound_pathname);
-
-  if (m_sound_pathname == NOSOUNDLIT)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
+  CString strInitialSound = m_sound_pathname;
+  if (App.platform == VER_PLATFORM_WIN32s || m_sound_pathname == NOSOUNDLIT)
+    strInitialSound.Empty ();
+  SetFileDialogFileName (filedlg, filename, strInitialSound);
     
   ChangeToFileBrowsingDirectory ();
   int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
