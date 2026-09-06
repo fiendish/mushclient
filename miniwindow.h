@@ -114,6 +114,7 @@ class CMiniWindow
   long    m_FlagsOnMouseDown;     // which mouse-down we got
   long    m_ZOrder;               // Z-order. If zero, use name order. Lower is drawn earlier.
   bool    m_bExecutingScript;      // so windows don't delete themselves
+  bool    m_bAddingHotspot;        // prevent recursive hotspot creation in this window
 
   string  m_sCallbackPlugin;      // plugin we are using
   string  m_sCreatingPlugin;      // plugin that created the miniwindow
