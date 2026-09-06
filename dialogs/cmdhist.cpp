@@ -209,7 +209,9 @@ if (!IsContextLive ())
   return;
   }
 
-m_HistoryFindInfo.m_bAgain = bAgain;
+// Find Next needs a new search when no search text is saved.
+m_HistoryFindInfo.m_bAgain = bAgain &&
+    !m_HistoryFindInfo.m_strFindStringList.IsEmpty ();
 m_HistoryFindInfo.m_nTotalLines = m_msgListSnapshot.GetCount ();
 int selection = pList->GetCurSel ();
 if (selection != LB_ERR)
