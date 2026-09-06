@@ -709,6 +709,8 @@ bool bChanged;
     if (AliasOptionsTable [iItem].iFlags & OPT_CANNOT_WRITE)
     	return ePluginCannotSetOption;  // not available for writing at all    
 
+    unsigned short iOldSequence = Alias_item->iSequence;
+
     iResult = SetBaseOptionItem (iItem,
                         AliasOptionsTable,
                         NUMITEMS (AliasOptionsTable),
@@ -716,15 +718,28 @@ bool bChanged;
                         iValue,
                         bChanged);
 
+    if (iResult != eOK)
+      return iResult;
+
+    if (strOptionName == "sequence")
+      {
+      try
+        {
+        SortAliases ();
+        }
+      catch (...)
+        {
+        Alias_item->iSequence = iOldSequence;
+        throw;
+        }
+      }
+
     if (bChanged)
       {
       if (!m_CurrentPlugin) // plugin mods don't really count
         SetModifiedFlag (TRUE);   // document has changed
       Alias_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
       }
-
-    if (strOptionName == "sequence")
-      SortAliases ();
 
     return iResult;
 
@@ -745,14 +760,15 @@ bool bChanged;
     	  return ePluginCannotSetOption;  // not available for writing at all    
 
       // ------ preliminary validation before setting the option
+      std::unique_ptr<t_regexp> newRegexp;
+      DISPID newDispid = DISPID_UNKNOWN;
+      bool bUpdateDispid = false;
 
       // cannot have null match text
       if (strOptionName == "match")
         {
         if (strValue.IsEmpty ())
           return eAliasCannotBeEmpty;
-
-        t_regexp * regexp = NULL;
 
         CString strRegexp; 
 
@@ -764,11 +780,11 @@ bool bChanged;
         // compile regular expression
         try 
           {
-          regexp = regcomp (strRegexp, (Alias_item->bIgnoreCase ? PCRE_CASELESS : 0)
+          newRegexp.reset (regcomp (strRegexp, (Alias_item->bIgnoreCase ? PCRE_CASELESS : 0)
 #if ALIASES_USE_UTF8
                              | (m_bUTF_8 ? PCRE_UTF8 : 0)
 #endif // ALIASES_USE_UTF8
-              );
+              ));
           }   // end of try
         catch(CException* e)
           {
@@ -776,9 +792,6 @@ bool bChanged;
           return eBadRegularExpression;
           } // end of catch
       
-        delete Alias_item->regexp;    // get rid of old one
-        Alias_item->regexp = regexp;
-
         } // end of option "match"  
       else if (strOptionName == "script")
         {
@@ -787,12 +800,11 @@ bool bChanged;
 
         if (GetScriptEngine () && !strValue.IsEmpty ())
           {
-          DISPID dispid = DISPID_UNKNOWN;
           CString strMessage;
-          dispid = GetProcedureDispid (strValue, "Alias", AliasName, strMessage);
-          if (dispid == DISPID_UNKNOWN)
+          newDispid = GetProcedureDispid (strValue, "Alias", AliasName, strMessage);
+          if (newDispid == DISPID_UNKNOWN)
             return eScriptNameNotLocated;
-          Alias_item->dispid  = dispid;   // update dispatch ID
+          bUpdateDispid = true;
           }
         } // end of option "script"
 
@@ -805,6 +817,18 @@ bool bChanged;
                         (char *) Alias_item,  
                         strValue,
                         bChanged);
+
+      if (iResult != eOK)
+        return iResult;
+
+      if (newRegexp.get ())
+        {
+        delete Alias_item->regexp;
+        Alias_item->regexp = newRegexp.release ();
+        }
+
+      if (bUpdateDispid)
+        Alias_item->dispid = newDispid;
 
       if (bChanged)
         {
