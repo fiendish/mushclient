@@ -1059,13 +1059,11 @@ CString str;
               (const char *) m_mush_name, m_port);
   Frame.SetStatusMessageNow (str);
 
-// get rid of any earlier socket
+// create the replacement before releasing the current socket
 
+  CWorldSocket * pNewSocket = new CWorldSocket(this);
   delete m_pSocket;
-
-// now create a new one 
-
-	m_pSocket = new CWorldSocket(this);
+  m_pSocket = pNewSocket;
 
 	if (!m_pSocket->Create(0,
                          SOCK_STREAM,
@@ -1534,11 +1532,12 @@ int count;
        // See: http://www.gammon.com.au/forum/?id=11160 
        if (iCompressResult == Z_BUF_ERROR)
          {
-         m_nCompressionOutputBufferSize += COMPRESS_BUFFER_LENGTH;
-         m_zCompress.avail_out += COMPRESS_BUFFER_LENGTH;
-         m_CompressOutput = (Bytef *) realloc (m_CompressOutput, m_nCompressionOutputBufferSize);
+         const int nNewBufferSize =
+           m_nCompressionOutputBufferSize + COMPRESS_BUFFER_LENGTH;
+         Bytef * pNewCompressOutput =
+           (Bytef *) realloc (m_CompressOutput, nNewBufferSize);
 
-         if (m_CompressOutput == NULL)
+         if (pNewCompressOutput == NULL)
            {
             OnConnectionDisconnect ();    // close the world
             free (m_CompressInput);       // may as well get rid of compression input as well
@@ -1546,6 +1545,13 @@ int count;
             TMessageBox ("Insufficient memory to decompress MCCP text.", MB_ICONEXCLAMATION);
             return;
            }  // end of cannot get more memory
+
+         const uInt nBytesWritten =
+           m_nCompressionOutputBufferSize - m_zCompress.avail_out;
+         m_CompressOutput = pNewCompressOutput;
+         m_nCompressionOutputBufferSize = nNewBufferSize;
+         m_zCompress.next_out = m_CompressOutput + nBytesWritten;
+         m_zCompress.avail_out += COMPRESS_BUFFER_LENGTH;
          }  // end of Z_BUF_ERROR
 
       } while (iCompressResult == Z_BUF_ERROR);
