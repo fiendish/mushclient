@@ -249,7 +249,8 @@ BOOL CMUSHclientApp::InitInstance()
 
 // find the working directory at startup time
 
-  _getdcwd (0, working_dir, sizeof (working_dir) - 1);
+  if (!_getdcwd (0, working_dir, sizeof (working_dir) - 1))
+    AfxThrowFileException (CFileException::genericException, errno);
 
 // make sure directory name ends in a slash
 
