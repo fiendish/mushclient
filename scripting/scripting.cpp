@@ -32,13 +32,32 @@ if (m_ScriptEngine)
 
   m_bSyntaxErrorOnly = false;
 
-  std::unique_ptr<CScriptEngine> newScriptEngine
-    (new CScriptEngine (this, m_strLanguage));
+  m_ScriptEngine = new CScriptEngine (this, m_strLanguage);
+  CScriptEngine * pNewScriptEngine = m_ScriptEngine;
+  bool bCreateFailed;
+  try
+    {
+    bCreateFailed = pNewScriptEngine->CreateScriptEngine ();
+    }
+  catch (...)
+    {
+    if (m_ScriptEngine == pNewScriptEngine)
+      {
+      m_ScriptEngine = NULL;
+      delete pNewScriptEngine;
+      }
+    throw;
+    }
 
-  if (newScriptEngine->CreateScriptEngine ())
+  if (m_ScriptEngine != pNewScriptEngine)
     return true;
 
-  m_ScriptEngine = newScriptEngine.release ();
+  if (bCreateFailed)
+    {
+    m_ScriptEngine = NULL;
+    delete pNewScriptEngine;
+    return true;
+    }
 
  // parse the script file
 
