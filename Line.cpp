@@ -37,6 +37,7 @@ CLine::CLine (const long nLineNumber,
   m_iPreambleOffset = 0;
   m_theTime = CTime::GetCurrentTime(); 
   QueryPerformanceCounter (&m_lineHighPerformanceTime);
+  nCreationNumber = App.GetUniqueNumber ();
   m_nLineNumber = nLineNumber;
 
   if (bUnicode)
@@ -124,6 +125,8 @@ void CLine::ResizeText (const int iNewSize)
 CStyle * GetNewStyle (const char * filename, const long linenumber)
   {
   CStyle * pNewStyle = new CStyle;
+  pNewStyle->nCreationNumber = App.GetUniqueNumber ();
+  pNewStyle->nRangeCreationNumber = pNewStyle->nCreationNumber;
   TRACE3 ("new CStyle at %p at file %s line %ld\n",
           pNewStyle,
           filename,

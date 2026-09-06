@@ -715,6 +715,7 @@ public:
 // new in version 8
 
   LONG    m_maxlines;   // maximum lines in scrollback buffer
+  __int64 m_iOutputGeneration;  // changes when output line positions become invalid
   LONG    m_nHistoryLines;  // maximum lines in command history
   unsigned short  m_nWrapColumn;    // column to wrap at
 
@@ -1132,6 +1133,10 @@ public:
   int m_iMXP_previousMode; // previous mode before mode 4 (secure-once mode)
   bool m_bInParagraph; // discard newlines (wrap)
   bool m_bMXP_script;   // in script collection mode
+  __int64 m_iMXPParagraphOwner;
+  __int64 m_iMXPPreOwner;
+  __int64 m_iMXPScriptOwner;
+  __int64 m_iMXPListOwner;
   bool m_bSuppressNewline;        // newline does NOT start a new line
 
   // NB - lists are being done in a hurry - I should really allow for nesting them
@@ -1160,6 +1165,7 @@ public:
 
   __int64 m_iMXPerrors;
   __int64 m_iMXPtags;
+  __int64 m_iMXPGeneration;  // changes when MXP is reset, stopped, or restarted
   __int64 m_iMXPentities;
 
   // end MXP stuff
