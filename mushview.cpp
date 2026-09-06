@@ -2036,11 +2036,15 @@ ASSERT_VALID(pDoc);
   // find word under mouse for GetInfo (86)
 
   CLine * pLine = pDoc->m_LineList.GetAt (pos);
-  while (start_col >= 0 &&
-        !isspace ((unsigned char) pLine->text [start_col]) &&
-        strchr (App.m_strWordDelimitersDblClick, pLine->text [start_col]) == NULL)
-    start_col--;
-  start_col++;   // now onto the start of that word
+  start_col = MIN (start_col, pLine->len);
+  if (start_col < pLine->len)
+    {
+    while (start_col >= 0 &&
+          !isspace ((unsigned char) pLine->text [start_col]) &&
+          strchr (App.m_strWordDelimitersDblClick, pLine->text [start_col]) == NULL)
+      start_col--;
+    start_col++;   // now onto the start of that word
+    }
 
   // a word will end on a space, or whatever
   while (end_col < pLine->len &&
@@ -4915,11 +4919,15 @@ int line,
   else
     {
     CLine * pLine = pDoc->m_LineList.GetAt (pos);
-    while (m_selstart_col >= 0 && 
-          !isspace ((unsigned char) pLine->text [m_selstart_col]) &&
-          strchr (App.m_strWordDelimitersDblClick, pLine->text [m_selstart_col]) == NULL)
-      m_selstart_col--;
-    m_selstart_col++;   // now onto the start of that word
+    m_selstart_col = MIN (m_selstart_col, pLine->len);
+    if (m_selstart_col < pLine->len)
+      {
+      while (m_selstart_col >= 0 &&
+            !isspace ((unsigned char) pLine->text [m_selstart_col]) &&
+            strchr (App.m_strWordDelimitersDblClick, pLine->text [m_selstart_col]) == NULL)
+        m_selstart_col--;
+      m_selstart_col++;   // now onto the start of that word
+      }
 
     m_pin_col = m_selstart_col;
 
@@ -5372,6 +5380,18 @@ long startcol,
   if (!(m_selend_line > m_selstart_line || 
               (m_selend_line == m_selstart_line && 
                endcol > startcol)))
+    return;
+
+  long iSelectedLine = m_selstart_line;
+  while (startcol >= pStartLine->len && iSelectedLine < m_selend_line)
+    {
+    iSelectedLine++;
+    pStartLine = pDoc->m_LineList.GetAt (pDoc->GetLinePosition (iSelectedLine));
+    startcol = 0;
+    }
+
+  if (startcol >= pStartLine->len ||
+      (iSelectedLine == m_selend_line && startcol >= endcol))
     return;
 
 unsigned int iStyle;
