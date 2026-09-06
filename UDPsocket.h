@@ -25,6 +25,10 @@ public:
   CMUSHclientDoc * m_pDoc;
   CString m_strScript;
   CString m_strPluginID;
+  __int64 m_iPluginInstanceNumber;
+  bool m_bInReceive;
+  bool m_bReceivePending;
+  bool m_bDeleteWhenDone;
 
 // Overrides
 public:
@@ -33,6 +37,7 @@ public:
 	//}}AFX_VIRTUAL
 
   virtual void OnReceive    (int nErrorCode);
+  void ReceiveOneDatagram (void);
 
 	// Generated message map functions
 	//{{AFX_MSG(UDPsocket)
