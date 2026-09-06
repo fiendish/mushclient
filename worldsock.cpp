@@ -28,32 +28,72 @@ IMPLEMENT_DYNAMIC(CWorldSocket, CAsyncSocket)
 CWorldSocket::CWorldSocket(CMUSHclientDoc* pDoc)
 {
 	m_pDoc = pDoc;
+  m_bInReceive = false;
+  m_bReceivePending = false;
 }
 
 void CWorldSocket::OnReceive(int nErrorCode)
 {
+  if (m_bInReceive)
+    {
+    m_bReceivePending = true;
+    return;
+    }
+
+  m_bInReceive = true;
+
   // save m_pDoc locally — if the handshake fails, 'this' (the socket) gets
   // deleted inside ReceiveMsg, so we must not touch 'this' afterwards
   CMUSHclientDoc * pDoc = m_pDoc;
 
-  pDoc->ReceiveMsg();
-
-  // if the socket was destroyed (e.g. SSL handshake failure), don't touch anything
-  if (pDoc->m_pSocket == NULL)
-    return;
-
-  // SSL may have buffered more decrypted data than one SSL_read consumed.
-  // Since we won't get another FD_READ for already-buffered data, drain it now.
-  if (pDoc->m_pSSL && pDoc->m_bSSL_Connected)
+  try
     {
-    while (SSL_pending (pDoc->m_pSSL) > 0)
+    do
       {
+      m_bReceivePending = false;
       pDoc->ReceiveMsg();
-      if (pDoc->m_pSocket == NULL)
+
+      // if the socket was destroyed or replaced, don't touch the old object
+      if (pDoc->m_pSocket != this)
         return;
+
+      // SSL may have buffered more decrypted data than one SSL_read consumed.
+      // Since we won't get another FD_READ for already-buffered data, drain it now.
+      if (pDoc->m_pSSL && pDoc->m_bSSL_Connected)
+        {
+        while (SSL_pending (pDoc->m_pSSL) > 0)
+          {
+          pDoc->ReceiveMsg();
+          if (pDoc->m_pSocket != this)
+            return;
+          }
+        }
+      } while (m_bReceivePending);
+    }
+  catch (...)
+    {
+    bool bSocketLive = false;
+    for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
+      {
+      CMUSHclientDoc * pLiveDoc =
+        (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+      if (pLiveDoc == pDoc)
+        {
+        bSocketLive = pLiveDoc->m_pSocket == this;
+        break;
+        }
       }
+
+    if (bSocketLive)
+      {
+      m_bInReceive = false;
+      m_bReceivePending = false;
+      }
+    throw;
     }
 
+  m_bInReceive = false;
+  m_bReceivePending = false;
   CAsyncSocket::OnReceive(nErrorCode);
 }
 
