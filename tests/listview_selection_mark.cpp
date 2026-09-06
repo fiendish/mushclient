@@ -3,6 +3,7 @@
 #include <shlwapi.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../listview_selection.h"
 
 #if COMMON_CONTROLS_VERSION == 6
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='x86' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -81,7 +82,7 @@ int main()
         }
         ListView_SetSelectionMark(list, mark);
         require(ListView_GetSelectionMark(list) == mark, "Set initial mark");
-        require(ListView_SortItems(list, compare, direction) != FALSE, "Sort rows");
+        require(SortListItemsPreservingSelectionMark(list, compare, direction) != FALSE, "Sort rows and restore selection mark");
 
         int actualMark = ListView_GetSelectionMark(list);
         printf("CASE: controls=%d mark=%d focus=%d direction=%d final_mark=%d\n",

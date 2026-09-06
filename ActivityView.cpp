@@ -6,6 +6,7 @@
 #include "mainfrm.h"
 #include "doc.h"
 #include "ActivityView.h"
+#include "listview_selection.h"
 #include "sendvw.h"
 #include "childfrm.h"
 
@@ -346,7 +347,8 @@ int restoredSelectionMark = -1;
   if (bInserting)
     pList.SetSelectionMark (restoredSelectionMark);
 
-  pList.SortItems (CompareFunc, (LPARAM) this);
+  if (!SortListItemsPreservingSelectionMark (pList.GetSafeHwnd (), CompareFunc, (LPARAM) this))
+    AfxThrowResourceException ();
 
     }
   catch (...)
@@ -509,7 +511,8 @@ void CActivityView::OnColumnclick(NMHDR* pNMHDR, LRESULT* pResult)
 
   m_last_col = col;
     
-  GetListCtrl ().SortItems (CompareFunc, (LPARAM) this);
+  if (!SortListItemsPreservingSelectionMark (GetListCtrl ().GetSafeHwnd (), CompareFunc, (LPARAM) this))
+    AfxThrowResourceException ();
 	
 	*pResult = 0;
 }
