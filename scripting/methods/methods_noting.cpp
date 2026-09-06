@@ -278,6 +278,12 @@ COLORREF iOldNoteColourFore = m_iNoteColourFore;
 COLORREF iOldNoteColourBack = m_iNoteColourBack;
 unsigned short iOldNoteStyle = m_iNoteStyle;
 unsigned short iOldNoteTextColour = m_iNoteTextColour;
+CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
+CValueStateGuard<unsigned short> noteStyleGuard (m_iNoteStyle, m_iNoteStyle);
+CValueStateGuard<unsigned short> noteTextColourGuard
+  (m_iNoteTextColour, m_iNoteTextColour);
 
 COLORREF rgbNormalForeGround = GetNoteColourFore ();
 COLORREF rgbNormalBackGround = GetNoteColourBack ();
@@ -636,6 +642,9 @@ void CMUSHclientDoc::ColourTell(LPCTSTR TextColour, LPCTSTR BackgroundColour, LP
 bool bOldNotesInRGB = m_bNotesInRGB;
 COLORREF iOldNoteColourFore = m_iNoteColourFore;
 COLORREF iOldNoteColourBack = m_iNoteColourBack;
+CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
 
 // change colours
   NoteColourName(TextColour, BackgroundColour);
