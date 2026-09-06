@@ -1,0 +1,38 @@
+name: Update LuaCOM
+
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-luacom
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'fiendish/mushclient' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout current master
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        ref: master
+        persist-credentials: false
+    - name: Check the current import and detect an upstream update
+      id: source
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 tools/update_luacom.py check
+    - name: Publish a new draft update
+      if: steps.source.outputs.update == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.LUACOM_SYNC_TOKEN }}
+        LUACOM_REVISION: ${{ steps.source.outputs.revision }}
+      run: |
+        set -euo pipefail
+        : "${GH_TOKEN:?Set LUACOM_SYNC_TOKEN to a token owned by fiendish with contents and pull requests write access to this repository}"
+        python3 tools/update_luacom.py publish --revision "$LUACOM_REVISION"

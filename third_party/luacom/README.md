@@ -67,9 +67,32 @@ files. Patch files cannot add, delete, rename, or change the modes of exported
 files. Every patch must be declared. Send shared changes upstream instead of
 adding a host patch.
 
-## Continuous checks
+## Continuous checks and update PRs
 
 The `LuaCOM source parity` CI job checks the exact file inventory, bytes, and
 staged Git modes against a fresh reconstruction. It also tests the import and
 publication tools and runs the pinned upstream connection tests against the
 host source. Both native Windows builds depend on this job.
+
+The `Update LuaCOM` workflow checks upstream master daily at 09:17 UTC. It can
+also run through `workflow_dispatch` on MUSHclient master. It creates a draft PR
+for a new upstream commit. It never merges that PR. Review the patches and wait
+for parity and Windows build checks before merging.
+
+Set the repository Actions secret `LUACOM_SYNC_TOKEN` to a token owned by
+`fiendish`. Limit it to `fiendish/mushclient`, with Contents and Pull requests
+read/write permissions. A fine-grained token also has the required Metadata
+read permission. Its owner must retain read access to public `fiendish/luacom`.
+The workflow does not use the Actions bot token to create PRs. A new upstream
+revision with no publication token causes an explicit workflow failure.
+
+The publisher verifies the authenticated owner, the exact remote repository,
+and all PR states for its exact branch before creating a draft PR. A matching
+open PR requires no further writes. A changed PR, a closed PR, or a branch
+without a PR stops publication. If PR creation fails after a push, review that
+branch and create its draft PR manually before retrying. Existing PRs are never
+rewritten, force-pushed, or merged by this workflow.
+
+The schedule becomes active only after this workflow is merged into master.
+A stale pin is allowed while an update PR is under review; source drift from
+the recorded pin and patches is not allowed.
