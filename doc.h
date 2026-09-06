@@ -1332,6 +1332,7 @@ public:
   bool        m_bPluginProcessingCommand; // plugin is doing ON_PLUGIN_COMMAND
   bool        m_bPluginProcessingSend; // plugin is doing ON_PLUGIN_SEND
   bool        m_bPluginProcessingSent; // plugin is doing ON_PLUGIN_SENT
+  bool        m_bInScreendraw;
 
   CString     m_strLastCommandSent;   // for spam prevention
   int         m_iLastCommandCount;    // number of times last command sent

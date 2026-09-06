@@ -471,6 +471,9 @@ void CMUSHclientDoc::ChatNote(short NoteType, LPCTSTR Message)
 bool bOldNotesInRGB = m_bNotesInRGB;
 COLORREF iOldNoteColourFore = m_iNoteColourFore;
 COLORREF iOldNoteColourBack = m_iNoteColourBack;
+CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
 
   if (m_cChatForegroundColour == m_cChatBackgroundColour) 
     NoteColourRGB (RGB (255, 0, 0), RGB (0, 0, 0));

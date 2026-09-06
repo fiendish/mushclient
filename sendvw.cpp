@@ -276,6 +276,7 @@ CSendView::CSendView()
   m_pHistoryFindInfo->m_strTitle = "Find in command history...";
   m_iHistoryStatus = eAtBottom;
   m_backbr = NULL;
+  m_bNotifyingPluginCommandChanged = false;
 }
 
 CSendView::~CSendView()
@@ -1209,15 +1210,21 @@ void CSendView::NotifyPluginCommandChanged ()
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
 
-  static bool doing_change = false;
-
   // tell each plugin the edit window has changed. Hello, Worstje!
 
-  if (!doing_change)      // don't recurse
+  if (!m_bNotifyingPluginCommandChanged)      // don't recurse
     {
-    doing_change = true;
-    pDoc->SendToAllPluginCallbacks (ON_PLUGIN_COMMAND_CHANGED);
-    doing_change = false;
+    m_bNotifyingPluginCommandChanged = true;
+    try
+      {
+      pDoc->SendToAllPluginCallbacks (ON_PLUGIN_COMMAND_CHANGED);
+      }
+    catch (...)
+      {
+      m_bNotifyingPluginCommandChanged = false;
+      throw;
+      }
+    m_bNotifyingPluginCommandChanged = false;
     }
 
   }  // end of CSendView::NotifyPluginCommandChanged

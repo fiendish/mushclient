@@ -1567,6 +1567,12 @@ void CChatSocket::Process_Snoop_data				  (const CString strMessage)
   bool bOldNotesInRGB = m_pDoc->m_bNotesInRGB;
   COLORREF iOldNoteColourFore = m_pDoc->m_iNoteColourFore;
   COLORREF iOldNoteColourBack = m_pDoc->m_iNoteColourBack;
+  CValueStateGuard<bool> notesRGBGuard
+    (m_pDoc->m_bNotesInRGB, m_pDoc->m_bNotesInRGB);
+  CValueStateGuard<COLORREF> noteForeGuard
+    (m_pDoc->m_iNoteColourFore, m_pDoc->m_iNoteColourFore);
+  CValueStateGuard<COLORREF> noteBackGuard
+    (m_pDoc->m_iNoteColourBack, m_pDoc->m_iNoteColourBack);
 
   m_pDoc->ColourTell ("springgreen", "black", ">");
 
@@ -1617,7 +1623,7 @@ void CChatSocket::Process_Send_command				  (const CString strMessage)
                   TFormat ("%s commands you to '%s'.",
                                 (LPCTSTR) m_strRemoteUserName,
                                 (LPCTSTR) strMessage));
-    m_pDoc->m_iExecutionDepth = 0;
+    CValueStateGuard<int> executionDepthGuard (m_pDoc->m_iExecutionDepth, 0);
     m_pDoc->Execute (strMessage);
     }   // end of allowed to send commands
   else

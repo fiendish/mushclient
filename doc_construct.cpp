@@ -80,6 +80,7 @@ int i;
   m_bPluginProcessingCommand = false;
   m_bPluginProcessingSend = false;
   m_bPluginProcessingSent = false;
+  m_bInScreendraw = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
   m_iNextChatID = 0;

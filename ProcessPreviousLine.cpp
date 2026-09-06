@@ -455,12 +455,13 @@ assemble the full text of the original line.
   m_bLineOmittedFromOutput = false;
   bool bChangedColour = false;
 
-  m_iCurrentActionSource = eInputFromServer;
+  {
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (m_iCurrentActionSource, eInputFromServer);
 
   if (!SendToAllPluginCallbacks (ON_PLUGIN_LINE_RECEIVED, strCurrentLine))
     m_bLineOmittedFromOutput = true;
-
-  m_iCurrentActionSource = eUnknownActionSource;
+  }
 
 // next! see if we have a "mapping failure" line. If so, remove from map list
 
