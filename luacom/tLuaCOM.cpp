@@ -22,6 +22,26 @@ DEFINE_GUID(IID_IProxyManager, 0x00000008, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x0
 
 volatile long tLuaCOM::NEXT_ID = 0;
 
+namespace
+{
+class ExceptionInfoStrings
+{
+public:
+  explicit ExceptionInfoStrings(EXCEPINFO& exception_info)
+    : info(exception_info) {}
+
+  ~ExceptionInfoStrings()
+  {
+    SysFreeString(info.bstrSource);
+    SysFreeString(info.bstrDescription);
+    SysFreeString(info.bstrHelpFile);
+  }
+
+private:
+  EXCEPINFO& info;
+};
+}
+
 tLuaCOM::tLuaCOM(lua_State* L,
                  IDispatch *pdisp_arg,
                  ITypeInfo *ptinfo_arg,
@@ -31,25 +51,24 @@ tLuaCOM::tLuaCOM(lua_State* L,
   HRESULT hr = S_OK;
 	
   // initialization
-  clsid                   = IID_NULL;
+  clsid                   = coclass;
   lock_count              = 0;
-  conn_point              = NULL;
+  objName                 = NULL;
 
   pdisp.Attach(pdisp_arg);
   pdisp->AddRef(); 
 
-  ptinfo.Attach(ptinfo_arg);
-
-  if(ptinfo)
+  if(ptinfo_arg)
   {
     // gets ITypeComp interface. If it's not
     // available, frees typeinfo, as we only
     // use ITypeComp
 
-    hr = ptinfo->GetTypeComp(&ptcomp);
+    hr = ptinfo_arg->GetTypeComp(&ptcomp);
 
     if(SUCCEEDED(hr))
     {
+      ptinfo.Attach(ptinfo_arg);
       ptinfo->AddRef();
 
       // tries to get typecomp for type library
@@ -64,16 +83,9 @@ tLuaCOM::tLuaCOM(lua_State* L,
         plib_tcomp.Release();
       }
     }
-    else
-      ptinfo.Release();  // BUG!!!
   }
 
   typehandler = new tLuaCOMTypeHandler(ptinfo_arg);
-
-  // cleans FuncInfo array
-  int i;
-  for(i = 0; i < MAX_FUNCINFOS; i++)
-    pFuncInfo[i].name = NULL;
 
   ID = InterlockedIncrement(&(tLuaCOM::NEXT_ID));
 
@@ -111,48 +123,76 @@ tLuaCOM::~tLuaCOM()
 
   // frees funcinfos
   {
-    long counter = 0;
-
-    while(pFuncInfo[counter].name != NULL &&
-      counter < MAX_FUNCINFOS)
+    for(size_t counter = 0; counter < mFuncInfo.size(); counter++)
     {
-      free(pFuncInfo[counter].name);
-      pFuncInfo[counter].name = NULL;
+      free(mFuncInfo[counter].name);
+      mFuncInfo[counter].name = NULL;
 
-      ReleaseFuncDesc(pFuncInfo[counter].propget);
-      ReleaseFuncDesc(pFuncInfo[counter].propput);
-      ReleaseFuncDesc(pFuncInfo[counter].func);
-
-      counter++;
+      ReleaseFuncDesc(mFuncInfo[counter].propget_owner,
+                      mFuncInfo[counter].propget);
+      ReleaseFuncDesc(mFuncInfo[counter].propput_owner,
+                      mFuncInfo[counter].propput);
+      ReleaseFuncDesc(mFuncInfo[counter].func_owner,
+                      mFuncInfo[counter].func);
     }
+
   }
 
-  delete typehandler;
-  typehandler = NULL;
+  if (objName) {
+    free(objName);
+    objName = NULL;
+  }
+
+  if( typehandler) {
+	delete typehandler;
+    typehandler = NULL;
+  }
 
   tUtil::log_verbose("tLuaCOM", "%.4d:destroyed", ID);
 }
 
+static void ReleaseBindResult(ITypeInfo*& info,
+                              DESCKIND desckind,
+                              BINDPTR& bindptr)
+{
+  if(desckind == DESCKIND_TYPECOMP && bindptr.lptcomp)
+    bindptr.lptcomp->Release();
+  else if(info)
+  {
+    if(desckind == DESCKIND_FUNCDESC && bindptr.lpfuncdesc)
+      info->ReleaseFuncDesc(bindptr.lpfuncdesc);
+    else if((desckind == DESCKIND_VARDESC ||
+             desckind == DESCKIND_IMPLICITAPPOBJ) && bindptr.lpvardesc)
+      info->ReleaseVarDesc(bindptr.lpvardesc);
+  }
+
+  COM_RELEASE(info);
+}
+
 bool tLuaCOM::getFUNCDESC(const char *name, FuncInfo& funcinfo)
 {
+  funcinfo.name = NULL;
+  funcinfo.propget = NULL;
+  funcinfo.propget_owner = NULL;
+  funcinfo.propput = NULL;
+  funcinfo.propput_owner = NULL;
+  funcinfo.func = NULL;
+  funcinfo.func_owner = NULL;
+
   // First, tries to see we have the FUNCDESC's cached
 
-  long counter = 0;
+  size_t counter = 0;
 
-  for(counter = 0; counter < MAX_FUNCINFOS; counter++)
+  for(counter = 0; counter < mFuncInfo.size(); counter++)
   {
-    // when .name is NULL, there is no further information
-    if(pFuncInfo[counter].name == NULL)
-      break;
-
-    if(strcmp(name, pFuncInfo[counter].name) == 0)
+    if(strcmp(name, mFuncInfo[counter].name) == 0)
       break;
   }
 
   // checks whether funcinfo was found
-  if(counter < MAX_FUNCINFOS && pFuncInfo[counter].name != NULL)
+  if(counter < mFuncInfo.size())
   {
-    funcinfo = pFuncInfo[counter];
+    funcinfo = mFuncInfo[counter];
     return true;
   }
 
@@ -161,7 +201,7 @@ bool tLuaCOM::getFUNCDESC(const char *name, FuncInfo& funcinfo)
 
   HRESULT hr = S_OK;
   BINDPTR bindptr;
-  DESCKIND desckind;
+  DESCKIND desckind = DESCKIND_NONE;
   BSTR wName;
   ITypeInfo *info = NULL;
 
@@ -171,53 +211,77 @@ bool tLuaCOM::getFUNCDESC(const char *name, FuncInfo& funcinfo)
 
   unsigned long lhashval = LHashValOfName(LOCALE_SYSTEM_DEFAULT, wName);
 
+  ZeroMemory(&bindptr, sizeof(bindptr));
+  desckind = DESCKIND_NONE;
+  info = NULL;
   hr = ptcomp->Bind(wName, lhashval, INVOKE_PROPERTYGET,
     &info, &desckind, &bindptr);
   
-  if(FAILED(hr) || desckind == DESCKIND_NONE)
+  if(FAILED(hr) || desckind != DESCKIND_FUNCDESC)
+  {
     funcinfo.propget = NULL;
+    ReleaseBindResult(info, desckind, bindptr);
+  }
   else
   {
     funcinfo.propget = bindptr.lpfuncdesc;
-    info->Release();
+    funcinfo.propget_owner = info;
   }
 
+  ZeroMemory(&bindptr, sizeof(bindptr));
+  desckind = DESCKIND_NONE;
+  info = NULL;
   hr = ptcomp->Bind(wName, lhashval, INVOKE_FUNC,
     &info, &desckind, &bindptr);
   
-  if(FAILED(hr) || desckind == DESCKIND_NONE)
+  if(FAILED(hr) || desckind != DESCKIND_FUNCDESC)
+  {
     funcinfo.func = NULL;
+    ReleaseBindResult(info, desckind, bindptr);
+  }
   else
   {
     funcinfo.func = bindptr.lpfuncdesc;
-    info->Release();
+    funcinfo.func_owner = info;
   }
 
 
+  ZeroMemory(&bindptr, sizeof(bindptr));
+  desckind = DESCKIND_NONE;
+  info = NULL;
   hr = ptcomp->Bind(wName, lhashval, INVOKE_PROPERTYPUT,
     &info, &desckind, &bindptr);
   
-  if(FAILED(hr) || desckind == DESCKIND_NONE)
+  if(FAILED(hr) || desckind != DESCKIND_FUNCDESC)
+  {
     funcinfo.propput = NULL;
+    ReleaseBindResult(info, desckind, bindptr);
+  }
   else
   {
     funcinfo.propput = bindptr.lpfuncdesc;
-    info->Release();
+    funcinfo.propput_owner = info;
   }
 
   // if there is not propertyput, then tries propputref
 
   if(funcinfo.propput == NULL)
   {
+    ZeroMemory(&bindptr, sizeof(bindptr));
+    desckind = DESCKIND_NONE;
+    info = NULL;
     hr = ptcomp->Bind(wName, lhashval, INVOKE_PROPERTYPUTREF,
       &info, &desckind, &bindptr);
 
-    if(FAILED(hr) || desckind == DESCKIND_NONE)
+    if(FAILED(hr) || desckind != DESCKIND_FUNCDESC)
+    {
       funcinfo.propput = NULL;
+      ReleaseBindResult(info, desckind, bindptr);
+    }
     else
     {
       funcinfo.propput = bindptr.lpfuncdesc;
-      info->Release();
+      funcinfo.propput_owner = info;
     }
   }
 
@@ -226,20 +290,33 @@ bool tLuaCOM::getFUNCDESC(const char *name, FuncInfo& funcinfo)
   // If no type information found, returns NULL
   if(!funcinfo.propget && !funcinfo.propput && !funcinfo.func)
     return false;
-  else if(counter < MAX_FUNCINFOS)
+  else
   {
-    CHECKPRECOND(pFuncInfo[counter].name == NULL);
+    FuncInfo cached = funcinfo;
+    cached.name = tUtil::strdup(name);
+    if(!cached.name)
+    {
+      ReleaseFuncDesc(cached.propget_owner, cached.propget);
+      ReleaseFuncDesc(cached.propput_owner, cached.propput);
+      ReleaseFuncDesc(cached.func_owner, cached.func);
+      CHKMALLOC(cached.name);
+    }
 
-    pFuncInfo[counter].name = tUtil::strdup(name);
-
-    pFuncInfo[counter].propget  = funcinfo.propget;
-    pFuncInfo[counter].propput  = funcinfo.propput;
-    pFuncInfo[counter].func     = funcinfo.func;
+    try
+    {
+      mFuncInfo.push_back(cached);
+    }
+    catch(...)
+    {
+      free(cached.name);
+      ReleaseFuncDesc(cached.propget_owner, cached.propget);
+      ReleaseFuncDesc(cached.propput_owner, cached.propput);
+      ReleaseFuncDesc(cached.func_owner, cached.func);
+      throw;
+    }
 
     return true;
   }
-  else
-    return true;
 }
 
 
@@ -254,7 +331,8 @@ bool tLuaCOM::getConstant(lua_State* L, const char* name)
 
   HRESULT hr = S_OK;
   BINDPTR bindptr;
-  DESCKIND desckind;
+  ZeroMemory(&bindptr, sizeof(bindptr));
+  DESCKIND desckind = DESCKIND_NONE;
   BSTR wName;
   bool result = false;
 
@@ -264,27 +342,37 @@ bool tLuaCOM::getConstant(lua_State* L, const char* name)
 
   unsigned long lhashval = LHashValOfName(LOCALE_SYSTEM_DEFAULT, wName);
 
-  tCOMPtr<ITypeInfo> info;
+  ITypeInfo* info = NULL;
   hr = plib_tcomp->Bind(wName, lhashval, INVOKE_PROPERTYGET,
     &info, &desckind, &bindptr);
 
   SysFreeString(wName);
 
-  if(SUCCEEDED(hr) 
-    && desckind == DESCKIND_VARDESC 
-    && bindptr.lpvardesc->varkind == VAR_CONST)
+  try
   {
-    typehandler->com2lua(L, *bindptr.lpvardesc->lpvarValue);
-    result = true;
+    if(SUCCEEDED(hr)
+      && desckind == DESCKIND_VARDESC
+      && bindptr.lpvardesc->varkind == VAR_CONST)
+    {
+      typehandler->com2lua(L, *bindptr.lpvardesc->lpvarValue);
+      result = true;
+    }
   }
-  else
-    result = false;
+  catch(...)
+  {
+    ReleaseBindResult(info, desckind, bindptr);
+    throw;
+  }
+
+  ReleaseBindResult(info, desckind, bindptr);
 
   return result;
 }
 
 bool tLuaCOM::getDISPID(const char* name, DISPID* dispid)
 {
+   checkComObject();
+
    HRESULT hr;
    wchar_t* w_name = (wchar_t*) malloc( (strlen(name) + 1) * sizeof(wchar_t));
    mbstowcs(w_name,name,strlen(name)+1);
@@ -302,6 +390,8 @@ int tLuaCOM::call(lua_State* L,
                   FUNCDESC *pfuncdesc,
                   tLuaObjList params)
 { 
+  checkComObject();
+
   tUtil::log_verbose("tLuaCOM.call", "about to call DISPID 0x%.8x", dispid);
 
    HRESULT hr             = 0;
@@ -316,6 +406,7 @@ int tLuaCOM::call(lua_State* L,
    EXCEPINFO excepinfo;
       
    VariantInit(&result);
+   ZeroMemory(&excepinfo, sizeof(excepinfo));
 
    // fills DISPPARAMS structure, converting lua arguments
    // to COM parameters
@@ -375,9 +466,17 @@ int tLuaCOM::call(lua_State* L,
    {
      // Limpa parametros
      typehandler->releaseVariants(&dispparams);
+     VariantClear(&result);
 
      if(hr == DISP_E_EXCEPTION) // excecoes
      {
+       ExceptionInfoStrings cleanup(excepinfo);
+       if(excepinfo.pfnDeferredFillIn != NULL)
+       {
+         HRESULT fill_result = excepinfo.pfnDeferredFillIn(&excepinfo);
+         CHK_COM_CODE(fill_result);
+       }
+
        if(excepinfo.bstrDescription != NULL)
          COM_EXCEPTION(tUtil::bstr2string(excepinfo.bstrDescription));
        else if(excepinfo.wCode != 0)
@@ -394,160 +493,133 @@ int tLuaCOM::call(lua_State* L,
 
 DWORD tLuaCOM::addConnection(tLuaCOM *server)
 {
+  checkComObject();
+
+  if(!server)
+    return 0;
   if(!server->hasTypeInfo())
     return false;
 
   HRESULT hr;
   IDispatch *pdisp_server = server->GetIDispatch();
+  if(!pdisp_server)
+    return 0;
 
-  IConnectionPointContainer *pcpc = NULL;
+  tCOMPtr<IConnectionPointContainer> pcpc;
 
-  IConnectionPoint *connection_point;
+  tCOMPtr<IConnectionPoint> connection_point;
 
   hr = pdisp->QueryInterface
     (
       IID_IConnectionPointContainer, (void **) &pcpc
     );
 
-  if(FAILED(hr))
+  if(FAILED(hr) || !pcpc)
   {
     return 0;
   }
 
-  {
-    IID guid;
+  IID guid;
+  server->GetIID(&guid);
+  hr = pcpc->FindConnectionPoint(guid, &connection_point);
 
-    server->GetIID(&guid);
-
-    hr = pcpc->FindConnectionPoint(guid, &connection_point);
-  }
-
-  pcpc->Release();
-  pcpc = NULL;
-
-  if(FAILED(hr))
+  if(FAILED(hr) || !connection_point)
   {
     return 0;
   }
 
-  DWORD connection_point_cookie;
+  // Allocate the record before Advise can establish a connection.
+  ConnectionList pending;
+  try
+  {
+    pending.push_back(Connection(connection_point, guid));
+  }
+  catch(const std::bad_alloc&)
+  {
+    return 0;
+  }
+  DWORD connection_point_cookie = 0;
 
   hr = connection_point->Advise
     (
       (IUnknown *) pdisp_server, &connection_point_cookie
     );
 
-  if(FAILED(hr))
+  if(FAILED(hr) || connection_point_cookie == 0)
   {
-    connection_point->Release();
-    connection_point = NULL;
-
+    if(SUCCEEDED(hr))
+      connection_point->Unadvise(connection_point_cookie);
     return 0;
   }
 
-  if(conn_point!=NULL)
-    conn_point->Release();
-  conn_point = connection_point;
-  conn_cookie = connection_point_cookie;
+  pending.front().cookie = connection_point_cookie;
+  connections.splice(connections.end(), pending);
 
   return connection_point_cookie;
 }
 
 void tLuaCOM::releaseConnection()
 {
-  if(conn_point != NULL) {
-    conn_point->Unadvise(conn_cookie);
-    conn_point->Release();
-    conn_point = NULL;
-  }
+  CHK_COM_CODE(releaseConnections());
 }
 
 void tLuaCOM::releaseConnection(tLuaCOM* server, DWORD cookie)
 {
-  IConnectionPointContainer *pcpc = NULL;
+  checkComObject();
 
-  IConnectionPoint *connection_point;
+  tCOMPtr<IConnectionPointContainer> pcpc;
+
+  tCOMPtr<IConnectionPoint> connection_point;
 
   HRESULT hr = pdisp->QueryInterface
     (
       IID_IConnectionPointContainer, (void **) &pcpc
     );
 
-  if(FAILED(hr))
+  if(FAILED(hr) || !pcpc)
   {
     LUACOM_ERROR("Object does not accept connections!");
   }
 
-  {
-    IID guid;
+  IID guid;
+  server->GetIID(&guid);
+  hr = pcpc->FindConnectionPoint(guid, &connection_point);
 
-    server->GetIID(&guid);
-
-    hr = pcpc->FindConnectionPoint(guid, &connection_point);
-  }
-
-  pcpc->Release();
-  pcpc = NULL;
-
-  if(FAILED(hr))
+  if(FAILED(hr) || !connection_point)
   {
     LUACOM_ERROR("No connection point for this interface!");
   }
 
-  connection_point->Unadvise(cookie);
-  connection_point->Release();
-  connection_point = NULL;
+  // Cookies are unique only within one connection point. Detach the matching
+  // record before Unadvise can call back into Lua, and restore it on failure.
+  ConnectionList pending;
+  for(ConnectionList::iterator it = connections.begin();
+      it != connections.end(); ++it)
+  {
+    if(it->interface_id == guid && it->cookie == cookie)
+    {
+      pending.splice(pending.end(), connections, it);
+      break;
+    }
+  }
+
+  hr = connection_point->Unadvise(cookie);
+  if(FAILED(hr))
+    connections.splice(connections.end(), pending);
+  CHK_COM_CODE(hr);
 }
 
-void tLuaCOM::releaseConnections() {
-  if(conn_point==NULL)
-    return;
-
-  conn_point->Release();
-  IConnectionPointContainer *pcpc;
-
-  HRESULT hr = pdisp->QueryInterface(IID_IConnectionPointContainer, (void **) &pcpc);
-
-  if(FAILED(hr))
+HRESULT tLuaCOM::releaseConnections() {
+  ConnectionList pending;
+  pending.splice(pending.end(), connections);
+  HRESULT result = S_OK;
+  for(ConnectionList::iterator it = pending.begin(); it != pending.end(); ++it)
   {
-    return;
+    HRESULT hr = it->point->Unadvise(it->cookie);
+    if(FAILED(hr) && SUCCEEDED(result))
+      result = hr;
   }
-
-  IEnumConnectionPoints *pecp;
-
-  hr = pcpc->EnumConnectionPoints(&pecp);
-  pcpc->Release();
-
-  if(FAILED(hr))
-  {
-    return;
-  }
-
-  pecp->Reset();
-
-  IConnectionPoint *pcp;
-  ULONG fetched = 0;
-
-  hr = pecp->Next(1, &pcp, &fetched);
-  while(SUCCEEDED(hr) && fetched) {
-    IEnumConnections *pec;
-    hr = pcp->EnumConnections(&pec);
-    if(SUCCEEDED(hr)) {
-      pec->Reset();
-      CONNECTDATA conn;
-      ULONG conn_fetched = 0;
-      hr = pec->Next(1, &conn, &conn_fetched);
-      while(SUCCEEDED(hr) && conn_fetched) {
-        pcp->Unadvise(conn.dwCookie);
-        hr = pec->Next(1, &conn, &conn_fetched);
-      }
-      pec->Release();
-    }
-    pcp->Release();
-    pecp->Next(1, &pcp, &fetched);
-  }
-
-  pecp->Release();
+  return result;
 }
 
 //
@@ -559,6 +631,8 @@ void tLuaCOM::releaseConnections() {
 
 bool tLuaCOM::isMember(const char * name)
 {
+  checkComObject();
+
   HRESULT hr;
   DISPID dumb_dispid;
   
@@ -584,22 +658,20 @@ bool tLuaCOM::isMember(const char * name)
 
 void tLuaCOM::getHelpInfo(char **ppHelpFile, DWORD *pHelpContext)
 {
+  *ppHelpFile = NULL;
+  *pHelpContext = 0;
   if(!hasTypeInfo())
-  {
-    *ppHelpFile = NULL;
     return;
-  }
 
-
-  ITypeLib *typelib = NULL;
-  BSTR helpfile;
+  tCOMPtr<ITypeLib> typelib;
+  BSTR helpfile = NULL;
   HRESULT hr = S_OK;
   
   hr = ptinfo->GetDocumentation(-1, NULL, NULL, pHelpContext, &helpfile);
 
   if(FAILED(hr) || helpfile == NULL)
   {
-    *ppHelpFile = NULL;
+    SysFreeString(helpfile);
     return;
   }
 
@@ -609,7 +681,7 @@ void tLuaCOM::getHelpInfo(char **ppHelpFile, DWORD *pHelpContext)
   {
     unsigned int dumb_index = 0;
     DWORD typelib_help_context = 0;
-    BSTR helpfile_typelib;
+    BSTR helpfile_typelib = NULL;
 
     hr = ptinfo->GetContainingTypeLib(&typelib, &dumb_index);
 
@@ -618,19 +690,40 @@ void tLuaCOM::getHelpInfo(char **ppHelpFile, DWORD *pHelpContext)
       hr = typelib->GetDocumentation(-1, NULL, NULL,
         &typelib_help_context, &helpfile_typelib);
 
-      if(!FAILED(hr))
+      if(!FAILED(hr) && helpfile_typelib != NULL)
       {
         SysFreeString(helpfile);
 
         helpfile = helpfile_typelib;
         *pHelpContext = typelib_help_context;
       }
+      else
+        SysFreeString(helpfile_typelib);
     }
   }
 
-  int str_size = SysStringLen(helpfile);
-  *ppHelpFile = (char *) malloc((str_size + 1)*sizeof(wchar_t));
-  wcstombs(*ppHelpFile, helpfile, str_size+1);
+  int str_size = WideCharToMultiByte(CP_ACP, 0, helpfile, -1,
+                                     NULL, 0, NULL, NULL);
+  if(str_size <= 0)
+  {
+    SysFreeString(helpfile);
+    LUACOM_EXCEPTION(WINDOWS_ERROR);
+  }
+
+  char * result = (char *) malloc(str_size);
+  if(!result)
+  {
+    SysFreeString(helpfile);
+    LUACOM_EXCEPTION(MALLOC_ERROR);
+  }
+  if(WideCharToMultiByte(CP_ACP, 0, helpfile, -1, result,
+                         str_size, NULL, NULL) != str_size)
+  {
+    free(result);
+    SysFreeString(helpfile);
+    LUACOM_EXCEPTION(WINDOWS_ERROR);
+  }
+  *ppHelpFile = result;
 
   SysFreeString(helpfile);
 }
@@ -646,7 +739,8 @@ tLuaCOM * tLuaCOM::CreateLuaCOM(lua_State* L,
                                 IDispatch * pdisp,
                                 const CLSID& coclass,
                                 ITypeInfo* typeinfo,
-                                bool untyped
+                                bool untyped,
+				const char* name
                                 )
 {
   HRESULT hr = S_OK;
@@ -662,9 +756,36 @@ tLuaCOM * tLuaCOM::CreateLuaCOM(lua_State* L,
       typeinfo->AddRef();
   }
 
-  tLuaCOM *lcom = 
-    new tLuaCOM(L, pdisp, typeinfo, coclass);
+  char * object_name = NULL;
+  if(name)
+  {
+    object_name = _strdup(name);
+    if(!object_name)
+    {
+      COM_RELEASE(typeinfo);
+      LUACOM_EXCEPTION(MALLOC_ERROR);
+    }
+  }
 
+  tLuaCOM *lcom = NULL;
+  try
+  {
+    lcom = new tLuaCOM(L, pdisp, typeinfo, coclass);
+  }
+  catch (const std::bad_alloc&)
+  {
+    free(object_name);
+    COM_RELEASE(typeinfo);
+    LUACOM_EXCEPTION(MALLOC_ERROR);
+  }
+  catch (...)
+  {
+    free(object_name);
+    COM_RELEASE(typeinfo);
+    throw;
+  }
+
+  lcom->objName = object_name;
   COM_RELEASE(typeinfo);
 
   // We have one reference (the pointer), so we lock the object
@@ -675,6 +796,8 @@ tLuaCOM * tLuaCOM::CreateLuaCOM(lua_State* L,
 
 ITypeInfo * tLuaCOM::GetDefaultEventsInterface()
 {
+  checkComObject();
+
   CLSID clsid = GetCLSID();
   if(clsid == IID_NULL)
     return NULL;
@@ -689,16 +812,16 @@ ITypeInfo * tLuaCOM::GetDefaultEventsInterface()
   return ptinfo;
 }
 
-void tLuaCOM::ReleaseFuncDesc(FUNCDESC * pfuncdesc)
+void tLuaCOM::ReleaseFuncDesc(ITypeInfo *owner, FUNCDESC *pfuncdesc)
 {
-  CHECKPRECOND(ptinfo);
-
-  if(pfuncdesc)
-    ptinfo->ReleaseFuncDesc(pfuncdesc);
+  if(pfuncdesc && owner)
+    owner->ReleaseFuncDesc(pfuncdesc);
+  COM_RELEASE(owner);
 }
 
 IDispatch * tLuaCOM::GetIDispatch()
 {
+  checkComObject();
   return pdisp;
 }
 
@@ -706,9 +829,10 @@ void tLuaCOM::GetIID(IID * piid)
 {
   CHECKPRECOND(ptinfo);
 
-  TYPEATTR *ptypeattr;
+  TYPEATTR *ptypeattr = NULL;
 
-  ptinfo->GetTypeAttr(&ptypeattr);
+  CHK_COM_CODE(ptinfo->GetTypeAttr(&ptypeattr));
+  CHK_LCOM_ERR(ptypeattr, "Type information attributes are unavailable.");
   *piid = ptypeattr->guid;
   ptinfo->ReleaseTypeAttr(ptypeattr);
 }
@@ -720,6 +844,8 @@ CLSID tLuaCOM::GetCLSID()
 
   if(clsid != IID_NULL)
     return clsid;
+
+  checkComObject();
 
   // tries to find the CLSID using IProvideClassInfo
   tCOMPtr<ITypeInfo> coclassinfo;
@@ -769,3 +895,19 @@ bool tLuaCOM::hasTypeInfo(void)
     return false;
 }
 
+void tLuaCOM::checkComObject() const
+{
+  if(!pdisp)
+    LUACOM_ERROR("COM object has been released.");
+}
+
+// Releases the reference owned by this wrapper. The wrapper remains valid so
+// Lua garbage collection can destroy it safely, but it cannot call COM again.
+void tLuaCOM::releaseComObject() {
+  if(!pdisp)
+    return;
+
+  HRESULT hr = releaseConnections();
+  pdisp.Release();
+  CHK_COM_CODE(hr);
+}

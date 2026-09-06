@@ -20,6 +20,9 @@ static char const * const rcsid = "$Id: luacom$";
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>
+#include <new>
+#include <string>
+#include <vector>
 
 extern "C"
 {
@@ -161,10 +164,34 @@ static int luacom_ShowHelp(lua_State *L)
 
   tLuaCOM* luacom = (tLuaCOM *) LuaBeans::check_tag(L, 1);
 
-  luacom->getHelpInfo(&pHelpFile, &context);
-
-  if(pHelpFile != NULL)
+  try
   {
+    luacom->getHelpInfo(&pHelpFile, &context);
+  }
+  catch(class tLuaCOMException& e)
+  {
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
+  if(pHelpFile != NULL && strlen(pHelpFile) > 0)
+  {
+    DWORD dwAttrib = GetFileAttributesA(pHelpFile);
+    if (dwAttrib == INVALID_FILE_ATTRIBUTES || (dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
+      {
+	char msg[2048];
+	const char* objName = luacom->GetObjName();
+	if (objName == NULL) objName = "The COM object";
+	_snprintf(msg, sizeof(msg),
+		  "The help file for '%s' was not found at the expected location:\n\n%s\n\n"
+		  "The application points to a file that is not installed on this system.",
+		  objName, pHelpFile);
+	// safety
+	msg[sizeof(msg) - 1] = '\0';
+
+	::MessageBoxA(NULL, msg, "LuaCOM - Help File Missing", MB_OK | MB_ICONWARNING);
+	free(pHelpFile);
+	return 0;
+      }
     size_t len = strlen(pHelpFile);
     if (len >= 4 && _stricmp(pHelpFile + len - 4, ".chm") == 0)
     {
@@ -186,7 +213,16 @@ static int luacom_ShowHelp(lua_State *L)
         WinHelpA(NULL, pHelpFile, HELP_FINDER, 0);
     }
   }
+  else
+  {
+    ::MessageBoxA(NULL,
+		  "The COM object does not provide a path to a local help file (.chm).\n"
+		  "Modern applications often use online help exclusively.",
+		  "LuaCOM - Help not found",
+		  MB_OK | MB_ICONINFORMATION);
+  }
 
+  free(pHelpFile);
   return 0;
 }
 
@@ -217,6 +253,7 @@ static int luacom_Connect(lua_State *L)
   }
 
   tLuaCOM* server = NULL;
+  int ref = LUA_NOREF;
   DWORD cookie;
   try
   {
@@ -226,11 +263,12 @@ static int luacom_Connect(lua_State *L)
 
     /* gets a reference to the implementation */
     lua_pushvalue(L, 2);
-    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
     tCOMPtr<tLuaDispatch> server_disp;
     server_disp.Attach(tLuaDispatch::CreateLuaDispatch(L, pTypeinfo, ref));
     luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    ref = LUA_NOREF;
     CHECKPOSCOND(server_disp);
 
     server = tLuaCOM::CreateLuaCOM(L, server_disp);
@@ -241,6 +279,20 @@ static int luacom_Connect(lua_State *L)
   }
   catch(class tLuaCOMException& e)
   {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    if(server)
+      server->Unlock();
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
+  catch(const std::bad_alloc&)
+  {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    if(server)
+      server->Unlock();
+    tLuaCOMException e(tLuaCOMException::MALLOC_ERROR, __FILE__, __LINE__);
     luacom_APIerror(L, e.getMessage());
     return 0;
   }
@@ -275,12 +327,12 @@ static tLuaCOM *luacom_ImplInterfaceFromTypelibHelper(lua_State *L)
     luaL_argerror(L, 1, "Implementation must be a table or a userdata");
   }
 
-  lua_pushvalue(L, 1);
-  const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
   tStringBuffer typelib_name(luaL_checklstring(L, 2, NULL));
   tStringBuffer pcInterface(luaL_checklstring(L, 3, NULL));
   tStringBuffer coclassname(luaL_optlstring(L, 4, NULL, NULL));
+
+  lua_pushvalue(L, 1);
+  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
   tLuaCOM* lcom = NULL;
   try
@@ -302,10 +354,21 @@ static tLuaCOM *luacom_ImplInterfaceFromTypelibHelper(lua_State *L)
 
     lcom = ImplInterface(L, typelib, clsid, pcInterface, ref);
     luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    ref = LUA_NOREF;
     CHECKPOSCOND(lcom);
   }
   catch(class tLuaCOMException& e)
   {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
+  catch(const std::bad_alloc&)
+  {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    tLuaCOMException e(tLuaCOMException::MALLOC_ERROR, __FILE__, __LINE__);
     luacom_APIerror(L, e.getMessage());
     return 0;
   }
@@ -344,12 +407,12 @@ static tLuaCOM *luacom_ImplInterfaceHelper(lua_State *L)
     luaL_argerror(L, 1, "Implementation must be a table or a userdata");
   }
 
-  // pushes lua table on top of stack
-  lua_pushvalue(L, 1);
-  const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
   tStringBuffer pcProgID(luaL_checklstring(L, 2, NULL));
   tStringBuffer pcInterface(luaL_checklstring(L, 3, NULL));
+
+  // pushes lua table on top of stack
+  lua_pushvalue(L, 1);
+  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
   tLuaCOM* lcom = NULL;
   try
@@ -368,11 +431,24 @@ static tLuaCOM *luacom_ImplInterfaceHelper(lua_State *L)
     lcom = ImplInterface(L, typelib, clsid, pcInterface, ref);
 
     luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    ref = LUA_NOREF;
 
     CHECKPOSCOND(lcom);
   }
   catch(class tLuaCOMException& e)
   {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    if(lcom)
+      lcom->Unlock();
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
+  catch(const std::bad_alloc&)
+  {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    tLuaCOMException e(tLuaCOMException::MALLOC_ERROR, __FILE__, __LINE__);
     luacom_APIerror(L, e.getMessage());
     return 0;
   }
@@ -394,41 +470,63 @@ static int luacom_ImplInterface(lua_State *L)
 /**
   Returns a string containing the CLSID associated with a ProgID.
 */
+static std::vector<wchar_t> luacom_ToWideString(const char * text);
+
+static std::string luacom_FromWideString(const wchar_t * text)
+{
+  CHK_LCOM_ERR(text, "COM returned an empty string.");
+  int length = WideCharToMultiByte(CP_ACP, 0, text, -1, NULL, 0, NULL, NULL);
+  CHK_LCOM_ERR(length > 0, "Could not convert COM string.");
+
+  try
+  {
+    std::vector<char> result(length);
+    int converted = WideCharToMultiByte(CP_ACP, 0, text, -1,
+                                        &result[0], length, NULL, NULL);
+    CHK_LCOM_ERR(converted == length, "Could not convert COM string.");
+    return std::string(&result[0]);
+  }
+  catch(const std::bad_alloc&)
+  {
+    LUACOM_EXCEPTION(MALLOC_ERROR);
+  }
+}
+
 static int luacom_CLSIDfromProgID(lua_State *L)
 {
   tStringBuffer str(luaL_checklstring(L, 1, NULL));
   
   HRESULT hr = S_OK;
 
-  wchar_t* progId = NULL;
-  char* id_str = NULL;
+  wchar_t* clsid_str = NULL;
+  std::string id_str;
   try
   {
-    progId = (wchar_t*) malloc( (strlen(str) + 1) * sizeof(wchar_t));
-    mbstowcs(progId,str,strlen(str)+1);
+    std::vector<wchar_t> progId = luacom_ToWideString(str);
 
     CLSID clsid = IID_NULL;
-    CHK_COM_CODE(CLSIDFromProgID(progId, &clsid));
+    CHK_COM_CODE(CLSIDFromProgID(&progId[0], &clsid));
 
-    wchar_t* clsid_str = NULL;
     CHK_COM_CODE(StringFromCLSID(clsid, &clsid_str));
-    
-    id_str = (char*) malloc( (wcslen(clsid_str) + 1) * sizeof(char));
-    wcstombs(id_str,clsid_str,wcslen(clsid_str)+1);
+    id_str = luacom_FromWideString(clsid_str);
   }
   catch(class tLuaCOMException& e)
   {
-    SAFEFREE(progId);
-    SAFEFREE(id_str);
+    CoTaskMemFree(clsid_str);
 
     luacom_APIerror(L, e.getMessage());
     return 0;
   }
+  catch(const std::bad_alloc&)
+  {
+    CoTaskMemFree(clsid_str);
+    tLuaCOMException e(tLuaCOMException::MALLOC_ERROR, __FILE__, __LINE__);
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
 
-  lua_pushstring(L, id_str);
-
-  SAFEFREE(progId);
-  SAFEFREE(id_str);
+  CoTaskMemFree(clsid_str);
+  lua_pushstring(L, id_str.c_str());
 
   return 1;
 }
@@ -440,37 +538,38 @@ static int luacom_CLSIDfromProgID(lua_State *L)
 static int luacom_ProgIDfromCLSID(lua_State *L)
 {
   tStringBuffer str(luaL_checklstring(L, 1, NULL));
-  wchar_t* clsid_str = NULL;
   LPOLESTR progId = NULL;
   CLSID clsid = IID_NULL;
   HRESULT hr = S_OK;
-  char* id_str = NULL;
+  std::string id_str;
 
   try
   {
-    clsid_str = (wchar_t*) malloc( (strlen(str) + 1) * sizeof(wchar_t));
-    mbstowcs(clsid_str,str,strlen(str)+1);
+    std::vector<wchar_t> clsid_str = luacom_ToWideString(str);
 
-    CHK_COM_CODE(CLSIDFromString(clsid_str, &clsid));
+    CHK_COM_CODE(CLSIDFromString(&clsid_str[0], &clsid));
 
     CHK_COM_CODE(ProgIDFromCLSID(clsid, &progId));
 
-    id_str = (char*) malloc( (wcslen(progId) + 1) * sizeof(char));
-    wcstombs(id_str,progId,wcslen(progId)+1);
+    id_str = luacom_FromWideString(progId);
   }
   catch(class tLuaCOMException& e)
   {
-    SAFEFREE(progId);
-    SAFEFREE(clsid_str);
+    CoTaskMemFree(progId);
 
     luacom_APIerror(L, e.getMessage());
     return 0;
   }
+  catch(const std::bad_alloc&)
+  {
+    CoTaskMemFree(progId);
+    tLuaCOMException e(tLuaCOMException::MALLOC_ERROR, __FILE__, __LINE__);
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
 
-  lua_pushstring(L, id_str);
-
-  SAFEFREE(progId);
-  SAFEFREE(clsid_str);
+  CoTaskMemFree(progId);
+  lua_pushstring(L, id_str.c_str());
 
   return 1;
 }
@@ -514,9 +613,9 @@ static int luacom_CreateObject(lua_State *L)
     tCOMPtr<IPersistStreamInit> psi;
     hr = pdisp->QueryInterface(IID_IPersistStreamInit, (void**) &psi);
     if(SUCCEEDED(hr))
-      psi->InitNew();
+      CHK_COM_CODE(psi->InitNew());
 
-    lcom = tLuaCOM::CreateLuaCOM(L, pdisp, clsid, NULL, untyped);
+    lcom = tLuaCOM::CreateLuaCOM(L, pdisp, clsid, NULL, untyped, (const char*)progId);
   }
   catch(class tLuaCOMException& e)
   {
@@ -592,7 +691,16 @@ static int luacom_addConnection(lua_State *L)
   tLuaCOM* client = (tLuaCOM*) LuaBeans::check_tag(L, 1);
   tLuaCOM* server = (tLuaCOM*) LuaBeans::check_tag(L, 2);
 
-  DWORD cookie = client->addConnection(server);
+  DWORD cookie = 0;
+  try
+  {
+    cookie = client->addConnection(server);
+  }
+  catch(tLuaCOMException& e)
+  {
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
   if(cookie == 0)
   {
     luacom_APIerror(L, "Could not establish connection");
@@ -663,11 +771,11 @@ static int luacom_NewObjectOrControl(lua_State *L, int type)
     luaL_argerror(L, 1, "Implementation must be a table or a userdata");
   }
 
+  tStringBuffer pcProgID(luaL_checklstring(L, 2, NULL));
+
   // pushes lua table on top of stack
   lua_pushvalue(L, 1);
-  const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-  tStringBuffer pcProgID(luaL_checklstring(L, 2, NULL));
+  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
   tLuaCOM *lcom = NULL;
   tLuaCOMConnPoint *cp = NULL;
@@ -700,6 +808,7 @@ static int luacom_NewObjectOrControl(lua_State *L, int type)
       iluacom.Attach(tLuaDispatch::CreateLuaDispatch(L, interface_typeinfo, ref));
 
     luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    ref = LUA_NOREF;
 
     // Creates associated luacom object
     lcom = tLuaCOM::CreateLuaCOM(L, iluacom, clsid);
@@ -719,6 +828,20 @@ static int luacom_NewObjectOrControl(lua_State *L, int type)
   }
   catch(class tLuaCOMException& e)
   {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    if(lcom)
+      lcom->Unlock();
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
+  catch(const std::bad_alloc&)
+  {
+    if(ref != LUA_NOREF)
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    if(lcom)
+      lcom->Unlock();
+    tLuaCOMException e(tLuaCOMException::MALLOC_ERROR, __FILE__, __LINE__);
     luacom_APIerror(L, e.getMessage());
     return 0;
   }
@@ -832,6 +955,68 @@ static int luacom_RevokeObject(lua_State *L)
   Return values
     1. non-nil if successful
 */
+static std::vector<wchar_t> luacom_ToWideString(const char * text)
+{
+  int length = MultiByteToWideChar(CP_ACP, 0, text, -1, NULL, 0);
+  CHK_LCOM_ERR(length > 0, "Could not convert registration path.");
+
+  try
+  {
+    std::vector<wchar_t> result(length);
+    int converted = MultiByteToWideChar(CP_ACP, 0, text, -1,
+                                        &result[0], length);
+    CHK_LCOM_ERR(converted == length, "Could not convert registration path.");
+    return result;
+  }
+  catch(const std::bad_alloc&)
+  {
+    LUACOM_EXCEPTION(MALLOC_ERROR);
+  }
+}
+
+static std::string luacom_GetModulePath(void)
+{
+  try
+  {
+    std::vector<char> buffer(MAX_PATH);
+    for (;;)
+    {
+      DWORD length = GetModuleFileNameA(NULL, &buffer[0], (DWORD) buffer.size());
+      CHK_LCOM_ERR(length > 0, "Could not get module path.");
+      if (length < buffer.size())
+        return std::string(&buffer[0], length);
+      buffer.resize(buffer.size() * 2);
+    }
+  }
+  catch(const std::bad_alloc&)
+  {
+    LUACOM_EXCEPTION(MALLOC_ERROR);
+  }
+}
+
+static void luacom_SetRegKeyValue(const char * key,
+                                  const char * subkey,
+                                  const char * value)
+{
+  std::string message = "Could not write COM registration key: ";
+  message += key;
+  if(subkey)
+  {
+    message += "\\";
+    message += subkey;
+  }
+
+  CHK_LCOM_ERR(tCOMUtil::SetRegKeyValue(key, subkey, value),
+               message.c_str());
+}
+
+static void luacom_DelRegKey(const char * key)
+{
+  std::string message = "Could not delete COM registration key: ";
+  message += key;
+  CHK_LCOM_ERR(tCOMUtil::DelRegKey(key, NULL), message.c_str());
+}
+
 static int luacom_RegisterObject(lua_State *L)
 {
   if(lua_type(L, 1) != LUA_TTABLE && lua_type(L,1) != LUA_TUSERDATA)
@@ -879,28 +1064,33 @@ static int luacom_RegisterObject(lua_State *L)
     lua_gettable(L, 1);
     tStringBuffer scriptFile(lua_tostring(L, -1));
 
-    CHK_LCOM_ERR(ProgID && typelib_path &&  CoClass, 
+    CHK_LCOM_ERR(VersionIndependentProgID && ProgID && typelib_path && CoClass,
       "Incomplete registration table.");
 
     // Loads and registers the typelib
     tCOMPtr<ITypeLib> typelib;
-    wchar_t wcTypelib_path[bufsize];
-    mbstowcs(wcTypelib_path, typelib_path, strlen(typelib_path)+1);
-    CHK_COM_CODE(LoadTypeLibEx(wcTypelib_path, REGKIND_REGISTER, &typelib));
+    std::vector<wchar_t> wcTypelib_path = luacom_ToWideString(typelib_path);
+    CHK_COM_CODE(LoadTypeLibEx(&wcTypelib_path[0], REGKIND_REGISTER, &typelib));
 
     // Gets the type library version and LIBID
     char version[30];
     char libId[bufsize];
     {
       TLIBATTR *plibattr = NULL;
-      typelib->GetLibAttr(&plibattr);
+      CHK_COM_CODE(typelib->GetLibAttr(&plibattr));
+      CHK_LCOM_ERR(plibattr, "Type library attributes are unavailable.");
 
       // gets version
       sprintf(version, "%d.%d", plibattr->wMajorVerNum, plibattr->wMinorVerNum);
 
       // gets libid
       wchar_t *wcLibId = NULL;
-      CHK_COM_CODE(StringFromCLSID(plibattr->guid, &wcLibId));
+      hr = StringFromCLSID(plibattr->guid, &wcLibId);
+      if(FAILED(hr))
+      {
+        typelib->ReleaseTLibAttr(plibattr);
+        CHK_COM_CODE(hr);
+      }
 
       wcstombs(libId, wcLibId, wcslen(wcLibId)+1);
       CoTaskMemFree(wcLibId);
@@ -919,9 +1109,15 @@ static int luacom_RegisterObject(lua_State *L)
       TYPEATTR* ptypeattr = NULL;
       wchar_t* wcClsid=  NULL;
 
-      coclassinfo->GetTypeAttr(&ptypeattr);
+      CHK_COM_CODE(coclassinfo->GetTypeAttr(&ptypeattr));
+      CHK_LCOM_ERR(ptypeattr, "Coclass attributes are unavailable.");
 
-      CHK_COM_CODE(StringFromCLSID(ptypeattr->guid, &wcClsid));
+      hr = StringFromCLSID(ptypeattr->guid, &wcClsid);
+      if(FAILED(hr))
+      {
+        coclassinfo->ReleaseTypeAttr(ptypeattr);
+        CHK_COM_CODE(hr);
+      }
 
       wcstombs(clsid, wcClsid,wcslen(wcClsid)+1);
 
@@ -934,85 +1130,81 @@ static int luacom_RegisterObject(lua_State *L)
 
     // registers ProgID
     
-    char ModulePath[bufsize];
-    ModulePath[0] = 0;
-    GetModuleFileNameA(
-      NULL,
-      ModulePath,
-      sizeof(ModulePath));
+    std::string strModulePath = luacom_GetModulePath();
 
     if(scriptFile)
     {
-      strcat(ModulePath, " ");
-      strcat(ModulePath, scriptFile);
+      strModulePath += " ";
+      strModulePath += (const char *) scriptFile;
     }
 
     if(arguments)
     {
-      strcat(ModulePath, " ");
-      strcat(ModulePath, arguments);
+      strModulePath += " ";
+      strModulePath += (const char *) arguments;
     }
+    const char * ModulePath = strModulePath.c_str();
 
     // Create some base key strings.
-    char CLSID[bufsize];
-    strcpy(CLSID, "CLSID\\");
-    strcat(CLSID, clsid);
+    std::string strCLSID = "CLSID\\";
+    strCLSID += clsid;
+    const char * CLSID = strCLSID.c_str();
 
     // Create ProgID keys.
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       ProgID,
       NULL,
       ComponentName);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       ProgID,
       "CLSID",
       clsid);
 
     // Create VersionIndependentProgID keys.
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       VersionIndependentProgID,
       NULL,
       ComponentName);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       VersionIndependentProgID,
       "CurVer",
       ProgID);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       VersionIndependentProgID,
       "CLSID",
       clsid);
 
     // Create entries under CLSID.
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       CLSID,
       NULL,
       ComponentName);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       CLSID,
       "ProgID",
       ProgID);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       CLSID,
       "VersionIndependentProgID",
       VersionIndependentProgID);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       CLSID,
       "LocalServer32",
       ModulePath);
 
 #if 0       // NJG
     if(scriptFile) {
-      tCOMUtil::SetRegKeyValue(
-      CLSID,
-      "InprocServer32",
-      LUACOM_DLL);
-    tCOMUtil::SetRegKeyValue(
+      luacom_SetRegKeyValue(
+        CLSID,
+        "InprocServer32",
+        LUACOM_DLL);
+    luacom_SetRegKeyValue(
       CLSID,
       "ScriptFile",
       scriptFile);
@@ -1020,43 +1212,43 @@ static int luacom_RegisterObject(lua_State *L)
 #endif // NJG
 
     if(control) {
-      tCOMUtil::SetRegKeyValue(
+      luacom_SetRegKeyValue(
         CLSID,
         "Implemented Categories\\{0DE86A53-2BAA-11CF-A229-00AA003D7352}",
         NULL);
-      tCOMUtil::SetRegKeyValue(
+      luacom_SetRegKeyValue(
         CLSID,
         "Implemented Categories\\{0DE86A57-2BAA-11CF-A229-00AA003D7352}",
         NULL);
-      tCOMUtil::SetRegKeyValue(
+      luacom_SetRegKeyValue(
         CLSID,
         "Implemented Categories\\{40FC6ED4-2438-11CF-A3DB-080036F12502}",
         NULL);
-      tCOMUtil::SetRegKeyValue(
+      luacom_SetRegKeyValue(
         CLSID,
         "Implemented Categories\\{40FC6ED5-2438-11CF-A3DB-080036F12502}",
         NULL);
-      tCOMUtil::SetRegKeyValue(
+      luacom_SetRegKeyValue(
         CLSID,
         "Implemented Categories\\{7DD95801-9882-11CF-9FA9-00AA006C42C4}",
         NULL);
-      tCOMUtil::SetRegKeyValue(
+      luacom_SetRegKeyValue(
         CLSID,
         "Implemented Categories\\{7DD95802-9882-11CF-9FA9-00AA006C42C4}",
         NULL);
     }
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       CLSID,
       "Version",
       version);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       CLSID,
       "TypeLib",
       libId);
 
-    tCOMUtil::SetRegKeyValue(
+    luacom_SetRegKeyValue(
       CLSID,
       "Programmable",
       NULL);
@@ -1112,24 +1304,26 @@ static int luacom_UnRegisterObject(lua_State *L)
     lua_gettable(L, 1);
     tStringBuffer CoClass(lua_tostring(L, -1));
 
-    CHK_LCOM_ERR(ProgID && typelib_path &&  CoClass, 
+    CHK_LCOM_ERR(VersionIndependentProgID && ProgID && typelib_path && CoClass,
       "Incomplete registration table.");
 
     // Loads the typelib
     tCOMPtr<ITypeLib> typelib;
-    wchar_t wcTypelib_path[bufsize];
-    mbstowcs(wcTypelib_path, typelib_path, strlen(typelib_path)+1);
-    CHK_COM_CODE(LoadTypeLibEx(wcTypelib_path, REGKIND_NONE, &typelib));
+    std::vector<wchar_t> wcTypelib_path = luacom_ToWideString(typelib_path);
+    CHK_COM_CODE(LoadTypeLibEx(&wcTypelib_path[0], REGKIND_NONE, &typelib));
 
     // Unregisters the typelib
     {
       TLIBATTR *plibattr = NULL;
-      typelib->GetLibAttr(&plibattr);
+      CHK_COM_CODE(typelib->GetLibAttr(&plibattr));
+      CHK_LCOM_ERR(plibattr, "Type library attributes are unavailable.");
 
-      UnRegisterTypeLib(plibattr->guid, plibattr->wMajorVerNum, plibattr->wMinorVerNum,
-      plibattr->lcid, plibattr->syskind);
+      hr = UnRegisterTypeLib(plibattr->guid, plibattr->wMajorVerNum,
+                             plibattr->wMinorVerNum, plibattr->lcid,
+                             plibattr->syskind);
 
       typelib->ReleaseTLibAttr(plibattr);
+      CHK_COM_CODE(hr);
     }
 
     // gets the CoClass TypeInfo to get the CLSID
@@ -1143,9 +1337,15 @@ static int luacom_UnRegisterObject(lua_State *L)
       TYPEATTR* ptypeattr = NULL;
       wchar_t* wcClsid = NULL;
 
-      coclassinfo->GetTypeAttr(&ptypeattr);
+      CHK_COM_CODE(coclassinfo->GetTypeAttr(&ptypeattr));
+      CHK_LCOM_ERR(ptypeattr, "Coclass attributes are unavailable.");
 
-      CHK_COM_CODE(StringFromCLSID(ptypeattr->guid, &wcClsid));
+      hr = StringFromCLSID(ptypeattr->guid, &wcClsid);
+      if(FAILED(hr))
+      {
+        coclassinfo->ReleaseTypeAttr(ptypeattr);
+        CHK_COM_CODE(hr);
+      }
 
       wcstombs(clsid, wcClsid,wcslen(wcClsid)+1);
 
@@ -1159,24 +1359,18 @@ static int luacom_UnRegisterObject(lua_State *L)
     // unregisters ProgID
     
     // Create some base key strings.
-    char CLSID[bufsize];
-    strcpy(CLSID, "CLSID\\");
-    strcat(CLSID, clsid);
+    std::string strCLSID = "CLSID\\";
+    strCLSID += clsid;
+    const char * CLSID = strCLSID.c_str();
 
     // Delete ProgID keys.
-    tCOMUtil::DelRegKey(
-      ProgID,
-      NULL);
+    luacom_DelRegKey(ProgID);
 
     // Delete VersionIndependentProgID keys.
-    tCOMUtil::DelRegKey(
-      VersionIndependentProgID,
-      NULL);
+    luacom_DelRegKey(VersionIndependentProgID);
 
     // Delete entries under CLSID.
-    tCOMUtil::DelRegKey(
-      CLSID,
-      NULL);
+    luacom_DelRegKey(CLSID);
 
   }
   catch(class tLuaCOMException& e)
@@ -1204,10 +1398,26 @@ static int luacom_GetIUnknown(lua_State *L)
   // check parameters
   tLuaCOM* luacom = (tLuaCOM *) LuaBeans::check_tag(L, 1);
 
-  IDispatch* pdisp = luacom->GetIDispatch();
+  IDispatch* pdisp = NULL;
+  try
+  {
+    pdisp = luacom->GetIDispatch();
+  }
+  catch(tLuaCOMException& e)
+  {
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
   IUnknown* punk = NULL;
   
-  pdisp->QueryInterface(IID_IUnknown, (void **) &punk);
+  HRESULT hr = pdisp->QueryInterface(IID_IUnknown, (void **) &punk);
+  if(FAILED(hr) || punk == NULL)
+  {
+    if(SUCCEEDED(hr))
+      hr = E_NOINTERFACE;
+    luacom_APIerror(L, tLuaCOMException::GetErrorMessage(hr));
+    return 0;
+  }
 
   // checks whether there is a usertag for this IUnknown
   // If exists, simply uses it
@@ -1391,6 +1601,13 @@ int luacom_CreateLuaCOM(lua_State* L)
 
 int luacom_StartMessageLoop(lua_State *L)
 {
+  lua_pushliteral(L, "mushclient_embedded");
+  lua_gettable(L, LUA_REGISTRYINDEX);
+  bool embedded = lua_toboolean(L, -1) != 0;
+  lua_pop(L, 1);
+  if(embedded)
+    return luaL_error(L, "StartMessageLoop is not available inside MUSHclient");
+
   MSG msg;
   if(lua_gettop(L) > 0) {
     tStringBuffer err;
@@ -2118,11 +2335,21 @@ static int call_event(lua_State *L)
 
 static int luacom_RoundTrip(lua_State *L) {
   VARIANTARG v;
+  VariantInit(&v);
 
-  tLuaCOMTypeHandler *handler = new tLuaCOMTypeHandler(NULL);
-  handler->lua2com(L, 1, v);
-  handler->com2lua(L, v);
-  delete handler;
+  tLuaCOMTypeHandler handler(NULL);
+  try
+  {
+    handler.lua2com(L, 1, v);
+    handler.com2lua(L, v);
+  }
+  catch(...)
+  {
+    VariantClear(&v);
+    throw;
+  }
+
+  VariantClear(&v);
 
   return 1;
 }
@@ -2138,6 +2365,25 @@ static int luacom_SetCodepage(lua_State *L) {
   code_page=(UINT)luaL_checkinteger(L, 1);
   return 0;
 }
+
+
+static int luacom_ReleaseComObject(lua_State *L)
+{
+  // check parameters
+  tLuaCOM* obj = (tLuaCOM *) LuaBeans::check_tag(L, 1);
+
+  try
+  {
+    obj->releaseComObject();
+  }
+  catch(class tLuaCOMException& e)
+  {
+    luacom_APIerror(L, e.getMessage());
+    return 0;
+  }
+  return 0;
+}
+
 
 ///
 /// Table of functions exported by Lua.
@@ -2178,7 +2424,8 @@ static struct luaL_Reg functions_tb []=
   {"StartMessageLoop", luacom_StartMessageLoop},
   {"RoundTrip", luacom_RoundTrip},
   {"GetCodepage", luacom_GetCodepage},	// -hg 24.9.2015
-  {"SetCodepage", luacom_SetCodepage},  
+  {"SetCodepage", luacom_SetCodepage},
+  {"ReleaseComObject", luacom_ReleaseComObject}, //hg 06.09.2022
   {NULL, NULL}
 };
   
@@ -2235,6 +2482,11 @@ LUACOM_API void luacom_open(lua_State *L)
 
   // creates LuaCOM library table
   luaL_register(L, LIBNAME, functions_tb);
+
+  // sets version
+  lua_pushstring(L, "_VERSION");
+  lua_pushstring(L, LUACOM_VERSION);
+  lua_settable(L, -3);
 
   // prepares to store configuration table in
   // library table
@@ -2301,16 +2553,26 @@ LUACOM_API void luacom_open(lua_State *L)
   luaCompat_moduleSet(L, MODULENAME, LUACOM_SHOULD_ABORT_API);
 
   /* NJG
-  // loads the lua code that implements the remaining
+  // loadls the lua code that implements the remaining
   // features of LuaCOM
-  int top1 = lua_gettop(L);
+  int status = LUA_OK;
 #ifdef LUA_DEBUGGING
-  lua_dofile(L, "luacom5.lua");
+  status = luaL_dofile(L, "luacom5.lua");
 #else
-#include "luacom5.loh"
+  #include "luacom.loh"
+  status = luaL_loadbuffer(L, (const char*)luacom5_source_bytes,
+			   luacom5_source_size, "@luacom5.lua");
+  if (status == LUA_OK) {
+    status = lua_pcall(L, 0, 0, 0);
+  }
 #endif
-  if (lua_gettop(L) > top1) lua_error(L); // failed loading
+  if (status != LUA_OK) {
+    const char* msg = lua_tostring(L, -1);
+    fprintf(stderr, "luacom.dll error: %s\n", msg ? msg : "unknown");
+    lua_error(L);
+  }
   */
+
   idxDispatch = (void*)&luacom_runningInprocess;
 
   LUASTACK_CLEAN(L, 0);
