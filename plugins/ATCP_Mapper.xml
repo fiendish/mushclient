@@ -469,17 +469,42 @@ local user_terrain_colour = {}
 room_not_in_database = {}
 room_in_database = {}
 
-function dbcheck (code)
+local function db_success (code)
+  return code == sqlite3.OK or code == sqlite3.ROW or code == sqlite3.DONE
+end -- db_success
 
- if code ~= sqlite3.OK and    -- no error
-    code ~= sqlite3.ROW and   -- completed OK with another row of data
-    code ~= sqlite3.DONE then -- completed OK, no more rows
-    local err = db:errmsg ()  -- the rollback will change the error message
-    db:exec ("ROLLBACK")      -- rollback any transaction to unlock the database
-    error (err, 2)            -- show error in caller's context
+function dbcheck (code, database)
+
+  if not db_success (code) then
+    error ((database or db):errmsg (), 2)
   end -- if
 
+  return code
+
 end -- dbcheck 
+
+local function dbtransaction (callback)
+  dbcheck (db:execute "BEGIN TRANSACTION")
+
+  local ok, result = pcall (callback)
+  if not ok then
+    local rollback = db:execute "ROLLBACK"
+    if not db_success (rollback) then
+      result = tostring (result) .. "\nRollback failed: " .. db:errmsg ()
+    end -- rollback failed
+    error (result, 0)
+  end -- transaction body failed
+
+  local commit = db:execute "COMMIT"
+  if not db_success (commit) then
+    local result = db:errmsg ()
+    local rollback = db:execute "ROLLBACK"
+    if not db_success (rollback) then
+      result = result .. "\nRollback failed: " .. db:errmsg ()
+    end -- rollback failed
+    error (result, 0)
+  end -- commit failed
+end -- dbtransaction
 
 function fixsql (s)
   
@@ -525,8 +550,9 @@ end -- function save_room_to_database
 function save_exits_to_database (uid, exits)
   
   local room = rooms [uid]
-  
-  db:exec ("BEGIN TRANSACTION;") 
+  local pending_exits = {}
+
+  dbtransaction (function ()
 
   for dir in string.gmatch (exits, "[^,]+") do
 
@@ -540,27 +566,34 @@ function save_exits_to_database (uid, exits)
         fixsql  (uid),         -- from current room
         fixsql  (0)     -- destination room (not known)
         )))
-    if show_database_mods then
-      mapper.mapprint ("Added exit", dir, "from room", uid, "to database.")
-    end -- if
-    
-    room.exits [dir] = "0"
+    pending_exits [#pending_exits + 1] = { dir = dir, touid = "0" }
     
   end -- for each exit
   
-  db:exec ("COMMIT;") 
+  end)
+
+  for _, exit in ipairs (pending_exits) do
+    room.exits [exit.dir] = exit.touid
+  end -- apply committed exits
+
+  if show_database_mods then
+    for _, exit in ipairs (pending_exits) do
+      mapper.mapprint ("Added exit", exit.dir, "from room", uid, "to database.")
+    end -- report committed exits
+  end -- if
   
 end -- function save_room_to_database
 
 function save_full_exits_to_database (uid, exits)
   
   local room = rooms [uid]
-  
-  db:exec ("BEGIN TRANSACTION;") 
+  local pending_exits = {}
+
+  dbtransaction (function ()
 
   for exit in string.gmatch (exits, "[^,]+") do
 
-    dir, touid = string.match (exit, "^(%a+)%((%d+)%)$")
+    local dir, touid = string.match (exit, "^(%a+)%((%d+)%)$")
     
     if dir then
       -- fix up in and out
@@ -573,18 +606,25 @@ function save_full_exits_to_database (uid, exits)
           fixsql  (uid),  -- from current room
           fixsql  (touid) -- destination room 
           )))
-      if show_database_mods then
-        mapper.mapprint ("Added exit", dir, "from room", uid, "to room", touid, "to database.")
-      end -- if
-      
-      room.exits [dir] = touid
+      pending_exits [#pending_exits + 1] = { dir = dir, touid = touid }
     else
       mapper.maperror ("Cannot make sense of:", exit)
     end -- if can decode
     
   end -- for each exit
   
-  db:exec ("COMMIT;") 
+  end)
+
+  for _, exit in ipairs (pending_exits) do
+    room.exits [exit.dir] = exit.touid
+  end -- apply committed exits
+
+  if show_database_mods then
+    for _, exit in ipairs (pending_exits) do
+      mapper.mapprint ("Added exit", exit.dir, "from room", uid,
+                       "to room", exit.touid, "to database.")
+    end -- report committed exits
+  end -- if
   
 end -- function save_full_exits_to_database
 
@@ -807,7 +847,7 @@ function create_tables ()
     );
         
     
-  ]])
+  ]], db_bm)
       
 end -- function create_tables
 
@@ -958,7 +998,7 @@ function room_edit_bookmark (room, uid)
       dbcheck (db_bm:execute (string.format (
         "DELETE FROM bookmarks WHERE uid = %s;",
           fixsql (uid)
-        )))
+        )), db_bm)
       mapper.mapprint ("Bookmark for room", uid, "deleted. Was previously:", notes)
       rooms [uid].notes = nil
       return
@@ -974,14 +1014,14 @@ function room_edit_bookmark (room, uid)
         "UPDATE bookmarks SET notes = %s, date_added = DATETIME('NOW') WHERE uid = %s;",
           fixsql (newnotes),
           fixsql (uid)
-        )))
+        )), db_bm)
      mapper.mapprint ("Bookmark for room", uid, "changed to:", newnotes)
    else
     dbcheck (db_bm:execute (string.format (
         "INSERT INTO bookmarks (uid, notes, date_added) VALUES (%s, %s, DATETIME('NOW'));",
           fixsql (uid), 
           fixsql (newnotes)
-        )))
+        )), db_bm)
      mapper.mapprint ("Bookmark added to room", uid, ":", newnotes)
    end -- if    
    
@@ -1023,14 +1063,14 @@ function room_edit_terrain_colour (room, uid)
         "UPDATE terrain SET color = %s, date_added = DATETIME('NOW') WHERE name = %s;",
           fixsql (newcolour),
           fixsql (environmentname)
-        )))
+        )), db_bm)
      mapper.mapprint ("Colour for terrain '" .. environmentname .. "' changed to:", RGBColourToName (newcolour))
    else
     dbcheck (db_bm:execute (string.format (
         "INSERT INTO terrain (name, color, date_added) VALUES (%s, %s, DATETIME('NOW'));",
           fixsql (environmentname), 
           fixsql (newcolour)
-        )))
+        )), db_bm)
      mapper.mapprint ("Colour for terrain '" .. environmentname .. "' is now", RGBColourToName (newcolour))
    end -- if    
    
@@ -1283,21 +1323,22 @@ function add_area (room, uid)
     return
   end -- if
 
-  db:exec ("BEGIN TRANSACTION")  
-     
-  -- get rid of old area description, if any
-  local exists = db:execute (string.format (
-    "DELETE FROM areas WHERE uid = %s;",
-      fixsql (roomarea)
-    )) == sqlite3.OK
-    
-  dbcheck (db:execute (string.format (
-    "INSERT INTO areas (uid, name, date_added) VALUES (%s, %s, DATETIME('NOW'));",
-      fixsql (roomarea), 
-      fixsql (area_name)
-    )))
+  local exists = false
 
-  db:exec ("COMMIT")  
+  dbtransaction (function ()
+    -- get rid of old area description, if any
+    dbcheck (db:execute (string.format (
+      "DELETE FROM areas WHERE uid = %s;",
+        fixsql (roomarea)
+      )))
+    exists = db:changes () > 0
+
+    dbcheck (db:execute (string.format (
+      "INSERT INTO areas (uid, name, date_added) VALUES (%s, %s, DATETIME('NOW'));",
+        fixsql (roomarea),
+        fixsql (area_name)
+      )))
+  end)
           
   local action = "Added"
   if exists then
