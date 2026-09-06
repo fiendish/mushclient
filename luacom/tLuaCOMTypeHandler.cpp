@@ -870,8 +870,8 @@ void tLuaCOMTypeHandler::lua2com(lua_State* L, stkIndex luaval, VARIANTARG& varg
       {
         tStringBuffer str;
         str.copyToBuffer(value, l_len);
-        varg.vt = VT_BSTR;
         varg.bstrVal = tUtil::string2bstr(str, l_len);
+        varg.vt = VT_BSTR;
       }
     }
     break;
@@ -1037,8 +1037,8 @@ void tLuaCOMTypeHandler::lua2com(lua_State* L, stkIndex luaval, VARIANTARG& varg
             varg.vt = VT_UINT;
             varg.uintVal = static_cast<UINT>(value);
           } else if(strcmp(vtype, "string") == 0) {
-            varg.vt = VT_BSTR;
             varg.bstrVal = tUtil::string2bstr(lua_tostring(L, -1));
+            varg.vt = VT_BSTR;
           } else if(strcmp(vtype, "null") == 0) {
             varg.vt = VT_NULL;
           } else if(strcmp(vtype, "error") == 0) {
@@ -2467,7 +2467,7 @@ void tLuaCOMTypeHandler::initByRefParam(VARIANTARG* pvarg, VARTYPE vt, bool allo
   CHECKPRECOND(!(vt & VT_BYREF));
   VariantClear(pvarg);
 
-  pvarg->vt = vt | VT_BYREF;
+  pvarg->byref = NULL;
 
   if(alloc_memory) {
     const long size = VariantSize(vt);
@@ -2482,9 +2482,10 @@ void tLuaCOMTypeHandler::initByRefParam(VARIANTARG* pvarg, VARTYPE vt, bool allo
       VariantInit(pvarg->pvarVal);
     else
       memset(pvarg->byref, 0, size);
-  } else {
-    pvarg->byref = NULL;
   }
+
+  // Cleanup can inspect this value only after its storage is initialized.
+  pvarg->vt = vt | VT_BYREF;
 }
 
 void tLuaCOMTypeHandler::toByRefParam(VARIANT &var_source, VARIANTARG* pvarg_dest)
