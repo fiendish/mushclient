@@ -143,6 +143,12 @@ bool bInserting = false;
 POSITION pos;
 int nDocCount;
 CListCtrl & pList = GetListCtrl ();
+CArray<__int64, __int64> selectedDocuments;
+__int64 focusedDocument = 0;
+bool hadFocusedDocument = false;
+__int64 selectionMarkDocument = 0;
+bool hadSelectionMarkDocument = false;
+int restoredSelectionMark = -1;
 
 // if we don't want list updated right now, then exit
 
@@ -195,6 +201,37 @@ CListCtrl & pList = GetListCtrl ();
 
   if (bInserting)
     {
+    for (int nSelected = pList.GetNextItem (-1, LVNI_SELECTED);
+         nSelected != -1;
+         nSelected = pList.GetNextItem (nSelected, LVNI_SELECTED))
+      {
+      CMUSHclientDoc * pSelected =
+        GetWorldForIndex ((int) pList.GetItemData (nSelected));
+      if (pSelected)
+        selectedDocuments.Add (pSelected->m_iUniqueDocumentNumber);
+      }
+    int nFocused = pList.GetNextItem (-1, LVNI_FOCUSED);
+    if (nFocused != -1)
+      {
+      CMUSHclientDoc * pFocused =
+        GetWorldForIndex ((int) pList.GetItemData (nFocused));
+      if (pFocused)
+        {
+        focusedDocument = pFocused->m_iUniqueDocumentNumber;
+        hadFocusedDocument = true;
+        }
+      }
+    int nSelectionMark = pList.GetSelectionMark ();
+    if (nSelectionMark != -1)
+      {
+      CMUSHclientDoc * pMarked =
+        GetWorldForIndex ((int) pList.GetItemData (nSelectionMark));
+      if (pMarked)
+        {
+        selectionMarkDocument = pMarked->m_iUniqueDocumentNumber;
+        hadSelectionMarkDocument = true;
+        }
+      }
     pList.DeleteAllItems ();
     m_DocumentNumbers.RemoveAll ();
     }
@@ -256,19 +293,18 @@ CListCtrl & pList = GetListCtrl ();
 	
     // sequence
     if (bInserting)
-      pList.InsertItem (nItem, strSeq);  //  eColumnSeq
+      {
+      int iDocument = m_DocumentNumbers.Add (pDoc->m_iUniqueDocumentNumber);
+      if (pList.InsertItem (LVIF_TEXT | LVIF_PARAM, nItem, strSeq,
+                            0, 0, 0, (LPARAM) iDocument) == -1)
+        AfxThrowResourceException ();
+      }
 	  pList.SetItemText(nItem, eColumnMush, pDoc->m_mush_name);
 		pList.SetItemText(nItem, eColumnNew, strNewLines);
  		pList.SetItemText(nItem, eColumnLines, strLines);
   	pList.SetItemText(nItem, eColumnStatus, strStatus);
 		pList.SetItemText(nItem, eColumnSince, strSince);
 		pList.SetItemText(nItem, eColumnDuration, strDuration);
-
-    if (bInserting)
-      {
-      int iDocument = m_DocumentNumbers.Add (pDoc->m_iUniqueDocumentNumber);
-      pList.SetItemData(nItem, (DWORD) iDocument);
-      }
 
     LVITEM lvitem;
 
@@ -283,6 +319,22 @@ CListCtrl & pList = GetListCtrl ();
     lvitem.mask = LVIF_IMAGE;
     lvitem.iItem = nItem;
 
+    if (bInserting)
+      {
+      lvitem.mask |= LVIF_STATE;
+      lvitem.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+      if (hadSelectionMarkDocument && selectionMarkDocument == pDoc->m_iUniqueDocumentNumber)
+        restoredSelectionMark = nItem;
+      if (hadFocusedDocument && focusedDocument == pDoc->m_iUniqueDocumentNumber)
+        lvitem.state |= LVIS_FOCUSED;
+      for (int iSelected = 0; iSelected < selectedDocuments.GetSize (); iSelected++)
+        if (selectedDocuments [iSelected] == pDoc->m_iUniqueDocumentNumber)
+          {
+          lvitem.state |= LVIS_SELECTED;
+          break;
+          }
+      }
+
     pList.SetItem (&lvitem);
 
 
@@ -290,6 +342,9 @@ CListCtrl & pList = GetListCtrl ();
    }    // end of searching for all documents
 
 // make sure in same order that we left them
+
+  if (bInserting)
+    pList.SetSelectionMark (restoredSelectionMark);
 
   pList.SortItems (CompareFunc, (LPARAM) this);
 
