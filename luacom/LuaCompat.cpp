@@ -224,3 +224,4 @@ int luaCompat_checkTagToCom(lua_State *L, int luaval)
   lua_remove(L,-2);
   return 1;
 }
+

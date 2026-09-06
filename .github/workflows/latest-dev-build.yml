@@ -19,7 +19,23 @@ env:
   BUILD_CONFIGURATION_DEBUG: Debug
 
 jobs:
+  luacom-parity:
+    name: LuaCOM source parity
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        persist-credentials: false
+    - name: Test the import and update tools
+      run: python3 -m unittest discover -s tools -p 'test_luacom_*.py'
+    - name: Compare exact source bytes and Git modes
+      run: python3 tools/luacom_vendor.py check --index
+    - name: Test the imported connection contract
+      run: python3 tools/run_luacom_contract.py
+
   build:
+    needs: luacom-parity
     runs-on: windows-2022
     strategy:
       matrix:

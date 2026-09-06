@@ -1204,7 +1204,7 @@ static int luacom_RegisterObject(lua_State *L)
       "LocalServer32",
       ModulePath);
 
-#if 0       // NJG
+#if 0 // MUSHclient does not register LuaCOM as an in-process server.
     if(scriptFile) {
       luacom_SetRegKeyValue(
         CLSID,
@@ -1215,7 +1215,7 @@ static int luacom_RegisterObject(lua_State *L)
       "ScriptFile",
       scriptFile);
     }
-#endif // NJG
+#endif
 
     if(control) {
       luacom_SetRegKeyValue(
@@ -1523,8 +1523,9 @@ static int luacom_GetEnumerator(lua_State *L)
   int retvals = 0;
   try
   {
-    retvals = 
-      luacom->call(L, DISPID_NEWENUM, INVOKE_PROPERTYGET, NULL, tLuaObjList());
+    // Collections expose _NewEnum as either a method or a property.
+    retvals = luacom->call(L, DISPID_NEWENUM,
+      INVOKE_FUNC | INVOKE_PROPERTYGET, NULL, tLuaObjList());
     CHECKPOSCOND(retvals != 0);
   }
   catch(class tLuaCOMException& e)
@@ -2662,26 +2663,26 @@ LUACOM_API void luacom_open(lua_State *L)
   lua_pushboolean(L, 0);
   luaCompat_moduleSet(L, MODULENAME, LUACOM_SHOULD_ABORT_API);
 
-  /* NJG
+#if 0 // MUSHclient controls loading of Lua helper code.
   // loadls the lua code that implements the remaining
   // features of LuaCOM
-  int status = LUA_OK;
+  int status = 0;
 #ifdef LUA_DEBUGGING
   status = luaL_dofile(L, "luacom5.lua");
 #else
   #include "luacom.loh"
   status = luaL_loadbuffer(L, (const char*)luacom5_source_bytes,
 			   luacom5_source_size, "@luacom5.lua");
-  if (status == LUA_OK) {
+  if (status == 0) {
     status = lua_pcall(L, 0, 0, 0);
   }
 #endif
-  if (status != LUA_OK) {
+  if (status != 0) {
     const char* msg = lua_tostring(L, -1);
     fprintf(stderr, "luacom.dll error: %s\n", msg ? msg : "unknown");
     lua_error(L);
   }
-  */
+#endif
 
   idxDispatch = (void*)&luacom_runningInprocess;
 

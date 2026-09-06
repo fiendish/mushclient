@@ -1,0 +1,18 @@
+--- a/luacom.cpp
++++ b/luacom.cpp
+@@ -1204,6 +1204,7 @@
+       "LocalServer32",
+       ModulePath);
+ 
++#if 0 // MUSHclient does not register LuaCOM as an in-process server.
+     if(scriptFile) {
+       luacom_SetRegKeyValue(
+         CLSID,
+@@ -1214,6 +1215,7 @@
+       "ScriptFile",
+       scriptFile);
+     }
++#endif
+ 
+     if(control) {
+       luacom_SetRegKeyValue(
