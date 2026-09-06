@@ -66,6 +66,8 @@ class CChildFrame;
 class CSendView;
 class CTextDocument;
 class UDPsocket;
+class COutputAppendTransaction;
+
 
 #define ESC '\x1B'
 
@@ -1452,9 +1454,13 @@ public:
                const bool bQueueIt,
                const bool bLogIt);
 	void ReceiveMsg();
-	void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
-  void AddToLine (LPCTSTR lpszText, const int flags);
-  void StartNewLine_KeepPreviousStyle (const int flags);
+  void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
+  bool AddToLine (LPCTSTR lpszText, const int flags);
+  bool AddToLineAtomically (LPCTSTR lpszText, const int flags);
+  bool AddToLineInternal (LPCTSTR lpszText, const int flags,
+                          COutputAppendTransaction * pTransaction);
+  bool StartNewLine_KeepPreviousStyle (const int flags,
+                                       bool * pbCreated = NULL);
   void Phase_ESC (const unsigned char c);  
   void Phase_UTF8 (const unsigned char c);  
   void Phase_ANSI (const unsigned char c);           
@@ -1588,9 +1594,13 @@ public:
                      CAction *            pAction = NULL,
                      CLine *              pLine = NULL);
 
+  void RefreshMXPMissingTagAnchors (void);
+
   void RememberStyle (const CStyle * pStyle); 
 
-  void StartNewLine (const bool hard_break, const int flags);
+  bool StartNewLine (const bool hard_break, const int flags,
+                     const bool bResizePrevious = true,
+                     bool * pbCreated = NULL);
   bool ProcessPreviousLine (void);
   void SendLineToPlugin (void);
   void SetNewLineColour (const int flags);
@@ -2895,6 +2905,98 @@ public:
 };
 
 /////////////////////////////////////////////////////////////////////////////
+
+class COutputAppendTransaction
+  {
+  public:
+    COutputAppendTransaction (CMUSHclientDoc * pDoc, const size_t iLength);
+    ~COutputAppendTransaction ();
+
+    __int64 Identity () const;
+    void Reserve (const size_t iLength);
+    void MarkCurrentLineStyles ();
+    CStyle * PrepareAppendStyle ();
+    void OwnStyle (CStyle * pStyle);
+    void RecordCreatedLine ();
+    bool StartNewLine (const bool bHardBreak,
+                       const int iFlags,
+                       const bool bResizePrevious,
+                       bool * pbCreated);
+    void SetLineFlags (CLine * pLine, const unsigned char iFlags);
+    void SetListCount (const int iListCount);
+    size_t PrepareWrap (CLine * pPreviousLine, const int iSplitLength);
+    void PublishWrap (const size_t iWrap,
+                      const __int64 iNewLineCreationNumber);
+    void Commit ();
+    void Rollback ();
+
+  private:
+    struct CCreatedLine
+      {
+      __int64 iLineCreationNumber;
+      __int64 iStyleCreationNumber;
+      __int64 iStyleRangeCreationNumber;
+      unsigned short iFlags;
+      COLORREF iForeColour;
+      COLORREF iBackColour;
+      CAction * pAction;
+      };
+
+    struct CWrapStyleBackup
+      {
+      __int64 iStyleCreationNumber;
+      unsigned short iOldLength;
+      unsigned short iRetainedLength;
+      };
+
+    struct CWrapMove
+      {
+      __int64 iPreviousLineCreationNumber;
+      __int64 iNewLineCreationNumber;
+      int iOldLineLength;
+      int iSplitLength;
+      vector<CWrapStyleBackup> styleBackups;
+      bool bPublished;
+      };
+
+    struct CLineBreakState
+      {
+      __int64 iLineCreationNumber;
+      bool bOldHardReturn;
+      bool bExpectedHardReturn;
+      bool bPublished;
+      };
+
+    struct CLineFlagsState
+      {
+      __int64 iLineCreationNumber;
+      unsigned char iOldFlags;
+      unsigned char iExpectedFlags;
+      };
+
+    struct CListCountState
+      {
+      int iListMode;
+      int iOldListCount;
+      int iExpectedListCount;
+      __int64 iListOwner;
+      };
+
+    void RestoreWrap (const CWrapMove & wrap);
+    CLine * FindLine (const __int64 iLineCreationNumber) const;
+
+    CMUSHclientDoc * m_pDoc;
+    __int64 m_iAppendCreationNumber;
+    vector<CCreatedLine> m_CreatedLines;
+    vector<CWrapMove> m_Wraps;
+    vector<CLineBreakState> m_LineBreaks;
+    vector<CLineFlagsState> m_LineFlags;
+    vector<CListCountState> m_ListCounts;
+    bool m_bCommitted;
+  };
+
+/////////////////////////////////////////////////////////////////////////////
+
 
 
 // MXP-oriented utilities

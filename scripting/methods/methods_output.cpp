@@ -237,55 +237,73 @@ POSITION pos;
   if (m_bInSendToScript)
     return;   // can't do it
 
-  if (Count <= 0) 
+  if (Count <= 0)
      return;        // nothing to do
 
   // if we have the empty line at the end of the buffer, delete that too
   if (m_pCurrentLine && m_pCurrentLine->len == 0)
     Count++;
 
-// delete all lines in this set
-  for (pos = m_LineList.GetTailPosition (); Count > 0 && pos; Count--)
-   {
-   // if this particular line was added to the line positions array, then make it null
-    if (m_LineList.GetCount () % JUMP_SIZE == 1)
-          m_pLinePositions [m_LineList.GetCount () / JUMP_SIZE] = NULL;
-
-    delete m_LineList.GetTail (); // delete contents of tail iten -- version 3.85
-    m_LineList.RemoveTail ();   // get rid of the line
-    m_total_lines--;            // don't count as received
-
-   if (m_LineList.IsEmpty ())  // give up if buffer is empty
-     break;
-
-   m_LineList.GetPrev (pos);
-   }
-
-  // try to allow world.tells to span omitted lines
-  if (!m_LineList.IsEmpty ())
+  vector<POSITION> linesToDelete;
+  POSITION scan = m_LineList.GetTailPosition ();
+  for (long i = 0; i < Count && scan; i++)
     {
-    m_pCurrentLine = m_LineList.GetTail ();
-    if (((m_pCurrentLine->flags & COMMENT) == 0) ||
-        m_pCurrentLine->hard_return)
-        m_pCurrentLine = NULL;
+    POSITION current = scan;
+    m_LineList.GetPrev (scan);
+    linesToDelete.push_back (current);
     }
+
+  CLine * pSurvivingCurrentLine = scan ? m_LineList.GetAt (scan) : NULL;
+  if (pSurvivingCurrentLine &&
+      (((pSurvivingCurrentLine->flags & COMMENT) == 0) ||
+       pSurvivingCurrentLine->hard_return))
+    pSurvivingCurrentLine = NULL;
+
+  std::unique_ptr<CLine> pNewLine;
+  if (!pSurvivingCurrentLine)
+    {
+    pNewLine.reset (new CLine (m_total_lines -
+                               static_cast<long> (linesToDelete.size ()) + 1,
+                               m_nWrapColumn,
+                               m_iFlags,
+                               m_iForeColour,
+                               m_iBackColour,
+                               m_bUTF_8));
+    m_LineList.AddTail (pNewLine.get ());
+    }
+
+  if (!linesToDelete.empty ())
+    m_iOutputGeneration++;
+
+  for (vector<POSITION>::const_iterator it = linesToDelete.begin ();
+       it != linesToDelete.end (); ++it)
+    {
+    CLine * pLine = m_LineList.GetAt (*it);
+    m_LineList.RemoveAt (*it);
+    delete pLine;
+    m_total_lines--;
+    }
+
+  if (pSurvivingCurrentLine)
+    m_pCurrentLine = pSurvivingCurrentLine;
   else
-    m_pCurrentLine = NULL;
-
-  if (!m_pCurrentLine)
     {
-    // restart with a blank line at the end of the list
-    m_pCurrentLine = new CLine (++m_total_lines, 
-                                m_nWrapColumn,
-                                m_iFlags,
-                                m_iForeColour,
-                                m_iBackColour,
-                                m_bUTF_8);
-    pos = m_LineList.AddTail (m_pCurrentLine);
-
-    if (m_LineList.GetCount () % JUMP_SIZE == 1)
-      m_pLinePositions [m_LineList.GetCount () / JUMP_SIZE] = pos;
+    m_pCurrentLine = pNewLine.release ();
+    m_total_lines++;
     }
+
+  for (int i = 0; i <= m_maxlines / JUMP_SIZE; i++)
+    m_pLinePositions [i] = NULL;
+  int iLine = 0;
+  for (pos = m_LineList.GetHeadPosition (); pos; iLine++)
+    {
+    POSITION current = pos;
+    m_LineList.GetNext (pos);
+    if (iLine % JUMP_SIZE == 0)
+      m_pLinePositions [iLine / JUMP_SIZE] = current;
+    }
+
+  RefreshMXPMissingTagAnchors ();
 
 // notify view that we have "added" stuff (deleted, really)
 // this is so that scroll bar positions are recalculated, and the

@@ -717,20 +717,40 @@ void CMUSHclientDoc::Hyperlink_Helper (LPCTSTR Action,
   SetColour (BackColour, backcolour);
 
   // change to underlined hyperlink
-  AddStyle (COLOUR_RGB | 
-            (URL ? ACTION_HYPERLINK : ACTION_SEND) | 
-            (NoUnderline ? 0 : UNDERLINE), 
-            forecolour, 
-            backcolour, 0, 
-            GetAction (Action, 
-                        Hint [0] == 0 ? Action : Hint, 
-                        ""));
+  CAction * pLinkAction = GetAction (Action,
+                                     Hint [0] == 0 ? Action : Hint,
+                                     "");
+  try
+    {
+    AddStyle (COLOUR_RGB |
+              (URL ? ACTION_HYPERLINK : ACTION_SEND) |
+              (NoUnderline ? 0 : UNDERLINE),
+              forecolour,
+              backcolour, 0,
+              pLinkAction);
+    }
+  catch (...)
+    {
+    pLinkAction->Release ();
+    throw;
+    }
+  pLinkAction->Release ();
 
-  // output the link text
-  if (strlen (Text) > 0)
-    AddToLine (Text, COMMENT);
-  else
-    AddToLine (Action, COMMENT);
+  // Output the link text. Always publish the finishing note style, including
+  // when line wrapping reports a failure or throws after partial output.
+  bool bOutputSucceeded = false;
+  exception_ptr pendingException;
+  try
+    {
+    if (strlen (Text) > 0)
+      bOutputSucceeded = AddToLine (Text, COMMENT);
+    else
+      bOutputSucceeded = AddToLine (Action, COMMENT);
+    }
+  catch (...)
+    {
+    pendingException = current_exception ();
+    }
 
   // add another style to finish the hyperlink
 
@@ -748,6 +768,11 @@ void CMUSHclientDoc::Hyperlink_Helper (LPCTSTR Action,
     else
       AddStyle (COLOUR_CUSTOM, m_iNoteTextColour, BLACK, 0, NULL);
     } // not RGB
+
+  if (pendingException)
+    rethrow_exception (pendingException);
+  if (!bOutputSucceeded)
+    return;
 
 }   // end of CMUSHclientDoc::Hyperlink_Helper
 
@@ -799,12 +824,14 @@ void CMUSHclientDoc::NoteHr()
 {
   // wrap up previous line if necessary
   if (m_pCurrentLine->len > 0)
-     StartNewLine (true, 0);
+    if (!StartNewLine (true, 0))
+      return;
 
   // mark line as HR line
   m_pCurrentLine->flags = HORIZ_RULE;
   
-  StartNewLine (true, 0); // now finish this line
+  if (!StartNewLine (true, 0)) // now finish this line
+    return;
 
   // refresh views
 
