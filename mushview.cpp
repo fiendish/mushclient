@@ -292,6 +292,7 @@ CMUSHView::CMUSHView()
   m_nLastToolTipColumn = 0;
   m_scroll_position = 0;
   m_mousedover = false;
+  m_bInSelectionChanged = false;
   m_bottomview = NULL;
 
   m_iPauseStatus = ePauseUninitialised;
@@ -2332,7 +2333,8 @@ int line,
             }   // end of passing special syntax test
           else
             {  // plugin does not exist - just execute it
-            pDoc->m_iExecutionDepth = 0;
+            CValueStateGuard<int> executionDepthGuard
+              (pDoc->m_iExecutionDepth, 0);
             pDoc->Execute (strAction);
             }
           } // end of note hyperlink
@@ -3344,11 +3346,11 @@ int lastline;
   // very bizarre bug - fixed in 4.39
   // we seem to get size messages if we are maximized and in the background
 
-  bool bOldFreeze = m_freeze;  
+  {
+  CValueStateGuard<BOOL> freezeGuard (m_freeze, m_freeze);
   if (m_bAtBufferEnd)
-    OnTestEnd ();   
-
-  m_freeze = bOldFreeze;
+    OnTestEnd ();
+  }
   
   Frame.FixUpTitleBar ();   // in case we need to add the mud name to the title bar
 
@@ -6393,12 +6395,12 @@ long startcol,
   if (dlg.m_bWord)
      strText += "\\b";    // word boundary
 
-  t_regexp * regexp = NULL;
+  std::unique_ptr<t_regexp> new_regexp;
 
   // compile regular expression
   try 
     {
-    regexp = regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) );
+    new_regexp.reset (regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) ));
     }   // end of try
   catch(CException* e)
     {
@@ -6412,12 +6414,11 @@ long startcol,
   // invent name for it
   strTriggerName.Format ("*trigger%s", (LPCTSTR) App.GetUniqueString ());
 
-  CTrigger * trigger_item;
-
-  // create new trigger item and insert in trigger map
-  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item = new CTrigger);
+  std::unique_ptr<CTrigger> new_trigger_item (new CTrigger);
+  CTrigger * trigger_item = new_trigger_item.get ();
 
   trigger_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  trigger_item->nCreationNumber  = App.GetUniqueNumber ();
   trigger_item->strInternalName  = strTriggerName;    // for deleting one-shot triggers
 
   trigger_item->trigger          = strText;
@@ -6427,7 +6428,7 @@ long startcol,
   
   trigger_item->bRegexp          = true;      // yes, it's a regexp
   trigger_item->bRepeat          = true;      // repeat on same line
-  trigger_item->regexp           = regexp;
+  trigger_item->regexp           = new_regexp.release ();
   trigger_item->iSendTo          = eSendToWorld;
   trigger_item->iSequence        = 90;
   trigger_item->strGroup         = "Highlighted Words";
@@ -6435,7 +6436,27 @@ long startcol,
   trigger_item->iOtherForeground = dlg.m_iOtherForeground;
   trigger_item->iOtherBackground = dlg.m_iOtherBackground;
 
-  pDoc->SortTriggers ();
+  // insert only after the trigger is complete
+  CTrigger * old_trigger_item = NULL;
+  pDoc->GetTriggerMap ().Lookup (strTriggerName, old_trigger_item);
+  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item);
+  new_trigger_item.release ();
+
+  try
+    {
+    pDoc->SortTriggers ();
+    }
+  catch (...)
+    {
+    if (old_trigger_item)
+      pDoc->GetTriggerMap ().SetAt (strTriggerName, old_trigger_item);
+    else
+      pDoc->GetTriggerMap ().RemoveKey (strTriggerName);
+    delete trigger_item;
+    throw;
+    }
+
+  pDoc->RetireTrigger (old_trigger_item);
 
   // we need to know to save it
   pDoc->SetModifiedFlag (TRUE);
@@ -6477,12 +6498,12 @@ CString strSelection;
   strText.Replace (ENDLINE, "\\n"); // replace linebreaks with \n
   strText += "\\Z";    // subject boundary
 
-  t_regexp * regexp = NULL;
+  std::unique_ptr<t_regexp> new_regexp;
 
   // compile regular expression
   try 
     {
-    regexp = regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) );
+    new_regexp.reset (regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) ));
     }   // end of try
   catch(CException* e)
     {
@@ -6496,12 +6517,11 @@ CString strSelection;
   // invent name for it
   strTriggerName.Format ("*trigger%s", (LPCTSTR) App.GetUniqueString ());
 
-  CTrigger * trigger_item;
-
-  // create new trigger item and insert in trigger map
-  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item = new CTrigger);
+  std::unique_ptr<CTrigger> new_trigger_item (new CTrigger);
+  CTrigger * trigger_item = new_trigger_item.get ();
 
   trigger_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  trigger_item->nCreationNumber  = App.GetUniqueNumber ();
   trigger_item->strInternalName  = strTriggerName;    // for deleting one-shot triggers
 
   trigger_item->trigger          = strText;
@@ -6512,13 +6532,33 @@ CString strSelection;
   trigger_item->bRegexp          = true;      // yes, it's a regexp
   trigger_item->bMultiLine        = true;      // multiline
   trigger_item->bKeepEvaluating  = true;      // keep evaluating wanted
-  trigger_item->regexp           = regexp;
+  trigger_item->regexp           = new_regexp.release ();
   trigger_item->iSendTo          = eSendToOutput;
   trigger_item->strGroup         = "Multi Line";
 
   trigger_item->iLinesToMatch = iCount;
 
-  pDoc->SortTriggers ();
+  // insert only after the trigger is complete
+  CTrigger * old_trigger_item = NULL;
+  pDoc->GetTriggerMap ().Lookup (strTriggerName, old_trigger_item);
+  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item);
+  new_trigger_item.release ();
+
+  try
+    {
+    pDoc->SortTriggers ();
+    }
+  catch (...)
+    {
+    if (old_trigger_item)
+      pDoc->GetTriggerMap ().SetAt (strTriggerName, old_trigger_item);
+    else
+      pDoc->GetTriggerMap ().RemoveKey (strTriggerName);
+    delete trigger_item;
+    throw;
+    }
+
+  pDoc->RetireTrigger (old_trigger_item);
 
   // we need to know to save it
   pDoc->SetModifiedFlag (TRUE);
@@ -7643,8 +7683,7 @@ ASSERT_VALID(pDoc);
 
 void CMUSHView::NotifySelectionChanged(void)
 {
-  static bool bInSelectionChanged = false;
-  if (bInSelectionChanged)  // don't recurse into infinite loops
+  if (m_bInSelectionChanged)  // don't recurse into infinite loops
     return;
 
   // we seem to get called when there wasn't really a change
@@ -7659,7 +7698,7 @@ void CMUSHView::NotifySelectionChanged(void)
   m_old_selend_line   = m_selend_line;
   m_old_selend_col    = m_selend_col;
 
-  bInSelectionChanged = true;
+  CBoolStateGuard selectionGuard (m_bInSelectionChanged, true);
 
   CMUSHclientDoc* pDoc = GetDocument();
   ASSERT_VALID(pDoc);
@@ -7667,7 +7706,6 @@ void CMUSHView::NotifySelectionChanged(void)
   if (pDoc->m_ScriptEngine)
     pDoc->SendToAllPluginCallbacks(ON_PLUGIN_SELECTION_CHANGED);
 
-  bInSelectionChanged = false;
   // end of notify plugins
 }
 
