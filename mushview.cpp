@@ -2156,10 +2156,13 @@ CPoint menupoint = point;
 
   CValueStateGuard<int> actionGuard (m_iMXPMenuAction, ACTION_ALIAS);
   CValueStateGuard<CMXPMenuItemList> itemsGuard (m_MXPMenuItems, menuItems);
-  pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+  const UINT nCommand = pPopup->TrackPopupMenu(
+                        TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
                         point.x,
                         point.y,
                         pWndPopupOwner);
+  if (nCommand)
+    OnMXPMenu (nCommand);
 
   } // end of CMUSHView::AliasMenu
 
@@ -3755,10 +3758,13 @@ ASSERT_VALID(pDoc);
             (m_iMXPMenuAction, iStyle & ACTIONTYPE);
           CValueStateGuard<CMXPMenuItemList> itemsGuard
             (m_MXPMenuItems, menuItems);
-          pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON,
-                                menupoint.x, 
+          const UINT nCommand = pPopup->TrackPopupMenu(
+                                TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                menupoint.x,
                                 menupoint.y,
                                 pWndPopupOwner);
+          if (nCommand)
+            OnMXPMenu (nCommand);
 
           return;
           } // we have ACTION_SEND or ACTION_PROMPT
@@ -3792,10 +3798,13 @@ ASSERT_VALID(pDoc);
             (m_iMXPMenuAction, iStyle & ACTIONTYPE);
           CValueStateGuard<CMXPMenuItemList> itemsGuard
             (m_MXPMenuItems, menuItems);
-          pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON,
-                                menupoint.x, 
+          const UINT nCommand = pPopup->TrackPopupMenu(
+                                TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                menupoint.x,
                                 menupoint.y,
                                 pWndPopupOwner);
+          if (nCommand)
+            OnMXPMenu (nCommand);
 
           return;
           }  // end of ACTION_HYPERLINK
