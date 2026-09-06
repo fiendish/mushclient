@@ -358,6 +358,7 @@ class CAlias : public CObject
    bEnabled = TRUE;
    dispid = DISPID_UNKNOWN;
    nUpdateNumber = 0;
+   nCreationNumber = 0;
    nInvocationCount = 0;
    nMatched = 0;
    bExpandVariables = FALSE;
@@ -384,6 +385,7 @@ class CAlias : public CObject
    wildcards.resize (MAX_WILDCARDS);
    bExecutingScript = false;
    bOneShot = false;
+   pNextRetired = NULL;
 
   };
 
@@ -431,6 +433,7 @@ class CAlias : public CObject
   
   DISPID dispid;                    // dispatch ID for calling the script
   __int64 nUpdateNumber;            // for detecting update clashes
+  __int64 nCreationNumber;          // immutable identity for this object instance
   long  nInvocationCount; // how many times procedure called
   long  nMatched;         // how many times the alias matched
   vector<string> wildcards;   // matching wildcards
@@ -440,6 +443,7 @@ class CAlias : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CAlias * pNextRetired;    // next replaced alias waiting for active script to finish
   CString strInternalName;  // name it is stored in the alias map under
   };
 
@@ -477,6 +481,7 @@ class CTrigger : public CObject
      bEnabled = TRUE;
      dispid = DISPID_UNKNOWN;
      nUpdateNumber = 0;
+     nCreationNumber = 0;
      colour = 0;    // custom colour 1
      nInvocationCount = 0;
      iClipboardArg = 0;
@@ -502,6 +507,7 @@ class CTrigger : public CObject
      wildcards.resize (MAX_WILDCARDS);
      bExecutingScript = false;
      bOneShot = FALSE;
+     pNextRetired = NULL;
 
     };
 
@@ -568,6 +574,7 @@ class CTrigger : public CObject
   
   DISPID dispid;                  // dispatch ID for calling the script
   __int64 nUpdateNumber;          // for detecting update clashes
+  __int64 nCreationNumber;        // immutable identity for this object instance
   long  nInvocationCount;         // how many times procedure called
   long  nMatched;         // how many times the trigger fired
   vector<string> wildcards;   // matching wildcards
@@ -577,6 +584,7 @@ class CTrigger : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CTrigger * pNextRetired;  // next replaced trigger waiting for active script to finish
   CString strInternalName;  // name it is stored in the trigger map under
   };
 
@@ -633,6 +641,8 @@ class CTimer : public CObject
      bOmitFromOutput = false;
      bOmitFromLog = false;
      bExecutingScript = false;
+     nCreationNumber = 0;
+     pNextRetired = NULL;
     };
 
   bool operator== (const CTimer & rhs) const;
@@ -682,6 +692,7 @@ class CTimer : public CObject
 
   DISPID dispid;                  // dispatch ID for calling the script
   __int64 nUpdateNumber;          // for detecting update clashes
+  __int64 nCreationNumber;        // immutable identity for this object instance
   long  nInvocationCount; // how many times procedure called
   long  nMatched;         // how many times the timer fired
 
@@ -695,6 +706,7 @@ class CTimer : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CTimer * pNextRetired;    // next replaced timer waiting for active script to finish
 
   static unsigned long GetNextTimerSequence () { return nNextCreateSequence++; }
 

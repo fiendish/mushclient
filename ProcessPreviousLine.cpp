@@ -447,8 +447,7 @@ assemble the full text of the original line.
 //   *previous* line (the prompt line).
 //  So, we save and restore the current plugin pointer.
 
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;
+  CPluginContextGuard pluginContextGuard (this, NULL);
 
   // triggers might set these
   bool bNoLog = !m_bLogOutput;
@@ -552,7 +551,7 @@ assemble the full text of the original line.
   CString strResponse;
   CTrigger * trigger_item;
 
-  CTriggerList triggerList;
+  OneShotItemMap triggerList;
   CString strExtraOutput;   // for sending to output
   ScriptItemMap mapDeferredScripts;
   OneShotItemMap mapOneShotItems;
@@ -588,18 +587,25 @@ assemble the full text of the original line.
     // allow trigger evaluation for the moment
     m_iStopTriggerEvaluation = eKeepEvaluatingTriggers;
 
-   PluginListIterator pit;
+   CPluginInstanceSnapshot negativePlugins;
+   CPluginInstanceSnapshot nonnegativePlugins;
+   GetPluginSequenceSnapshots (m_PluginList,
+                               negativePlugins,
+                               nonnegativePlugins);
 
    // Do plugins (stop if one stops trigger evaluation).
    // Do only negative sequence number plugins at this point
    // Suggested by Fiendish. Added in version 4.97.
-   for (pit = m_PluginList.begin ();
-        pit != m_PluginList.end () &&
-        (*pit)->m_iSequence < 0 &&
+   for (size_t iPlugin = 0;
+        iPlugin < negativePlugins.size () &&
         m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
-        ++pit)
-      {
-      m_CurrentPlugin = *pit;
+        iPlugin++)
+     {
+      m_CurrentPlugin = GetPluginInstance (
+        negativePlugins [iPlugin].m_strID,
+        negativePlugins [iPlugin].m_iPluginInstanceNumber);
+      if (!m_CurrentPlugin)
+        continue;
       // allow trigger evaluation for the moment (ie. the next plugin)
       m_iStopTriggerEvaluation = eKeepEvaluatingTriggers;
       if (m_CurrentPlugin->m_bEnabled)
@@ -636,15 +642,16 @@ assemble the full text of the original line.
       } // end of trigger evaluation not stopped
 
    // do plugins (stop if one stops trigger evaluation, or if it was stopped by the main world triggers)
-   for (pit = m_PluginList.begin ();
-        pit != m_PluginList.end () &&
-         m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
-         ++pit)
-      {
-      // skip past negative sequence numbers
-      if ((*pit)->m_iSequence < 0)
+   for (size_t iPlugin = 0;
+        iPlugin < nonnegativePlugins.size () &&
+        m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
+        iPlugin++)
+     {
+      m_CurrentPlugin = GetPluginInstance (
+        nonnegativePlugins [iPlugin].m_strID,
+        nonnegativePlugins [iPlugin].m_iPluginInstanceNumber);
+      if (!m_CurrentPlugin)
          continue;
-      m_CurrentPlugin = *pit;
       // allow trigger evaluation for the moment (ie. the next plugin)
       m_iStopTriggerEvaluation = eKeepEvaluatingTriggers;
       if (m_CurrentPlugin->m_bEnabled)
@@ -841,7 +848,8 @@ assemble the full text of the original line.
 
   // execute scripts now *after* we have done our omitting from output
 
-  m_bInSendToScript = false;   // they can do DeleteLines here
+  {
+  CBoolStateGuard sendToScriptGuard (m_bInSendToScript, false); // allow DeleteLines
 
 // now that lines have been omitted run scripts now that wanted to be deferred      
 
@@ -849,10 +857,20 @@ assemble the full text of the original line.
        deferred_it != mapDeferredScripts.end ();
        deferred_it++)
    {
-    int iSavedDepth = m_iExecutionDepth;
-    m_iExecutionDepth = 0;    // no execution depth yet
-    m_iCurrentActionSource = eTriggerFired;
-    m_CurrentPlugin = deferred_it->pWhichPlugin;   // set back to correct plugin
+    CValueStateGuard<int> depthGuard (m_iExecutionDepth, 0);
+    CValueStateGuard<unsigned short> actionGuard
+      (m_iCurrentActionSource, eTriggerFired);
+
+    CPlugin * pPlugin = NULL;
+    if (!deferred_it->sPluginID.empty ())
+      {
+      pPlugin = GetPluginInstance (deferred_it->sPluginID.c_str (),
+                                   deferred_it->iPluginInstanceNumber);
+      if (!pPlugin)
+        continue;
+      }
+
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
     
     // if Lua, add style info to script space
     if (GetScriptEngine () && GetScriptEngine ()->L)
@@ -886,62 +904,41 @@ assemble the full text of the original line.
             "",            // variable to set
             strExtraOutput // won't use this anyway
             );
-
-    m_iCurrentActionSource = eUnknownActionSource;
-    m_iExecutionDepth =  iSavedDepth;
    }    // end of doing each deferred script
 
 // now do scripts in the script file (ie. script name in the "script" box)
 
   m_CurrentPlugin = NULL;
     
-  bool bFoundIt;
-  int iItem;
-  for (pos = triggerList.GetHeadPosition (); pos; )
+  for (OneShotItemMap::const_iterator trigger_it = triggerList.begin ();
+       trigger_it != triggerList.end ();
+       ++trigger_it)
     {
-    trigger_item = triggerList.GetNext (pos);
-    bFoundIt = false;
-
-    // check that trigger still exists, in case a script deleted it - and also
-    // to work out which plugin it is in
-
-    m_CurrentPlugin = NULL;
-    // main triggers
-    for (iItem = 0; !bFoundIt && iItem < GetTriggerArray ().GetSize (); iItem++)
-      if (GetTriggerArray () [iItem] == trigger_item)
-        {
-        bFoundIt = true;
-        // execute trigger script
-        ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
-        }
-
-    // do plugins
-    for (PluginListIterator pit = m_PluginList.begin (); 
-         !bFoundIt && pit != m_PluginList.end (); 
-          ++pit)
+    CPlugin * pPlugin = NULL;
+    if (!trigger_it->sPluginID.empty ())
       {
-      m_CurrentPlugin = *pit;
+      pPlugin = GetPluginInstance (trigger_it->sPluginID.c_str (),
+                                   trigger_it->iPluginInstanceNumber);
+      if (!pPlugin || !pPlugin->m_bEnabled)
+        continue;
+      }
 
-      if (m_CurrentPlugin->m_bEnabled)
-        for (iItem = 0; !bFoundIt && iItem < GetTriggerArray ().GetSize (); iItem++)
-          if (GetTriggerArray () [iItem] == trigger_item)
-            {
-            bFoundIt = true;
-            // execute trigger script
-            ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
-            }
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
+    trigger_item = NULL;
+    if (!GetTriggerMap ().Lookup (trigger_it->sItemKey.c_str (), trigger_item) ||
+        trigger_item->nCreationNumber != trigger_it->iCreationNumber)
+      continue;
 
-      } // end of doing each plugin
-
+    ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
     }  // end of doing each trigger that had a script
 
-  m_bInSendToScript = true;
+  }
 
-// now that we have run all scripts etc., delete one-shot triggers      
+// now that we have run all scripts etc., delete one-shot triggers
 
-  int iDeletedCount = 0;
   int iDeletedNonTemporaryCount = 0;
-  set<CPlugin *> pluginsWithDeletions;
+  typedef map<string, CTrigger *> TriggerDeletionMap;
+  map<CPlugin *, TriggerDeletionMap> triggerDeletions;
 
   for (OneShotItemMap::const_iterator one_shot_it = mapOneShotItems.begin ();
        one_shot_it != mapOneShotItems.end ();
@@ -950,9 +947,20 @@ assemble the full text of the original line.
     CTrigger * trigger_item;
     CString strTriggerName = one_shot_it->sItemKey.c_str ();
 
-    m_CurrentPlugin = one_shot_it->pWhichPlugin;   // set back to correct plugin
+    CPlugin * pPlugin = NULL;
+    if (!one_shot_it->sPluginID.empty ())
+      {
+      pPlugin = GetPluginInstance (one_shot_it->sPluginID.c_str (),
+                                   one_shot_it->iPluginInstanceNumber);
+      if (!pPlugin)
+        continue;
+      }
+
+    CPluginContextGuard contextGuard (this, pPlugin, false, false);
 
     if (!GetTriggerMap ().Lookup (strTriggerName, trigger_item))
+      continue;
+    if (trigger_item->nCreationNumber != one_shot_it->iCreationNumber)
       continue;
 
     // can't if executing a script
@@ -962,34 +970,94 @@ assemble the full text of the original line.
     if (!m_CurrentPlugin && !trigger_item->bTemporary)
       iDeletedNonTemporaryCount++;
 
-    iDeletedCount++;
-
-    // the trigger seems to exist - delete its pointer
-    delete trigger_item;
-
-    // now delete its entry
-    GetTriggerMap ().RemoveKey (strTriggerName);
-
-    pluginsWithDeletions.insert (m_CurrentPlugin);
+    triggerDeletions [pPlugin] [one_shot_it->sItemKey] = trigger_item;
 
    }  // end of deleting one-shot items
 
-   if (iDeletedCount > 0)
-     {
-     // make sure we sort the correct plugin(s)
-     for ( set<CPlugin *>::iterator i = pluginsWithDeletions.begin (); i != pluginsWithDeletions.end (); i++)
-       {
-       m_CurrentPlugin = *i;
-       SortTriggers ();
-       }
+  struct CPreparedTriggerDeletion
+    {
+    CPreparedTriggerDeletion () : iOldArraySize (0), bArrayPrepared (false) { }
+    set<CTrigger *> triggersToDelete;
+    vector<CTrigger *> newTriggerArray;
+    CTriggerRevMap newTriggerRevMap;
+    int iOldArraySize;
+    bool bArrayPrepared;
+    };
+  map<CPlugin *, CPreparedTriggerDeletion> preparedTriggerDeletions;
 
-     if (iDeletedNonTemporaryCount > 0) // plugin mods don't really count
-       SetModifiedFlag (TRUE);   // document has changed
-     }
+  for (map<CPlugin *, TriggerDeletionMap>::iterator plugin_it =
+         triggerDeletions.begin ();
+       plugin_it != triggerDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    CPreparedTriggerDeletion & prepared =
+      preparedTriggerDeletions [plugin_it->first];
+    for (TriggerDeletionMap::const_iterator trigger_it = plugin_it->second.begin ();
+         trigger_it != plugin_it->second.end (); ++trigger_it)
+      prepared.triggersToDelete.insert (trigger_it->second);
+    prepared.iOldArraySize = GetTriggerArray ().GetSize ();
+    BuildTriggerIndexes (prepared.newTriggerArray,
+                         prepared.newTriggerRevMap,
+                         &prepared.triggersToDelete);
+    }
 
-// go back to current plugin
+  try
+    {
+    for (map<CPlugin *, CPreparedTriggerDeletion>::iterator plugin_it =
+           preparedTriggerDeletions.begin ();
+         plugin_it != preparedTriggerDeletions.end (); ++plugin_it)
+      {
+      CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+      CPreparedTriggerDeletion & prepared = plugin_it->second;
+      const int iNewSize =
+        static_cast<int> (prepared.newTriggerArray.size ());
+      GetTriggerArray ().SetSize (
+        prepared.iOldArraySize > iNewSize ?
+          prepared.iOldArraySize : iNewSize);
+      prepared.bArrayPrepared = true;
+      }
+    }
+  catch (...)
+    {
+    for (map<CPlugin *, CPreparedTriggerDeletion>::iterator plugin_it =
+           preparedTriggerDeletions.begin ();
+         plugin_it != preparedTriggerDeletions.end (); ++plugin_it)
+      if (plugin_it->second.bArrayPrepared)
+        {
+        CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+        GetTriggerArray ().SetSize (plugin_it->second.iOldArraySize);
+        }
+    throw;
+    }
 
-  m_CurrentPlugin = pSavedPlugin;
+  for (map<CPlugin *, CPreparedTriggerDeletion>::iterator plugin_it =
+         preparedTriggerDeletions.begin ();
+       plugin_it != preparedTriggerDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    CPreparedTriggerDeletion & prepared = plugin_it->second;
+    GetTriggerArray ().SetSize (prepared.newTriggerArray.size ());
+    for (size_t i = 0; i < prepared.newTriggerArray.size (); i++)
+      GetTriggerArray ().SetAt (i, prepared.newTriggerArray [i]);
+    GetTriggerRevMap ().swap (prepared.newTriggerRevMap);
+    }
+
+  for (map<CPlugin *, TriggerDeletionMap>::iterator plugin_it =
+         triggerDeletions.begin ();
+       plugin_it != triggerDeletions.end (); ++plugin_it)
+    {
+    CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
+    for (TriggerDeletionMap::const_iterator trigger_it = plugin_it->second.begin ();
+         trigger_it != plugin_it->second.end ();
+         ++trigger_it)
+      {
+      VERIFY (GetTriggerMap ().RemoveKey (trigger_it->first.c_str ()));
+      RetireTrigger (trigger_it->second);
+      }
+    }
+
+  if (iDeletedNonTemporaryCount > 0)
+    SetModifiedFlag (TRUE);
 
   // check memory still OK
 //  _ASSERTE( _CrtCheckMemory( ) );
@@ -1006,7 +1074,7 @@ void CMUSHclientDoc::ProcessOneTriggerSequence (CString & strCurrentLine,
                                           bool & bNoLog,
                                           bool & bNoOutput,
                                           bool & bChangedColour,
-                                          CTriggerList & triggerList,
+                                          OneShotItemMap & triggerList,
                                           CString & strExtraOutput,
                                           ScriptItemMap & mapDeferredScripts,
                                           OneShotItemMap & mapOneShotItems)
@@ -1021,11 +1089,15 @@ POSITION pos;
 
   for (iItem = 0; iItem < GetTriggerArray ().GetSize (); iItem++)
     {
-    trigger_item = EvaluateTrigger (strCurrentLine, 
+    trigger_item = GetTriggerArray () [iItem];
+    CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
+    CTriggerExecutionGuard executingGuard (this, trigger_item);
+
+    trigger_item = EvaluateTrigger (strCurrentLine,
                                         strResponse,
-                                        iItem,
                                         iStartCol,
-                                        iEndCol);
+                                        iEndCol,
+                                        trigger_item);
     if (trigger_item)
       {  
 
@@ -1145,8 +1217,9 @@ POSITION pos;
 
       if (trigger_item->bOneShot)
         mapOneShotItems.push_back (
-            OneShotItem (m_CurrentPlugin, 
-                        (const char *) trigger_item->strInternalName));
+            OneShotItem (m_CurrentPlugin,
+                        (const char *) trigger_item->strInternalName,
+                        trigger_item->nCreationNumber));
 
 
       trigger_item->nMatched++;   // count trigger matches
@@ -1164,8 +1237,7 @@ POSITION pos;
         }
       else
         {
-        int iSavedDepth = m_iExecutionDepth;
-        m_iExecutionDepth = 0;    // no execution depth yet
+        CValueStateGuard<int> executionDepthGuard (m_iExecutionDepth, 0);
 
   #ifdef PANE
         /*
@@ -1176,8 +1248,8 @@ POSITION pos;
         */
   #endif  // PANE
           {
-          trigger_item->bExecutingScript = true;     // cannot be deleted now
-          m_iCurrentActionSource = eTriggerFired;
+          CValueStateGuard<unsigned short> actionSourceGuard
+            (m_iCurrentActionSource, eTriggerFired);
           SendTo (trigger_item->iSendTo, 
                   strResponse, 
                   trigger_item->bOmitFromOutput,
@@ -1186,11 +1258,7 @@ POSITION pos;
                   trigger_item->strVariable,
                   strExtraOutput
                   );
-          m_iCurrentActionSource = eUnknownActionSource;
-          trigger_item->bExecutingScript = false;     // can be deleted now
           }
-      
-        m_iExecutionDepth =  iSavedDepth;
         }    // not doing after the omitting
 
       // if colouring wanted, work our way through all lines to do it
@@ -1458,7 +1526,10 @@ POSITION pos;
         bNoOutput = true;
 
       if (!trigger_item->strProcedure.IsEmpty ())        // if we have a script routine
-         triggerList.AddTail (trigger_item);
+         triggerList.push_back
+           (OneShotItem (m_CurrentPlugin,
+                         (const char *) trigger_item->strInternalName,
+                         trigger_item->nCreationNumber));
 
       if (!trigger_item->bKeepEvaluating) // exit loop if no more evaluation wanted
         break;
@@ -1468,8 +1539,6 @@ POSITION pos;
         break;
 
       }   // end of successful evaluation
-    else
-      break;
     } // end of processing triggers
 
 
