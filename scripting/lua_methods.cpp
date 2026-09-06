@@ -1122,11 +1122,15 @@ static int L_CallPlugin (lua_State *L)
       }   // end of not calling ourselves
 
     CPluginCallGuard callGuard (pPlugin);
+    int iCallError;
+    CString strLuaError;
+    {
     CPluginContextGuard contextGuard (pDoc, pPlugin, true, true);
     
     // now call the routine in the plugin
 
-    if (CallLuaWithTraceBack (pL, n, LUA_MULTRET))   // true on error
+    iCallError = CallLuaWithTraceBack (pL, n, LUA_MULTRET);
+    if (iCallError)
       {
 
       // here for execution error in plugin function ...
@@ -1137,13 +1141,17 @@ static int L_CallPlugin (lua_State *L)
                                    sRoutine ); 
 
       // grab the Lua error from the stack before we clear it
-      CString strLuaError (lua_tostring(pL, -1));
+      strLuaError = lua_tostring (pL, -1);
 
       // this will display the error, and the error context
       LuaError (pL, "Run-time error", sRoutine, strType, strReason, pDoc);
 
       lua_settop (pL, 0);     // clean stack up
+      }
+    }
 
+    if (iCallError)
+      {
       // the error code for the caller (result value 1)
       lua_pushnumber (L, eErrorCallingPluginRoutine);
 
