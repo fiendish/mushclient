@@ -77,14 +77,10 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 #define TTM_SETWINDOWTHEME      CCM_SETWINDOWTHEME
 
 
-CString strMXP_menu_item [MXP_MENU_COUNT];
-
 #define ACTION_ALIAS 1    // dummy action type for alias menus
 
 // for conversion to Unicode
 static WCHAR sUnicodeText [MAX_LINE_WIDTH];
-
-int iAction = 0;
 
 /////////////////////////////////////////////////////////////////////////////
 // CMUSHView
@@ -275,6 +271,7 @@ BEGIN_MESSAGE_MAP(CMUSHView, CView)
 CMUSHView::CMUSHView()
 {
 
+
   m_selstart_line = 0;
   m_selstart_col = 0;
   m_selend_line = 0;
@@ -293,6 +290,7 @@ CMUSHView::CMUSHView()
   m_scroll_position = 0;
   m_mousedover = false;
   m_bInSelectionChanged = false;
+  m_iMXPMenuAction = 0;
   m_bottomview = NULL;
 
   m_iPauseStatus = ePauseUninitialised;
@@ -1989,21 +1987,17 @@ ASSERT_VALID(pDoc);
 
   } // end of CMUSHView::extend_selection
 
-int CompareMenu (const void * elem1, const void * elem2)
+static CString MXPMenuText (const CString & strAction)
   {
-  CString string1 = (*((CString *) elem1));
-  CString string2 = (*((CString *) elem2));
-
-  // strip off plugin IDs
   CStringList strList;
+  StringToList (strAction, ":", strList);
+  return strList.GetHead ();
+  }
 
-  StringToList (string1, ":", strList);
-  string1 = strList.GetHead ();
-
-  StringToList (string2, ":", strList);
-  string2 = strList.GetHead ();
-
-  return string1.CompareNoCase (string2);
+static bool CompareMenu (const CMXPMenuItem & item1,
+                         const CMXPMenuItem & item2)
+  {
+  return item1.m_strMenuText.CompareNoCase (item2.m_strMenuText) < 0;
 
   }   // end of CompareMenu
 
@@ -2014,6 +2008,8 @@ ASSERT_VALID(pDoc);
 
   if (!pDoc->m_FontHeight)
     return;
+
+  CPluginContextGuard pluginContextGuard (pDoc, NULL);
 
   CPoint wordPoint (point);
 
@@ -2066,13 +2062,14 @@ CPoint menupoint = point;
 
   pPopup->DeleteMenu (0, MF_BYPOSITION);  // get rid of dummy item
 
-  int i = 0;
+  CMXPMenuItemList menuItems;
+  menuItems.reserve (MXP_MENU_COUNT);
 
   CAlias * pAlias;
   CString strAliasName;
 
   for (pos = pDoc->m_AliasMap.GetStartPosition();
-       pos && i < MXP_MENU_COUNT;
+       pos && menuItems.size () < MXP_MENU_COUNT;
        )
      {
      pDoc->m_AliasMap.GetNextAssoc (pos, strAliasName, pAlias);
@@ -2081,21 +2078,24 @@ CPoint menupoint = point;
         !pAlias->bEnabled)
         continue;
 
-     // remember what to send if they click on it
-     strMXP_menu_item [i] = pAlias->strLabel;
-     i++;
+     CMXPMenuItem item;
+     item.m_strAction = pAlias->strLabel;
+     item.m_strMenuText = MXPMenuText (item.m_strAction);
+     item.m_strAliasKey = strAliasName;
+     item.m_iAliasCreationNumber = pAlias->nCreationNumber;
+     menuItems.push_back (item);
     } // end of all aliases
 
   // do plugins
   for (PluginListIterator pit = pDoc->m_PluginList.begin ();
-       pit != pDoc->m_PluginList.end () && i < MXP_MENU_COUNT;
+       pit != pDoc->m_PluginList.end () && menuItems.size () < MXP_MENU_COUNT;
        ++pit)
     {
     pDoc->m_CurrentPlugin = *pit;
 
     if (pDoc->m_CurrentPlugin->m_bEnabled)
       for (POSITION pos = pDoc->GetAliasMap ().GetStartPosition ();
-            pos && i < MXP_MENU_COUNT; )
+            pos && menuItems.size () < MXP_MENU_COUNT; )
         {
         pDoc->GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
 
@@ -2104,43 +2104,39 @@ CPoint menupoint = point;
             !pAlias->bEnabled)
             continue;
 
-         // remember what to send if they click on it
-         strMXP_menu_item [i] = pAlias->strLabel;
-         strMXP_menu_item [i] += ":";
-         strMXP_menu_item [i] += pDoc->m_CurrentPlugin->m_strID;  // need to know which plugin
-         i++;
+         CMXPMenuItem item;
+         item.m_strAction = pAlias->strLabel;
+         item.m_strAction += ":";
+         item.m_strAction += pDoc->m_CurrentPlugin->m_strID;
+         item.m_strMenuText = MXPMenuText (item.m_strAction);
+         item.m_strAliasKey = strAliasName;
+         item.m_strPluginID = pDoc->m_CurrentPlugin->m_strID;
+         item.m_iAliasCreationNumber = pAlias->nCreationNumber;
+         item.m_iPluginInstanceNumber =
+           pDoc->m_CurrentPlugin->m_iPluginInstanceNumber;
+         menuItems.push_back (item);
 
         }  // end of scanning plugin aliases
     } // end of doing plugins list
   pDoc->m_CurrentPlugin = NULL;
 
-  if (i == 0)
+  if (menuItems.empty ())
     {
      pPopup->AppendMenu (MF_STRING | MF_GRAYED, MXP_FIRST_MENU, "(no alias menu items)");
-     strMXP_menu_item [0].Empty ();
     }
   else
     {
-        // sort the array - otherwise we'll be all over the map :)
-    qsort (strMXP_menu_item,
-           i,
-           sizeof (CString),
-           CompareMenu);
+    sort (menuItems.begin (), menuItems.end (), CompareMenu);
 
-    for (int j = 0; j < i; j++)
+    for (size_t j = 0; j < menuItems.size (); j++)
       {
-      CString strMenu = Replace (strMXP_menu_item [j], "_", " ");
-
-      // strip off plugin id
-      CStringList strList;
-      StringToList (strMenu, ":", strList);
-      strMenu = strList.GetHead ();
+      CString strMenu = Replace (menuItems [j].m_strMenuText, "_", " ");
 
       // add menu item
-      pPopup->AppendMenu (MF_STRING | MF_ENABLED, MXP_FIRST_MENU + j, strMenu);
+      pPopup->AppendMenu (MF_STRING | MF_ENABLED,
+                          MXP_FIRST_MENU + static_cast<UINT> (j), strMenu);
 
-      // alias map lookup must be lower case
-      strMXP_menu_item [j].MakeLower ();
+      menuItems [j].m_strAction.MakeLower ();
       } // end of building menu
 
     } // end of some menu items
@@ -2152,17 +2148,17 @@ CPoint menupoint = point;
   ClientToScreen(&point);
 
   // without this line the auto-enable always set "no items" to active
-  Frame.m_bAutoMenuEnable  = FALSE;
+  CValueStateGuard<BOOL> autoMenuEnableGuard (Frame.m_bAutoMenuEnable, FALSE);
 
-  iAction = ACTION_ALIAS;
-  pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+  CValueStateGuard<int> actionGuard (m_iMXPMenuAction, ACTION_ALIAS);
+  CValueStateGuard<CMXPMenuItemList> itemsGuard (m_MXPMenuItems, menuItems);
+  const UINT nCommand = pPopup->TrackPopupMenu(
+                        TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
                         point.x,
                         point.y,
                         pWndPopupOwner);
-
-  // put things back how they were
-  Frame.m_bAutoMenuEnable  = TRUE;
-
+  if (nCommand)
+    OnMXPMenu (nCommand);
 
   } // end of CMUSHView::AliasMenu
 
@@ -3732,6 +3728,8 @@ ASSERT_VALID(pDoc);
           pPopup->DeleteMenu (0, MF_BYPOSITION);  // get rid of dummy item
 
           int iCount = MIN (actionsList.GetCount (), MXP_MENU_COUNT);
+          CMXPMenuItemList menuItems;
+          menuItems.reserve (iCount);
 
           // build up menu
           for (int i = 0; i < iCount; i++)
@@ -3754,19 +3752,26 @@ ASSERT_VALID(pDoc);
             if (i == 0)
               SetMenuDefaultItem(pPopup->m_hMenu, 0, MF_BYPOSITION);
 
-            // remember what to send if they click on it
-            strMXP_menu_item [i] = strAction;
+            CMXPMenuItem item;
+            item.m_strAction = strAction;
+            item.m_strMenuText = strHint;
+            menuItems.push_back (item);
             }
 
-          iAction = iStyle & ACTIONTYPE;
           while (pWndPopupOwner->GetStyle() & WS_CHILD)
             pWndPopupOwner = pWndPopupOwner->GetParent();
 
-
-          pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, 
-                                menupoint.x, 
+          CValueStateGuard<int> actionGuard
+            (m_iMXPMenuAction, iStyle & ACTIONTYPE);
+          CValueStateGuard<CMXPMenuItemList> itemsGuard
+            (m_MXPMenuItems, menuItems);
+          const UINT nCommand = pPopup->TrackPopupMenu(
+                                TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                menupoint.x,
                                 menupoint.y,
                                 pWndPopupOwner);
+          if (nCommand)
+            OnMXPMenu (nCommand);
 
           return;
           } // we have ACTION_SEND or ACTION_PROMPT
@@ -3788,17 +3793,25 @@ ASSERT_VALID(pDoc);
 
           SetMenuDefaultItem(pPopup->m_hMenu, 0, MF_BYPOSITION);
 
-          // remember what to send if they click on it
-          strMXP_menu_item [0] = pStyle->pAction->m_strAction;
+          CMXPMenuItem item;
+          item.m_strAction = pStyle->pAction->m_strAction;
+          item.m_strMenuText = pStyle->pAction->m_strAction;
+          CMXPMenuItemList menuItems (1, item);
 
-          iAction = iStyle & ACTIONTYPE;
           while (pWndPopupOwner->GetStyle() & WS_CHILD)
             pWndPopupOwner = pWndPopupOwner->GetParent();
 
-          pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, 
-                                menupoint.x, 
+          CValueStateGuard<int> actionGuard
+            (m_iMXPMenuAction, iStyle & ACTIONTYPE);
+          CValueStateGuard<CMXPMenuItemList> itemsGuard
+            (m_MXPMenuItems, menuItems);
+          const UINT nCommand = pPopup->TrackPopupMenu(
+                                TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                menupoint.x,
                                 menupoint.y,
                                 pWndPopupOwner);
+          if (nCommand)
+            OnMXPMenu (nCommand);
 
           return;
           }  // end of ACTION_HYPERLINK
@@ -5646,15 +5659,21 @@ void CMUSHView::OnMXPMenu (UINT nID)
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
 
+  const UINT iMenuItem = nID - MXP_FIRST_MENU;
+  if (iMenuItem >= m_MXPMenuItems.size ())
+    return;
+
+  const CMXPMenuItem menuItem = m_MXPMenuItems [iMenuItem];
+
   // send the appropriate menu item
 
-  switch (iAction)
+  switch (m_iMXPMenuAction)
     {
     case ACTION_SEND:
       {
       if (pDoc->CheckConnected ())
         return;
-      CString strAction = strMXP_menu_item [nID - MXP_FIRST_MENU];
+      CString strAction = menuItem.m_strAction;
       if (pDoc->m_bHyperlinkAddsToCommandHistory)
         m_bottomview->AddToCommandHistory (strAction);
       pDoc->m_tLastPlayerInput = CTime::GetCurrentTime();   // for <afk> tests
@@ -5664,14 +5683,14 @@ ASSERT_VALID(pDoc);
       break;  // end of ACTION_SEND
 
     case ACTION_PROMPT:
-      if (m_bottomview->CheckTyping (pDoc, strMXP_menu_item [nID - MXP_FIRST_MENU]))
-        return;             
-      m_bottomview->SetCommand (strMXP_menu_item [nID - MXP_FIRST_MENU]);
+      if (m_bottomview->CheckTyping (pDoc, menuItem.m_strAction))
+        return;
+      m_bottomview->SetCommand (menuItem.m_strAction);
       break; // end of ACTION_PROMPT
 
     case ACTION_HYPERLINK:
       {
-      CString strAction = strMXP_menu_item [nID - MXP_FIRST_MENU];
+      CString strAction = menuItem.m_strAction;
 
       // don't let them slip in arbitrary OS commands
       if (strAction.Left (7).CompareNoCase ("http://") != 0 &&
@@ -5693,37 +5712,29 @@ ASSERT_VALID(pDoc);
     case ACTION_ALIAS:
       {
       CAlias * pAlias;
-      CString strLabel;
-      
-      // strip off plugin id
-      CStringList strList;
-      StringToList (strMXP_menu_item [nID - MXP_FIRST_MENU], ":", strList);
-      strLabel = strList.GetHead ();
+      CPlugin * pAliasPlugin = NULL;
 
-      // alias might be in a plugin
-      switch (strList.GetCount ())
+      if (menuItem.m_strPluginID.IsEmpty ())
         {
-        case 1:   // main world
-            if (!pDoc->m_AliasMap.Lookup (strLabel, pAlias))
-              return;   // not there? strange
-        break;
+        if (!pDoc->m_AliasMap.Lookup (menuItem.m_strAliasKey, pAlias))
+          return;
+        }
+      else
+        {
+        CPlugin * pPlugin = pDoc->GetPluginInstance
+          (menuItem.m_strPluginID, menuItem.m_iPluginInstanceNumber);
+        if (!pPlugin ||
+            !pPlugin->m_AliasMap.Lookup (menuItem.m_strAliasKey, pAlias))
+          return;
+        pAliasPlugin = pPlugin;
+        }
 
-        case 2:   // plugin
-          {
-            CString strPluginID;
-            strPluginID = strList.GetTail ();
-            CPlugin * pPlugin = pDoc->GetPlugin (strPluginID);
-            if (!pPlugin)
-              return;   // plugin does not exist? strange
-            if (!pPlugin->m_AliasMap.Lookup (strLabel, pAlias))
-              return;   // not there? strange
-          pDoc->m_CurrentPlugin = pPlugin;     // remember plugin so alias executes in correct space
-          }
+      if (pAlias->nCreationNumber != menuItem.m_iAliasCreationNumber)
+        return;
 
-        break;
-            default:   return;   // not 1 or 2 items? very strange
-        } // end of switch
-
+      CPluginContextGuard pluginContextGuard (pDoc, pAliasPlugin);
+      CPluginCallGuard pluginCallGuard (pAliasPlugin, true);
+      CAliasExecutionGuard executingGuard (pDoc, pAlias);
 
       CString strAction;
 
@@ -5763,10 +5774,7 @@ ASSERT_VALID(pDoc);
             CString strClipboard;
 
             if (!GetClipboardContents (strClipboard, pDoc->m_bUTF_8))
-              {
-              pDoc->m_CurrentPlugin = NULL;
               return;
-              }
 
         // copy up to the percent sign
 
@@ -5831,7 +5839,6 @@ ASSERT_VALID(pDoc);
           if (strName.IsEmpty ())
             {
             ::TMessageBox("@ must be followed by a variable name");
-            pDoc->m_CurrentPlugin = NULL;
             return;
             }
 
@@ -5841,7 +5848,6 @@ ASSERT_VALID(pDoc);
           if (!pDoc->m_VariableMap.Lookup (strName, variable_item))
             {
             ::UMessageBox(TFormat ("Variable '%s' is not defined.", (LPCTSTR) strName));
-            pDoc->m_CurrentPlugin = NULL;
             return;
             }
 
@@ -5875,7 +5881,7 @@ ASSERT_VALID(pDoc);
             {
             list<double> nparams;
             list<string> sparams;
-            sparams.push_back ((LPCTSTR) strMXP_menu_item [nID - MXP_FIRST_MENU]);
+            sparams.push_back ((LPCTSTR) menuItem.m_strAction);
             sparams.push_back ((LPCTSTR) pAlias->name);
             pDoc->GetScriptEngine ()->ExecuteLua (pAlias->dispid, 
                                            pAlias->strProcedure, 
@@ -5902,7 +5908,7 @@ ASSERT_VALID(pDoc);
             COleVariant args [eArgCount];
             DISPPARAMS params = { args, NULL, eArgCount, 0 };
 
-            args [eAliasName] = strMXP_menu_item [nID - MXP_FIRST_MENU];
+            args [eAliasName] = menuItem.m_strAction;
             args [eInputLine] = pAlias->name;
 
             // --------------- set up wildcards array ---------------------------
@@ -5932,18 +5938,18 @@ ASSERT_VALID(pDoc);
 
       CString strExtraOutput;
 
-      pDoc->m_iCurrentActionSource = eUserMenuAction;
+      {
+      CValueStateGuard<unsigned short> actionSourceGuard
+        (pDoc->m_iCurrentActionSource, eUserMenuAction);
 
-      pDoc->SendTo (pAlias->iSendTo, 
-              strAction, 
-              pAlias->bOmitFromOutput,
-              pAlias->bOmitFromLog,
-              TFormat ("Alias: %s", (LPCTSTR) pAlias->strLabel),
-              pAlias->strVariable,
-              strExtraOutput
-              );
-
-      pDoc->m_iCurrentActionSource = eUnknownActionSource;
+      pDoc->SendTo (pAlias->iSendTo,
+                    strAction,
+                    pAlias->bOmitFromOutput,
+                    pAlias->bOmitFromLog,
+                    TFormat ("Alias: %s", (LPCTSTR) pAlias->strLabel),
+                    pAlias->strVariable,
+                    strExtraOutput);
+      }
 
       if (!strExtraOutput.IsEmpty ())
          pDoc->DisplayMsg (strExtraOutput, strExtraOutput.GetLength (), COMMENT);
@@ -5953,9 +5959,8 @@ ASSERT_VALID(pDoc);
       pAlias->nMatched++;   // count alias matches
 
       }
-      pDoc->m_CurrentPlugin = NULL;     // no plugin active right now
       break;  // end of ACTION_ALIAS
-    } // end of switch on iAction
+    } // end of switch on m_iMXPMenuAction
 
   // unpause the output window if wanted
   if (pDoc->m_bUnpauseOnSend && m_freeze)
