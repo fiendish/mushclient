@@ -36,6 +36,7 @@ protected:
   BOOL m_reverse;
 
   CImageList m_imglIcons;
+  CArray<__int64, __int64> m_DocumentNumbers;
 
 // Operations
 public:
@@ -60,6 +61,7 @@ protected:
 #endif
 
   CMUSHclientDoc * GetSelectedWorld (void);
+  CMUSHclientDoc * GetWorldForIndex (const int iIndex) const;
 
   static int CALLBACK CompareFunc ( LPARAM lParam1, 
                                     LPARAM lParam2,
