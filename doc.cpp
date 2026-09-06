@@ -1047,6 +1047,8 @@ CString str;
 
     } // end of switch
 
+  m_iConnectionAttemptNumber++;
+
 	m_bEnableAutoSay = FALSE;		// auto-say off at start of session
 
   m_bDisconnectOK = false;    // not OK to disconnect
@@ -6696,8 +6698,9 @@ void CMUSHclientDoc::SendTo (
 
 bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
   {
+  char * pNewHostStruct = new char [MAXGETHOSTSTRUCT];
   delete [] m_pGetHostStruct;   // delete buffer just in case
-  m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
+  m_pGetHostStruct = pNewHostStruct;
 
   if (!m_pGetHostStruct)
     {
@@ -6706,11 +6709,14 @@ bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
     }
 
   if (Frame.GetSafeHwnd ())   // forget it if we don't have a window yet
+    {
+    m_iNameLookupGeneration++;
     m_hNameLookup = WSAAsyncGetHostByName (Frame.GetSafeHwnd (),
                                            WM_USER_HOST_NAME_RESOLVED,
                                            sName,
                                            m_pGetHostStruct,
                                            MAXGETHOSTSTRUCT);
+    }
 
  if (!m_hNameLookup)
    {
@@ -7402,7 +7408,12 @@ void CMUSHclientDoc::ContinueSSLHandshake (void)
   OnConnectionDisconnect ();
 
   // defer the fallback prompt via PostMessage so we're not inside a socket callback
-  Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT, (WPARAM) this, 0);
+  CTLSFallbackNotification * pNotification = new CTLSFallbackNotification;
+  pNotification->m_iDocumentNumber = m_iUniqueDocumentNumber;
+  pNotification->m_iConnectionAttemptNumber = m_iConnectionAttemptNumber;
+  if (!Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT,
+                          (WPARAM) pNotification, 0))
+    delete pNotification;
 
   }   // end of CMUSHclientDoc::ContinueSSLHandshake
 
@@ -7861,15 +7872,10 @@ bool CMUSHclientDoc::PlaySoundFile (CString strSound)
   // stop infinite loops
   if (!m_bInPlaySoundFilePlugin)
     {
-    m_bInPlaySoundFilePlugin = true;
+    CBoolStateGuard playSoundGuard (m_bInPlaySoundFilePlugin, true);
     
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInPlaySoundFilePlugin = false;
-        return true;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInPlaySoundFilePlugin = false;
+      return true;   // handled by plugin? don't do our own sound
     }   // of not in plugin already
 
   // default sound-play mechanism
@@ -7883,16 +7889,11 @@ void CMUSHclientDoc::CancelSound (void)
   // stop infinite loops
   if (!m_bInCancelSoundFilePlugin)
     {
-    m_bInCancelSoundFilePlugin = true;
+    CBoolStateGuard cancelSoundGuard (m_bInCancelSoundFilePlugin, true);
 
     CString strSound;   // deliberately the empty string
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInCancelSoundFilePlugin = false;
-        return;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInCancelSoundFilePlugin = false;
+      return;   // handled by plugin? don't do our own sound
     } // end of not in plugin already
 
   // default sound-cancel mechanism

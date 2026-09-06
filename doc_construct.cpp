@@ -80,9 +80,15 @@ int i;
   m_bPluginProcessingCommand = false;
   m_bPluginProcessingSend = false;
   m_bPluginProcessingSent = false;
+  m_bInPluginListChanged = false;
+  m_bPluginListChangedPending = false;
+  m_iPluginListChangedDeferralDepth = 0;
+  m_bPluginListChangedDeferred = false;
   m_bInScreendraw = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
+  m_iConnectionAttemptNumber = 0;
+  m_iNameLookupGeneration = 0;
   m_iNextChatID = 0;
   m_tLastMessageTime = 0;
   m_tLastGroupMessageTime = 0;
@@ -390,6 +396,7 @@ int i;
   m_ScriptEngine = NULL;
 
   m_bInScriptFileChanged = false;
+  m_bScriptFileChangedPending = false;
   m_pThread = NULL;
   m_bSyntaxErrorOnly = false;
 

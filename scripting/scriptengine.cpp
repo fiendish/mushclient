@@ -20,7 +20,7 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
                               COleVariant * result    // result of call
                               )
   {
-
+  CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // If Lua, we may have been called with no arguments, so just do that
   if (L)
@@ -51,13 +51,13 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
   if (dispid == DISPID_UNKNOWN)
     return false;
 
-  strProcedure = szProcedure;
-  strType = szType;
-  strReason = szReason;
-  bImmediate = false;
+  CValueStateGuard<CString> procedureGuard (strProcedure, CString (szProcedure));
+  CValueStateGuard<CString> typeGuard (strType, CString (szType));
+  CValueStateGuard<CString> reasonGuard (strReason, CString (szReason));
+  CValueStateGuard<bool> immediateGuard (bImmediate, false);
 
-  unsigned short iOldStyle = m_pDoc->m_iNoteStyle;
-  m_pDoc->m_iNoteStyle = NORMAL;    // back to default style
+  CValueStateGuard<unsigned short> noteStyleGuard
+    (m_pDoc->m_iNoteStyle, NORMAL);    // back to default style
 
   HRESULT hr;
 
@@ -91,12 +91,6 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
       ::UMessageBox (TFormat ("Script engine problem invoking subroutine \"%s\" when %s",
                                (LPCTSTR) szProcedure,
                                (LPCTSTR) szReason));
-      strProcedure.Empty ();
-      strType.Empty ();
-      strReason.Empty ();
-      bImmediate = true;
-
-      m_pDoc->m_iNoteStyle = iOldStyle;
       return true;
       }
     } // end of having script engine
@@ -109,14 +103,14 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
     finish.QuadPart = 0;
     }
 
-  if (iReason != eDontChangeAction)
-    m_pDoc->m_iCurrentActionSource = iReason;
+  {
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (m_pDoc->m_iCurrentActionSource,
+     iReason == eDontChangeAction ? m_pDoc->m_iCurrentActionSource : iReason);
 
   hr = m_pDispatch->Invoke (dispid, IID_NULL, 0, 
                             DISPATCH_METHOD, &params, result, &ExcepInfo, &ArgErr);
-
-  if (iReason != eDontChangeAction)
-    m_pDoc->m_iCurrentActionSource = eUnknownActionSource;
+  }
 
   if (hr == S_OK && App.m_iCounterFrequency)
     {
@@ -148,13 +142,6 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
                                (LPCTSTR) szReason));
     }   // end of bad invoke
 
-
-  strProcedure.Empty ();
-  strType.Empty ();
-  strReason.Empty ();
-  bImmediate = true;
-
-  m_pDoc->m_iNoteStyle = iOldStyle;
 
   return hr != S_OK;    // true on error
 
@@ -407,11 +394,13 @@ WCHAR charWorld[]=L"world";
 
 bool CScriptEngine::Parse (const CString & strCode, const CString & strWhat)
   {
+  CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
-  if (strWhat == "Script file" || strWhat == "Plugin")
-    bImmediate = false;
-  else
-    bImmediate = true;
+  CValueStateGuard<CString> procedureGuard (strProcedure, CString ());
+  CValueStateGuard<CString> typeGuard (strType, CString ());
+  CValueStateGuard<CString> reasonGuard (strReason, CString ());
+  CValueStateGuard<bool> immediateGuard
+    (bImmediate, !(strWhat == "Script file" || strWhat == "Plugin"));
 
  // Do Lua differently
   if (L)

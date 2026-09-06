@@ -46,6 +46,15 @@ class CTextDocument;
 
 extern COLORREF xterm_256_colours [256];
 
+struct CDeferredMessage
+  {
+  MSG m_msg;
+  __int64 m_iDocumentNumber;
+  HANDLE m_hLookup;
+  unsigned long m_iGeneration;
+  long m_iChatID;
+  };
+
 class CMUSHclientApp : public CWinApp
 {
 public:
@@ -67,6 +76,15 @@ public:
 #endif // PANE
 	CMultiDocTemplate* m_pActivityDocTemplate;
 	CMultiDocTemplate* m_pNormalDocTemplate;    // text document
+
+  deque<CDeferredMessage> m_DeferredMessages;
+  deque<__int64> m_DeferredTextDocumentCloses;
+  void DeferMessageUntilIdle (const MSG & msg,
+                              __int64 iDocumentNumber = 0,
+                              HANDLE hLookup = NULL,
+                              unsigned long iGeneration = 0,
+                              long iChatID = 0);
+  void DeferTextDocumentClose (__int64 iDocumentNumber);
 
   CAtomicElementMap  m_ElementMap;   // MXP elements we know of (eg. <b> )
   CMapStringToString m_EntityMap;    // MXP entities we know of (eg. &lt; )

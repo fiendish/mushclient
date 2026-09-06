@@ -27,7 +27,8 @@ IMPLEMENT_DYNAMIC(CChatSocket, CAsyncSocket)
 CChatSocket::CChatSocket(CMUSHclientDoc* pDoc)
 {
 	m_pDoc = pDoc;
-  m_hNameLookup = NULL;
+	m_hNameLookup = NULL;
+  m_iNameLookupGeneration = 0;
   m_pGetHostStruct = NULL;
   ZeroMemory (&m_ServerAddr, sizeof m_ServerAddr);
   m_bDeleteMe = false;  

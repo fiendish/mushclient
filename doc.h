@@ -1208,7 +1208,9 @@ public:
 
   HANDLE      m_hNameLookup;
   char *      m_pGetHostStruct;
+  unsigned long m_iNameLookupGeneration;
   int         m_iConnectPhase;    // see enum above
+  unsigned long m_iConnectionAttemptNumber;
 
 
 // chatting
@@ -1257,6 +1259,7 @@ public:
 	HANDLE	m_pThread;			// Notification thread
 	CEvent  m_eventScriptFileChanged;		// script file changed thread event
   bool m_bInScriptFileChanged;
+  bool m_bScriptFileChangedPending;
   CTime m_timeScriptFileMod;
 
   CString m_strStatusMessage;   // "ready" or user-supplied message
@@ -1332,6 +1335,10 @@ public:
   bool        m_bPluginProcessingCommand; // plugin is doing ON_PLUGIN_COMMAND
   bool        m_bPluginProcessingSend; // plugin is doing ON_PLUGIN_SEND
   bool        m_bPluginProcessingSent; // plugin is doing ON_PLUGIN_SENT
+  bool        m_bInPluginListChanged;
+  bool        m_bPluginListChangedPending;
+  int         m_iPluginListChangedDeferralDepth;
+  bool        m_bPluginListChangedDeferred;
   bool        m_bInScreendraw;
 
   CString     m_strLastCommandSent;   // for spam prevention
@@ -1936,7 +1943,7 @@ public:
   bool CreateScriptEngine();
   void DisableScripting (void);
   void CreateMonitoringThread();
-	static void ThreadFunc(LPVOID pParam);
+	static unsigned __stdcall ThreadFunc(void * pParam);
   void OnScriptFileChanged(const bool bForce = false);
   DISPID GetProcedureDispid (const CString & strName, 
                              const CString & strType,
@@ -2121,6 +2128,10 @@ public:
                     const char * sText);
 
   void PluginListChanged (void);
+  void BeginPluginListChangedDeferral (void);
+  bool EndPluginListChangedDeferral (void);
+  CPlugin * GetPluginInstance (LPCTSTR PluginID,
+                               __int64 iPluginInstanceNumber);
 
   CString RecallText (const CString strSearchString,   // what to search for
                       const bool bMatchCase,

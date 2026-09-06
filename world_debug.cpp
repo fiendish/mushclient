@@ -1773,8 +1773,7 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
 
   CString strPluginID;
 
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;
+  CPluginContextGuard pluginContextGuard (this, NULL);
 
   // if the argument starts with _<plugin_id>_
   // eg. _584f2e481b30ea09e4a32537_triggerlist
@@ -1794,7 +1793,6 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
     if (!m_CurrentPlugin)
       {
       Note (TFormat ("Plugin ID %s does not exist.", (LPCTSTR) strPluginID.Mid (1, PLUGIN_UNIQUE_ID_LENGTH)));
-      m_CurrentPlugin = pSavedPlugin;
       return;
       }    // if not found
 
@@ -2519,9 +2517,6 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
 
   else
     Note (TFormat ("DebugHelper: %s, %s", (LPCTSTR) strAction,(LPCTSTR) strArgument));
-
-  // put current plugin back
-  m_CurrentPlugin = pSavedPlugin;
 
   } // end of CMUSHclientDoc::DebugHelper
 
