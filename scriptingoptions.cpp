@@ -942,17 +942,29 @@ void CMUSHclientDoc::SetAlphaDefaults (const bool bDoSpecial)
 void CMUSHclientDoc::AllocateConfigurationArrays (void)
   {
 int i; 
-
-  m_NumericConfiguration.SetSize (NUMITEMS (OptionsTable));
+std::unique_ptr<CNumericConfiguration> numericItems [NUMITEMS (OptionsTable)];
+std::unique_ptr<CAlphaConfiguration> alphaItems [NUMITEMS (AlphaOptionsTable)];
 
   for (i = 0; i < NUMITEMS (OptionsTable); i++)
-     m_NumericConfiguration.SetAt (i, new CNumericConfiguration);
-
-
-  m_AlphaConfiguration.SetSize (NUMITEMS (AlphaOptionsTable));
+    numericItems [i].reset (new CNumericConfiguration);
 
   for (i = 0; i < NUMITEMS (AlphaOptionsTable); i++)
-     m_AlphaConfiguration.SetAt (i, new CAlphaConfiguration);
+    alphaItems [i].reset (new CAlphaConfiguration);
+
+  m_NumericConfiguration.SetSize (NUMITEMS (OptionsTable));
+  m_AlphaConfiguration.SetSize (NUMITEMS (AlphaOptionsTable));
+
+  for (i = 0; i < NUMITEMS (OptionsTable); i++)
+    {
+    m_NumericConfiguration.SetAt (i, numericItems [i].get ());
+    numericItems [i].release ();
+    }
+
+  for (i = 0; i < NUMITEMS (AlphaOptionsTable); i++)
+    {
+    m_AlphaConfiguration.SetAt (i, alphaItems [i].get ());
+    alphaItems [i].release ();
+    }
 
   }
 
