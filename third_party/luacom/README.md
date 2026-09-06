@@ -4,10 +4,12 @@
 `luacom/` is generated from the full commit ID in `manifest.json` and the ordered
 patch files listed there. Do not edit the generated files without a patch.
 
-The upstream `integration/mushclient.json` maps every `src/library` file, the
-public header, and `COPYRIGHT` to the flat host directory. The import uses exact
-Git blob bytes and file modes. It does not copy files from an upstream working
-tree. The current inventory has 42 files.
+MUSHclient owns the import mapping in `tools/luacom_vendor.py`. It maps every
+file below upstream `src/library` to its file name in `luacom/`, then adds the
+public `include/luacom.h` header and `COPYRIGHT`. Duplicate file names stop the
+import. LuaCOM needs no host-specific export manifest or integration code.
+The import uses exact Git blob bytes and file modes. It does not copy files from
+an upstream working tree. The current inventory has 42 files.
 
 Only `luacom.cpp` has host patches:
 
@@ -63,7 +65,7 @@ python3 tools/luacom_vendor.py check --index
 ```
 
 `apply` explicitly replaces edits to managed source files. It rejects extra
-files. Patch files cannot add, delete, rename, or change the modes of exported
+files. Patch files cannot add, delete, rename, or change the modes of imported
 files. Every patch must be declared. Send shared changes upstream instead of
 adding a host patch.
 

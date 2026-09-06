@@ -2,7 +2,6 @@
   "version": 1,
   "repository": "https://github.com/fiendish/luacom.git",
   "revision": "aef6c830c9327133647251217759fc89159f5c0d",
-  "export": "integration/mushclient.json",
   "patches": [
     "patches/0001-retain-host-registration.patch",
     "patches/0002-retain-host-script-loading.patch",

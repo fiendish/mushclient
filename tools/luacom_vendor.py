@@ -13,7 +13,6 @@ from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "https://github.com/fiendish/luacom.git"
-EXPORT = "integration/mushclient.json"
 PIN = Path("third_party/luacom/manifest.json")
 
 
@@ -34,9 +33,9 @@ def revision(value):
 
 def read_pin(root):
     pin = json.loads((root / PIN).read_bytes())
-    if set(pin) != {"version", "repository", "revision", "export", "patches"}:
+    if set(pin) != {"version", "repository", "revision", "patches"}:
         raise ValueError("Unexpected LuaCOM manifest fields")
-    if pin["version"] != 1 or pin["repository"] != REPOSITORY or pin["export"] != EXPORT:
+    if pin["version"] != 1 or pin["repository"] != REPOSITORY:
         raise ValueError("Unsupported LuaCOM source manifest")
     revision(pin["revision"])
     names = pin["patches"]
@@ -72,12 +71,6 @@ def source_repository(commit, source=None):
 
 
 def upstream_files(repository, commit):
-    export = json.loads(git(repository, "show", commit + ":" + EXPORT))
-    if set(export) != {"version", "files"} or export["version"] != 1:
-        raise ValueError("Unsupported LuaCOM export inventory")
-    files = export["files"]
-    if not isinstance(files, dict) or not files:
-        raise ValueError("LuaCOM export inventory is empty")
     inventory = {}
     tree = git(repository, "ls-tree", "-r", "-z", commit, "--", "src/library", "include/luacom.h", "COPYRIGHT")
     for entry in tree.split(b"\0"):
@@ -86,16 +79,20 @@ def upstream_files(repository, commit):
         metadata, name = entry.split(b"\t", 1)
         mode, kind, oid = metadata.split()
         if mode not in {b"100644", b"100755"} or kind != b"blob":
-            raise ValueError("LuaCOM exports must be regular files")
+            raise ValueError("LuaCOM source paths must be regular files")
         inventory[name.decode()] = (mode.decode(), oid.decode())
-    if set(files) != set(inventory):
-        raise ValueError("LuaCOM export omits or adds files outside the complete source inventory")
+    if not {"include/luacom.h", "COPYRIGHT"} <= set(inventory) or not any(
+            name.startswith("src/library/") for name in inventory):
+        raise ValueError("LuaCOM source must include the library, public header, and license")
+    # The consumer owns the import layout. LuaCOM needs no export manifest or
+    # other knowledge of this host. Include every library blob, without filters.
+    files = {source: source.rsplit("/", 1)[-1] for source in inventory}
     if len(set(files.values())) != len(files):
-        raise ValueError("Duplicate LuaCOM export destination")
+        raise ValueError("Duplicate LuaCOM import destination")
     result = {}
     for source, destination in files.items():
         if not isinstance(destination, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", destination):
-            raise ValueError("LuaCOM export destinations must be plain file names")
+            raise ValueError("LuaCOM import destinations must be plain file names")
         mode, oid = inventory[source]
         result[destination] = VendorFile(mode, git(repository, "cat-file", "blob", oid))
     return result
@@ -123,11 +120,11 @@ def reconstruct(root, pin, repository):
                     int(removed)
                     changed.append(path.decode())
             if not changed or not set(changed) <= set(files):
-                raise ValueError("Host patches may change only exported LuaCOM files")
+                raise ValueError("Host patches may change only imported LuaCOM files")
             git(directory, "apply", "--check", "--whitespace=error-all", str(patch))
             git(directory, "apply", "--whitespace=error-all", str(patch))
         if {p.name for p in directory.iterdir()} != set(files):
-            raise ValueError("Host patches must preserve the exported file inventory")
+            raise ValueError("Host patches must preserve the imported file inventory")
         result = {}
         for name in files:
             path = directory / name

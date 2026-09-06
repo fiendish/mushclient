@@ -15,7 +15,7 @@ class PublicationTests(unittest.TestCase):
         self.target, self.base, self.head = '1' * 40, '2' * 40, '3' * 40
         self.branch = 'update-luacom-' + self.target
         self.pin = dict(version=1, repository=vendor.REPOSITORY, revision='0' * 40,
-                        export=vendor.EXPORT, patches=[])
+                        patches=[])
         self.login = 'fiendish'
         self.prs = []
         self.remote = None

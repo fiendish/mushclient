@@ -24,7 +24,6 @@ class VendorTests(unittest.TestCase):
             self.git(directory, "config", "user.name", "Vendor test")
             self.git(directory, "config", "user.email", "vendor@example.invalid")
             self.git(directory, "config", "core.autocrlf", "false")
-        self.files = {"src/library/example.cpp": "example.cpp", "include/luacom.h": "luacom.h", "COPYRIGHT": "COPYRIGHT"}
         for name, content in {
             "src/library/example.cpp": b"first\nshared\nlast\n",
             "include/luacom.h": b"header\r\n",
@@ -34,23 +33,17 @@ class VendorTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
         (self.upstream / "COPYRIGHT").chmod(0o755)
-        self.export()
         self.commit = self.commit_upstream()
         self.directory = self.host / vendor.PIN.parent
         (self.directory / "patches").mkdir(parents=True)
         self.patch(b"first\nshared\nlast\n", b"first\nhost\nlast\n")
         self.pin = {"version": 1, "repository": vendor.REPOSITORY, "revision": self.commit,
-                    "export": vendor.EXPORT, "patches": ["patches/host.patch"]}
+                    "patches": ["patches/host.patch"]}
         self.save_pin()
         vendor.run(self.host, "apply", self.upstream)
 
     def git(self, directory, *arguments):
         return vendor.git(directory, *arguments)
-
-    def export(self):
-        path = self.upstream / vendor.EXPORT
-        path.parent.mkdir(exist_ok=True)
-        path.write_text(json.dumps({"version": 1, "files": self.files}))
 
     def commit_upstream(self):
         self.git(self.upstream, "add", ".")
@@ -135,16 +128,15 @@ class VendorTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.check()
 
-    def test_export_inventory_must_be_complete(self):
-        (self.upstream / "src/library/added.h").write_bytes(b"new source\n")
+    def test_public_header_is_required(self):
+        (self.upstream / "include/luacom.h").unlink()
         self.pin["revision"] = self.commit_upstream()
         self.save_pin()
-        with self.assertRaisesRegex(ValueError, "omits or adds"):
+        with self.assertRaisesRegex(ValueError, "library, public header, and license"):
             self.check()
 
     def test_duplicate_destinations_fail(self):
-        self.files["COPYRIGHT"] = "luacom.h"
-        self.export()
+        (self.upstream / "src/library/luacom.h").write_bytes(b"conflicting header\n")
         self.pin["revision"] = self.commit_upstream()
         self.save_pin()
         with self.assertRaisesRegex(ValueError, "Duplicate"):
@@ -236,14 +228,14 @@ class VendorTests(unittest.TestCase):
             vendor.run(self.host, "apply", self.upstream)
 
     def test_upstream_inventory_additions_and_removals(self):
-        (self.upstream / "include/luacom.h").unlink()
-        del self.files["include/luacom.h"]
+        (self.upstream / "src/library/old.h").write_bytes(b"old source\n")
+        intermediate = self.commit_upstream()
+        vendor.run(self.host, "update", self.upstream, intermediate)
+        (self.upstream / "src/library/old.h").unlink()
         (self.upstream / "src/library/new.h").write_bytes(b"new source\r\n")
-        self.files["src/library/new.h"] = "new.h"
-        self.export()
         candidate = self.commit_upstream()
         vendor.run(self.host, "update", self.upstream, candidate)
-        self.assertFalse((self.host / "luacom/luacom.h").exists())
+        self.assertFalse((self.host / "luacom/old.h").exists())
         self.assertEqual((self.host / "luacom/new.h").read_bytes(), b"new source\r\n")
         self.check()
 
