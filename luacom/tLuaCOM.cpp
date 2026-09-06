@@ -14,6 +14,7 @@
 #include "tLuaCOMException.h"
 #include "tCOMUtil.h"
 #include "LuaCompat.h"
+#include <exception>
 
 #if defined(__CYGWIN__) || defined(__MINGW32__)
 #include <initguid.h>
@@ -41,6 +42,39 @@ private:
   EXCEPINFO& info;
 };
 }
+
+// Keep call resources outside the protected Lua frame. Lua errors can skip
+// C++ destructors when the Lua runtime uses longjmp.
+struct tLuaCOM::CallContext
+{
+  CallContext(tLuaCOM* object, DISPID dispid, int invkind,
+              FUNCDESC* funcdesc, tLuaObjList params)
+    : object(object), dispid(dispid), invkind(invkind), funcdesc(funcdesc),
+      params(params), exception_strings(excepinfo)
+  {
+    ZeroMemory(&dispparams, sizeof(dispparams));
+    VariantInit(&result);
+    ZeroMemory(&excepinfo, sizeof(excepinfo));
+  }
+
+  ~CallContext()
+  {
+    object->typehandler->releaseVariants(&dispparams);
+    VariantClear(&result);
+  }
+
+  tLuaCOM* object;
+  DISPID dispid;
+  int invkind;
+  FUNCDESC* funcdesc;
+  tLuaObjList params;
+  tCOMPtr<IDispatch> active_dispatch;
+  DISPPARAMS dispparams;
+  VARIANTARG result;
+  EXCEPINFO excepinfo;
+  ExceptionInfoStrings exception_strings;
+  std::exception_ptr exception;
+};
 
 tLuaCOM::tLuaCOM(lua_State* L,
                  IDispatch *pdisp_arg,
@@ -372,128 +406,151 @@ bool tLuaCOM::getConstant(lua_State* L, const char* name)
 bool tLuaCOM::getDISPID(const char* name, DISPID* dispid)
 {
    checkComObject();
+   tCOMPtr<IDispatch> active_dispatch(pdisp);
 
    HRESULT hr;
    wchar_t* w_name = (wchar_t*) malloc( (strlen(name) + 1) * sizeof(wchar_t));
    mbstowcs(w_name,name,strlen(name)+1);
 
-   hr = pdisp->GetIDsOfNames(IID_NULL, &w_name, 1,
+   hr = active_dispatch->GetIDsOfNames(IID_NULL, &w_name, 1,
                           LOCALE_SYSTEM_DEFAULT,dispid);
    free(w_name);
    
    return SUCCEEDED(hr);
 }
 
-int tLuaCOM::call(lua_State* L, 
+int tLuaCOM::call(lua_State* L,
                   DISPID dispid,
                   int invkind,
                   FUNCDESC *pfuncdesc,
                   tLuaObjList params)
-{ 
+{
   checkComObject();
+  const int stack_top = lua_gettop(L);
+  if(!lua_checkstack(L, stack_top + 2))
+    LUACOM_EXCEPTION(MALLOC_ERROR);
 
-  tUtil::log_verbose("tLuaCOM.call", "about to call DISPID 0x%.8x", dispid);
+  int status;
+  std::exception_ptr exception;
+  {
+    CallContext context(this, dispid, invkind, pfuncdesc, params);
 
-   HRESULT hr             = 0;
-   unsigned int i         = 0;
-   UINT ArgErr            = 0;
-   
-   // number of return values (required to interface with Lua)
-   int num_retvals        = 0;
+    // Prepare the protected frame before retaining any COM resources.
+    lua_pushlightuserdata(L, &context);
+    lua_pushcclosure(L, protectedCall, 1);
+    for(int i = 1; i <= stack_top; i++)
+      lua_pushvalue(L, i);
 
-   DISPPARAMS dispparams;
-   VARIANTARG result;
-   EXCEPINFO excepinfo;
-      
-   VariantInit(&result);
-   ZeroMemory(&excepinfo, sizeof(excepinfo));
+    try
+    {
+      // Lua allocation can run finalizers while the frame is prepared.
+      checkComObject();
+      context.active_dispatch = pdisp;
+      status = lua_pcall(L, stack_top, LUA_MULTRET, 0);
+      exception = context.exception;
+    }
+    catch(...)
+    {
+      lua_settop(L, stack_top);
+      throw;
+    }
+  }
 
-   // fills DISPPARAMS structure, converting lua arguments
-   // to COM parameters
-   typehandler->fillDispParams(L, dispparams, pfuncdesc, params, invkind);
+  // Preserve both C++ exceptions and Lua error values after COM cleanup.
+  if(exception)
+  {
+    lua_settop(L, stack_top);
+    std::rethrow_exception(exception);
+  }
+  if(status != 0)
+    return lua_error(L);
+  return lua_gettop(L) - stack_top;
+}
 
-   hr = pdisp->Invoke(
-     dispid,
-     IID_NULL, 
-     LOCALE_SYSTEM_DEFAULT,
-     invkind,
-     &dispparams,
-     &result,
-     &excepinfo,
-     &ArgErr);
+int tLuaCOM::protectedCall(lua_State* L)
+{
+  CallContext* context = static_cast<CallContext*>(
+    lua_touserdata(L, lua_upvalueindex(1)));
+  try
+  {
+    return context->object->callWithDispatch(L, *context);
+  }
+  catch(const tLuaCOMException&)
+  {
+    context->exception = std::current_exception();
+    return 0;
+  }
+  catch(const std::exception&)
+  {
+    context->exception = std::current_exception();
+    return 0;
+  }
+}
 
-   //hr = S_OK;
+int tLuaCOM::callWithDispatch(lua_State* L, CallContext& context)
+{
+  tUtil::log_verbose("tLuaCOM.call", "about to call DISPID 0x%.8x", context.dispid);
 
-   if(SUCCEEDED(hr))
-   {
-     try
-     {
-       // pushes first return value (if any)
-       // if there is no type information, assumes that
-       // all functions have return value
-       if((pfuncdesc && pfuncdesc->elemdescFunc.tdesc.vt != VT_VOID) ||
-           !pfuncdesc)
-       {
-        // To ease programming, methods of untyped objects
-        // always return values to Lua. If the COM method does
-        // not return nothing, then LuaCOM pushes nil.
-        // (This avoids confusion with out params)
+  UINT ArgErr = 0;
+  int num_retvals = 0;
+  DISPPARAMS& dispparams = context.dispparams;
+  VARIANTARG& result = context.result;
+  EXCEPINFO& excepinfo = context.excepinfo;
+  FUNCDESC* pfuncdesc = context.funcdesc;
 
-         typehandler->com2lua(L, result);
-         num_retvals++;
-       }
+  typehandler->fillDispParams(L, dispparams, pfuncdesc,
+                              context.params, context.invkind);
 
-       // pushes out values
-       if(invkind & INVOKE_FUNC)
-         num_retvals += typehandler->pushOutValues(L, dispparams, pfuncdesc);
-     }
-     catch(class tLuaCOMException& e)
-     {
-       UNUSED(e);
+  HRESULT hr = context.active_dispatch->Invoke(
+    context.dispid,
+    IID_NULL,
+    LOCALE_SYSTEM_DEFAULT,
+    context.invkind,
+    &dispparams,
+    &result,
+    &excepinfo,
+    &ArgErr);
 
-       typehandler->releaseVariants(&dispparams);
-       VariantClear(&result);
+  if(SUCCEEDED(hr))
+  {
+    // Untyped methods always return a value; empty COM values become nil.
+    if((pfuncdesc && pfuncdesc->elemdescFunc.tdesc.vt != VT_VOID) || !pfuncdesc)
+    {
+      typehandler->com2lua(L, result);
+      num_retvals++;
+    }
 
-       throw;
-     }
+    if(context.invkind & INVOKE_FUNC)
+      num_retvals += typehandler->pushOutValues(L, dispparams, pfuncdesc);
 
-     typehandler->releaseVariants(&dispparams);
-     VariantClear(&result);
+    return num_retvals;
+  }
 
-     return num_retvals;
-   }
-   else // Houve erro
-   {
-     // Limpa parametros
-     typehandler->releaseVariants(&dispparams);
-     VariantClear(&result);
+  if(hr == DISP_E_EXCEPTION)
+  {
+    if(excepinfo.pfnDeferredFillIn != NULL)
+    {
+      HRESULT fill_result = excepinfo.pfnDeferredFillIn(&excepinfo);
+      CHK_COM_CODE(fill_result);
+    }
 
-     if(hr == DISP_E_EXCEPTION) // excecoes
-     {
-       ExceptionInfoStrings cleanup(excepinfo);
-       if(excepinfo.pfnDeferredFillIn != NULL)
-       {
-         HRESULT fill_result = excepinfo.pfnDeferredFillIn(&excepinfo);
-         CHK_COM_CODE(fill_result);
-       }
-
-       if(excepinfo.bstrDescription != NULL)
-         COM_EXCEPTION(tUtil::bstr2string(excepinfo.bstrDescription));
-       else if(excepinfo.wCode != 0)
-         COM_EXCEPTION(tUtil::GetErrorMessage(excepinfo.wCode));
-       else if(excepinfo.scode != 0)
-         COM_EXCEPTION(tUtil::GetErrorMessage(excepinfo.scode));
-       else
-         COM_EXCEPTION("Unknown exception");
-     }
-     else // Erros comuns
-       COM_ERROR(tUtil::GetErrorMessage(hr));
-   }
+    if(excepinfo.bstrDescription != NULL)
+      COM_EXCEPTION(tUtil::bstr2string(excepinfo.bstrDescription));
+    else if(excepinfo.wCode != 0)
+      COM_EXCEPTION(tUtil::GetErrorMessage(excepinfo.wCode));
+    else if(excepinfo.scode != 0)
+      COM_EXCEPTION(tUtil::GetErrorMessage(excepinfo.scode));
+    else
+      COM_EXCEPTION("Unknown exception");
+  }
+  else
+    COM_ERROR(tUtil::GetErrorMessage(hr));
 }
 
 DWORD tLuaCOM::addConnection(tLuaCOM *server)
 {
   checkComObject();
+  tCOMPtr<IDispatch> active_dispatch(pdisp);
 
   if(!server)
     return 0;
@@ -501,7 +558,7 @@ DWORD tLuaCOM::addConnection(tLuaCOM *server)
     return false;
 
   HRESULT hr;
-  IDispatch *pdisp_server = server->GetIDispatch();
+  tCOMPtr<IDispatch> pdisp_server(server->GetIDispatch());
   if(!pdisp_server)
     return 0;
 
@@ -509,7 +566,7 @@ DWORD tLuaCOM::addConnection(tLuaCOM *server)
 
   tCOMPtr<IConnectionPoint> connection_point;
 
-  hr = pdisp->QueryInterface
+  hr = active_dispatch->QueryInterface
     (
       IID_IConnectionPointContainer, (void **) &pcpc
     );
@@ -540,6 +597,8 @@ DWORD tLuaCOM::addConnection(tLuaCOM *server)
   }
   DWORD connection_point_cookie = 0;
 
+  // Metadata calls can release this wrapper before registration begins.
+  checkComObject();
   hr = connection_point->Advise
     (
       (IUnknown *) pdisp_server, &connection_point_cookie
@@ -553,6 +612,15 @@ DWORD tLuaCOM::addConnection(tLuaCOM *server)
   }
 
   pending.front().cookie = connection_point_cookie;
+  if(!pdisp)
+  {
+    // A callback released the wrapper while Advise was running.
+    hr = connection_point->Unadvise(connection_point_cookie);
+    if(FAILED(hr))
+      connections.splice(connections.end(), pending);
+    CHK_COM_CODE(hr);
+    checkComObject();
+  }
   connections.splice(connections.end(), pending);
 
   return connection_point_cookie;
@@ -566,12 +634,13 @@ void tLuaCOM::releaseConnection()
 void tLuaCOM::releaseConnection(tLuaCOM* server, DWORD cookie)
 {
   checkComObject();
+  tCOMPtr<IDispatch> active_dispatch(pdisp);
 
   tCOMPtr<IConnectionPointContainer> pcpc;
 
   tCOMPtr<IConnectionPoint> connection_point;
 
-  HRESULT hr = pdisp->QueryInterface
+  HRESULT hr = active_dispatch->QueryInterface
     (
       IID_IConnectionPointContainer, (void **) &pcpc
     );
@@ -613,11 +682,17 @@ HRESULT tLuaCOM::releaseConnections() {
   ConnectionList pending;
   pending.splice(pending.end(), connections);
   HRESULT result = S_OK;
-  for(ConnectionList::iterator it = pending.begin(); it != pending.end(); ++it)
+  for(ConnectionList::iterator it = pending.begin(); it != pending.end(); )
   {
-    HRESULT hr = it->point->Unadvise(it->cookie);
-    if(FAILED(hr) && SUCCEEDED(result))
-      result = hr;
+    ConnectionList::iterator current = it++;
+    HRESULT hr = current->point->Unadvise(current->cookie);
+    if(FAILED(hr))
+    {
+      if(SUCCEEDED(result))
+        result = hr;
+      // Keep failed cleanup available for an explicit retry.
+      connections.splice(connections.end(), pending, current);
+    }
   }
   return result;
 }
@@ -632,6 +707,7 @@ HRESULT tLuaCOM::releaseConnections() {
 bool tLuaCOM::isMember(const char * name)
 {
   checkComObject();
+  tCOMPtr<IDispatch> active_dispatch(pdisp);
 
   HRESULT hr;
   DISPID dumb_dispid;
@@ -644,7 +720,7 @@ bool tLuaCOM::isMember(const char * name)
 
   mbstowcs(w_name, name, strlen(name)+1);
 
-  hr = pdisp->GetIDsOfNames(IID_NULL, &w_name, 1,
+  hr = active_dispatch->GetIDsOfNames(IID_NULL, &w_name, 1,
                         LOCALE_SYSTEM_DEFAULT, &dumb_dispid);
   free(w_name);
   w_name = NULL;
@@ -797,13 +873,14 @@ tLuaCOM * tLuaCOM::CreateLuaCOM(lua_State* L,
 ITypeInfo * tLuaCOM::GetDefaultEventsInterface()
 {
   checkComObject();
+  tCOMPtr<IDispatch> active_dispatch(pdisp);
 
   CLSID clsid = GetCLSID();
   if(clsid == IID_NULL)
     return NULL;
   
   tCOMPtr<ITypeInfo> coclassinfo;
-  coclassinfo.Attach(tCOMUtil::GetCoClassTypeInfo(pdisp, clsid));
+  coclassinfo.Attach(tCOMUtil::GetCoClassTypeInfo(active_dispatch, clsid));
   if(!coclassinfo)
     return NULL;
   
@@ -846,10 +923,11 @@ CLSID tLuaCOM::GetCLSID()
     return clsid;
 
   checkComObject();
+  tCOMPtr<IDispatch> active_dispatch(pdisp);
 
   // tries to find the CLSID using IProvideClassInfo
   tCOMPtr<ITypeInfo> coclassinfo;
-  coclassinfo.Attach(tCOMUtil::GetCoClassTypeInfo(pdisp));
+  coclassinfo.Attach(tCOMUtil::GetCoClassTypeInfo(active_dispatch));
   if(coclassinfo)
   {
     clsid = tCOMUtil::GetCLSID(coclassinfo);
@@ -904,10 +982,8 @@ void tLuaCOM::checkComObject() const
 // Releases the reference owned by this wrapper. The wrapper remains valid so
 // Lua garbage collection can destroy it safely, but it cannot call COM again.
 void tLuaCOM::releaseComObject() {
-  if(!pdisp)
-    return;
-
-  HRESULT hr = releaseConnections();
-  pdisp.Release();
-  CHK_COM_CODE(hr);
+  // Detach before COM cleanup can call back into this wrapper.
+  tCOMPtr<IDispatch> released_dispatch;
+  released_dispatch.Attach(pdisp.Detach());
+  CHK_COM_CODE(releaseConnections());
 }

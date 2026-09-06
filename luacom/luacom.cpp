@@ -1403,19 +1403,18 @@ static int luacom_GetIUnknown(lua_State *L)
   // check parameters
   tLuaCOM* luacom = (tLuaCOM *) LuaBeans::check_tag(L, 1);
 
-  IDispatch* pdisp = NULL;
+  IUnknown* punk = NULL;
+  HRESULT hr;
   try
   {
-    pdisp = luacom->GetIDispatch();
+    tCOMPtr<IDispatch> pdisp(luacom->GetIDispatch());
+    hr = pdisp->QueryInterface(IID_IUnknown, (void **) &punk);
   }
   catch(tLuaCOMException& e)
   {
     luacom_APIerror(L, e.getMessage());
     return 0;
   }
-  IUnknown* punk = NULL;
-  
-  HRESULT hr = pdisp->QueryInterface(IID_IUnknown, (void **) &punk);
   if(FAILED(hr) || punk == NULL)
   {
     if(SUCCEEDED(hr))

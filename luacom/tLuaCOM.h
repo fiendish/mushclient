@@ -119,6 +119,9 @@ protected:
 
   std::vector<FuncInfo> mFuncInfo;
 private:
+  struct CallContext;
+  static int protectedCall(lua_State* L);
+  int callWithDispatch(lua_State* L, CallContext& context);
   void checkComObject() const;
   long ID;
   char* objName;
