@@ -7971,8 +7971,8 @@ int iCount = m_doc->m_VariableMap.GetCount ();
 CFile * f = NULL;
 CArchive * ar = NULL;
 
-  CPlugin * pSavedPlugin = m_doc->m_CurrentPlugin;
-  m_doc->m_CurrentPlugin = NULL;   // make sure we save main triggers etc.
+  {
+  CPluginContextGuard pluginContextGuard (m_doc, NULL); // save main triggers etc.
 
 	try
 	  {
@@ -8005,11 +8005,9 @@ CArchive * ar = NULL;
 		e->ReportError();
 		e->Delete();
 	  }   // end of catch
-
-  m_doc->m_CurrentPlugin = pSavedPlugin;
-
   delete ar;      // delete archive
   delete f;       // delete file
+  }
 
   ::UMessageBox (TFormat ("Saved %i variable%s.", PLURAL (iCount)),
                    MB_ICONINFORMATION);

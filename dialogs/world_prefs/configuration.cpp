@@ -1627,6 +1627,8 @@ void CMUSHclientDoc:: SavePrefsP14 (CPrefsP14 &page14)
   // need to be compiled so we recompile all of them
   if (utf8Changed)
     {
+    CPluginContextGuard pluginContextGuard (this, NULL);
+
     int counter;
     m_CurrentPlugin = NULL;
     counter = RecompileRegularExpressions ();     // do main world

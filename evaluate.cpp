@@ -758,8 +758,7 @@ CString filename;
   if (nResult != IDOK)
     return TRUE;    // cancelled dialog
 
-  CPlugin * pSavedPlugin = m_CurrentPlugin;
-  m_CurrentPlugin = NULL;   // make sure we save main triggers etc.
+  CPluginContextGuard pluginContextGuard (this, NULL); // save main triggers etc.
 
   try
     {
@@ -799,8 +798,6 @@ CString filename;
     ::TMessageBox ("There was a problem in the data format", MB_ICONEXCLAMATION);
     e->Delete ();
     } // end of catching an archive exception
-
-  m_CurrentPlugin = pSavedPlugin;
 
   delete ar;      // delete archive
   delete f;       // delete file
