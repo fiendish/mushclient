@@ -3,6 +3,7 @@
 // Relating to playing sounds
 
 #include "stdafx.h"
+#include <mmreg.h>
 #include "..\..\MUSHclient.h"
 #include "..\..\doc.h"
 #include "..\errors.h"
@@ -177,7 +178,7 @@ int i;
 
   HMMIO          mmioWave ;
   MMCKINFO       mmckinfoParent, mmckinfoSubchunk ;
-  WAVEFORMATEX   wfPCM ;
+  vector<BYTE>   waveFormat;
   MMIOINFO mmioInfo;
   memset(&mmioInfo, 0, sizeof(MMIOINFO));
 
@@ -200,20 +201,6 @@ int i;
   if ( !mmioWave )
    return eFileNotFound;
 
-  // now that we know we have a file there, release the sound buffer if possible
-
-  // buffer currently in use? release it
-  if (m_pDirectSoundSecondaryBuffer [Buffer])
-    {
-    DWORD iStatus;
-    if (SUCCEEDED (m_pDirectSoundSecondaryBuffer [Buffer]->GetStatus (&iStatus)) &&
-        (iStatus & DSBSTATUS_PLAYING))
-      m_pDirectSoundSecondaryBuffer [Buffer]->Stop ();
-
-    m_pDirectSoundSecondaryBuffer [Buffer]->Release ();
-    m_pDirectSoundSecondaryBuffer [Buffer] = NULL;
-    }
-
   // Descend to find a "WAVE" block, if this fails then the data is not
   // WAV data.
   mmckinfoParent.fccType = mmioFOURCC( 'W', 'A', 'V', 'E' ) ;
@@ -232,13 +219,53 @@ int i;
     return eCannotPlaySound ;
    }
 
-  // This line actually reads the data from the "fmt " chunk, this data
-  // should be in the form of a WAVEFORMATEX structure
-  if ( mmioRead( mmioWave, (char *) &wfPCM, mmckinfoSubchunk.cksize ) == -1 )
+  if (mmckinfoSubchunk.cksize < sizeof (PCMWAVEFORMAT) ||
+      mmckinfoSubchunk.cksize > LONG_MAX)
    {
     mmioClose( mmioWave, 0 ) ;
     return eCannotPlaySound ;
    }
+
+  try
+    {
+    waveFormat.resize (max ((DWORD) sizeof (WAVEFORMATEX),
+                            mmckinfoSubchunk.cksize), 0);
+    }
+  catch (...)
+    {
+    mmioClose( mmioWave, 0 ) ;
+    throw;
+    }
+
+  // This line actually reads the data from the "fmt " chunk.
+  LONG iFormatBytes = mmioRead (mmioWave,
+                                (char *) &waveFormat [0],
+                                (LONG) mmckinfoSubchunk.cksize);
+  if (iFormatBytes != (LONG) mmckinfoSubchunk.cksize)
+    {
+    mmioClose( mmioWave, 0 ) ;
+    return eCannotPlaySound ;
+    }
+
+  WAVEFORMATEX * pWaveFormat = (WAVEFORMATEX *) &waveFormat [0];
+  if (pWaveFormat->wFormatTag == WAVE_FORMAT_PCM)
+    pWaveFormat->cbSize = 0;
+  else if (mmckinfoSubchunk.cksize < sizeof (WAVEFORMATEX) ||
+           pWaveFormat->cbSize >
+             mmckinfoSubchunk.cksize - sizeof (WAVEFORMATEX))
+    {
+    mmioClose( mmioWave, 0 ) ;
+    return eCannotPlaySound ;
+    }
+
+  if (pWaveFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+      (mmckinfoSubchunk.cksize < sizeof (WAVEFORMATEXTENSIBLE) ||
+       pWaveFormat->cbSize <
+         sizeof (WAVEFORMATEXTENSIBLE) - sizeof (WAVEFORMATEX)))
+    {
+    mmioClose( mmioWave, 0 ) ;
+    return eCannotPlaySound ;
+    }
 
   // Step out a layer... think of the mm functions as step in and out of
   // hierarchies of "chunks" of information
@@ -253,6 +280,12 @@ int i;
     return eCannotPlaySound ;
    }
 
+  if (mmckinfoSubchunk.cksize > LONG_MAX)
+    {
+    mmioClose( mmioWave, 0 ) ;
+    return eCannotPlaySound ;
+    }
+
  HRESULT        hr ;
  LPBYTE         lpvAudio1 ;
  LPBYTE         lpvAudio2 ;
@@ -260,9 +293,10 @@ int i;
  DWORD          dwWriteBytes2 ;
  DSBUFFERDESC   bd ;   
  
- // At this point we have succeeded in finding the data for the WAV file so
+  // At this point we have succeeded in finding the data for the WAV file so
  // we need to create a DirectSoundBuffer 
   // Set up bd structure for a static secondary buffer.       
+  memset (&bd, 0, sizeof bd);
   bd.dwSize = sizeof( bd ) ;       
   bd.dwFlags = (DSBCAPS_CTRLPAN | DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLFREQUENCY) | DSBCAPS_STATIC;  
 
@@ -274,24 +308,22 @@ int i;
   // portion of the wav
   bd.dwBufferBytes = mmckinfoSubchunk.cksize ; 
   bd.dwReserved = 0 ;
-  bd.lpwfxFormat = &wfPCM ; 
+  bd.lpwfxFormat = pWaveFormat ;
+
+  LPDIRECTSOUNDBUFFER lpdsBuffer = NULL;
 
   // Create buffer.    
   if ( FAILED( App.m_pDirectSoundObject->CreateSoundBuffer( &bd, 
-               &m_pDirectSoundSecondaryBuffer [Buffer], NULL ) ) )
+               &lpdsBuffer, NULL ) ) )
    {
     mmioClose( mmioWave, 0 ) ;
     return eCannotPlaySound ;
    }
  
 #define WRAP_UP_FAILED_SOUND \
-    m_pDirectSoundSecondaryBuffer [Buffer]->Release ();  \
-    m_pDirectSoundSecondaryBuffer [Buffer] = NULL;  \
+    lpdsBuffer->Release ();  \
     mmioClose( mmioWave, 0 ) ;  \
     return eCannotPlaySound;
-
- // make copy to save a bit of typing
- LPDIRECTSOUNDBUFFER lpdsBuffer = m_pDirectSoundSecondaryBuffer [Buffer];
 
  // Lock the buffer for the DirectSoundBuffer object
  hr = lpdsBuffer->Lock( 0, 0, (void **) &lpvAudio1, &dwWriteBytes1, 
@@ -317,8 +349,9 @@ int i;
     }
 
   // Read the data directly into the locked buffer
-  if ( mmioRead( mmioWave, ( char* ) lpvAudio1, mmckinfoSubchunk.cksize ) 
-      == -1 )
+  if (mmioRead (mmioWave, (char *) lpvAudio1,
+                (LONG) mmckinfoSubchunk.cksize) !=
+      (LONG) mmckinfoSubchunk.cksize)
     {
     lpdsBuffer->Unlock( (void *) lpvAudio1, dwWriteBytes1, 
                         (void *) lpvAudio2, dwWriteBytes2 );
@@ -335,17 +368,26 @@ int i;
   // Close the multimedia object
   mmioClose( mmioWave, 0 ) ;
 
-  // set requested panning
-  lpdsBuffer->SetPan (iPan);
-  // set requested volume
-  lpdsBuffer->SetVolume (iVolume);
-
- if (FAILED (lpdsBuffer->Play( 0, 0, Loop ? DSBPLAY_LOOPING : 0) ))
+  // Configure and start the replacement before changing the active slot.
+  if (FAILED (lpdsBuffer->SetPan (iPan)) ||
+      FAILED (lpdsBuffer->SetVolume (iVolume)) ||
+      FAILED (lpdsBuffer->Play (0, 0, Loop ? DSBPLAY_LOOPING : 0)))
    {
-    m_pDirectSoundSecondaryBuffer [Buffer]->Release ();
-    m_pDirectSoundSecondaryBuffer [Buffer] = NULL;
+    lpdsBuffer->Release ();
     return eCannotPlaySound;
    }
+
+  LPDIRECTSOUNDBUFFER pOldBuffer = m_pDirectSoundSecondaryBuffer [Buffer];
+  m_pDirectSoundSecondaryBuffer [Buffer] = lpdsBuffer;
+
+  if (pOldBuffer)
+    {
+    DWORD iStatus;
+    if (SUCCEEDED (pOldBuffer->GetStatus (&iStatus)) &&
+        (iStatus & DSBSTATUS_PLAYING))
+      pOldBuffer->Stop ();
+    pOldBuffer->Release ();
+    }
 
   return eOK;
 } // end of CMUSHclientDoc::PlaySoundHelper
