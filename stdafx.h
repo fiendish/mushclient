@@ -91,6 +91,7 @@
 #include <iostream>
 #include <iterator>
 #include <sstream>
+#include <memory>
 #pragma warning (pop)
 
 #ifdef LUA_52
@@ -364,6 +365,25 @@ void FixFont (ptrCFont & pFont,
 
 // for escaping out things like \r in a trigger
 CString FixupEscapeSequences (const CString & strSource);
+
+class CBoolStateGuard
+  {
+  public:
+  CBoolStateGuard (bool & bValue, const bool bNewValue)
+    : m_bValue (bValue), m_bSavedValue (bValue)
+    {
+    m_bValue = bNewValue;
+    }
+
+  ~CBoolStateGuard ()
+    {
+    m_bValue = m_bSavedValue;
+    }
+
+  private:
+  bool & m_bValue;
+  bool m_bSavedValue;
+  };
 
 template <class T>
 class CValueStateGuard
