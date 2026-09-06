@@ -365,6 +365,28 @@ void FixFont (ptrCFont & pFont,
 // for escaping out things like \r in a trigger
 CString FixupEscapeSequences (const CString & strSource);
 
+template <class T>
+class CValueStateGuard
+  {
+  public:
+  CValueStateGuard (T & value, const T newValue)
+    : m_value (value), m_savedValue (value)
+    {
+    m_value = newValue;
+    }
+
+  ~CValueStateGuard ()
+    {
+    m_value = m_savedValue;
+    }
+
+  private:
+  T & m_value;
+  T m_savedValue;
+  CValueStateGuard (const CValueStateGuard &);
+  CValueStateGuard & operator= (const CValueStateGuard &);
+  };
+
 // translates "send to" numbers
 CString GetSendToString (const unsigned short iWhere);
 

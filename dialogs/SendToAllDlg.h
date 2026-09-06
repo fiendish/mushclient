@@ -26,6 +26,7 @@ public:
 	//}}AFX_DATA
 
   CFont m_font;
+  CArray<__int64, __int64> m_DocumentNumbers;
 
 // Overrides
 	// ClassWizard generated virtual function overrides

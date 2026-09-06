@@ -6,6 +6,7 @@
 #include "mainfrm.h"
 #include "doc.h"
 #include "ActivityView.h"
+#include "listview_selection.h"
 #include "sendvw.h"
 #include "childfrm.h"
 
@@ -143,6 +144,12 @@ bool bInserting = false;
 POSITION pos;
 int nDocCount;
 CListCtrl & pList = GetListCtrl ();
+CArray<__int64, __int64> selectedDocuments;
+__int64 focusedDocument = 0;
+bool hadFocusedDocument = false;
+__int64 selectionMarkDocument = 0;
+bool hadSelectionMarkDocument = false;
+int restoredSelectionMark = -1;
 
 // if we don't want list updated right now, then exit
 
@@ -151,11 +158,14 @@ CListCtrl & pList = GetListCtrl ();
 
 //  TRACE ("Activity window being updated\n");
 
-  m_bUpdateLockout = TRUE;
+  CValueStateGuard<BOOL> updateLockoutGuard (m_bUpdateLockout, TRUE);
 
   App.m_bUpdateActivity = FALSE;
 
   App.m_timeLastActivityUpdate = CTime::GetCurrentTime();
+
+  try
+    {
 
 // if the list has the same number of worlds (and they are the same
 // worlds), then we can not bother deleting the list and re-adding it
@@ -180,7 +190,7 @@ CListCtrl & pList = GetListCtrl ();
          bInserting = true;
          break;
          }
-       if ((DWORD) pDoc != pList.GetItemData (nItem))
+       if (GetWorldForIndex ((int) pList.GetItemData (nItem)) != pDoc)
          {
          bInserting = true;
          break;
@@ -191,7 +201,41 @@ CListCtrl & pList = GetListCtrl ();
     bInserting = true;    // different counts, must re-do list
 
   if (bInserting)
+    {
+    for (int nSelected = pList.GetNextItem (-1, LVNI_SELECTED);
+         nSelected != -1;
+         nSelected = pList.GetNextItem (nSelected, LVNI_SELECTED))
+      {
+      CMUSHclientDoc * pSelected =
+        GetWorldForIndex ((int) pList.GetItemData (nSelected));
+      if (pSelected)
+        selectedDocuments.Add (pSelected->m_iUniqueDocumentNumber);
+      }
+    int nFocused = pList.GetNextItem (-1, LVNI_FOCUSED);
+    if (nFocused != -1)
+      {
+      CMUSHclientDoc * pFocused =
+        GetWorldForIndex ((int) pList.GetItemData (nFocused));
+      if (pFocused)
+        {
+        focusedDocument = pFocused->m_iUniqueDocumentNumber;
+        hadFocusedDocument = true;
+        }
+      }
+    int nSelectionMark = pList.GetSelectionMark ();
+    if (nSelectionMark != -1)
+      {
+      CMUSHclientDoc * pMarked =
+        GetWorldForIndex ((int) pList.GetItemData (nSelectionMark));
+      if (pMarked)
+        {
+        selectionMarkDocument = pMarked->m_iUniqueDocumentNumber;
+        hadSelectionMarkDocument = true;
+        }
+      }
     pList.DeleteAllItems ();
+    m_DocumentNumbers.RemoveAll ();
+    }
 
 // add all documents to the list
 
@@ -250,16 +294,18 @@ CListCtrl & pList = GetListCtrl ();
 	
     // sequence
     if (bInserting)
-      pList.InsertItem (nItem, strSeq);  //  eColumnSeq
+      {
+      int iDocument = m_DocumentNumbers.Add (pDoc->m_iUniqueDocumentNumber);
+      if (pList.InsertItem (LVIF_TEXT | LVIF_PARAM, nItem, strSeq,
+                            0, 0, 0, (LPARAM) iDocument) == -1)
+        AfxThrowResourceException ();
+      }
 	  pList.SetItemText(nItem, eColumnMush, pDoc->m_mush_name);
 		pList.SetItemText(nItem, eColumnNew, strNewLines);
  		pList.SetItemText(nItem, eColumnLines, strLines);
   	pList.SetItemText(nItem, eColumnStatus, strStatus);
 		pList.SetItemText(nItem, eColumnSince, strSince);
 		pList.SetItemText(nItem, eColumnDuration, strDuration);
-
-    if (bInserting)
-      pList.SetItemData(nItem, (DWORD) pDoc);
 
     LVITEM lvitem;
 
@@ -274,6 +320,22 @@ CListCtrl & pList = GetListCtrl ();
     lvitem.mask = LVIF_IMAGE;
     lvitem.iItem = nItem;
 
+    if (bInserting)
+      {
+      lvitem.mask |= LVIF_STATE;
+      lvitem.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+      if (hadSelectionMarkDocument && selectionMarkDocument == pDoc->m_iUniqueDocumentNumber)
+        restoredSelectionMark = nItem;
+      if (hadFocusedDocument && focusedDocument == pDoc->m_iUniqueDocumentNumber)
+        lvitem.state |= LVIS_FOCUSED;
+      for (int iSelected = 0; iSelected < selectedDocuments.GetSize (); iSelected++)
+        if (selectedDocuments [iSelected] == pDoc->m_iUniqueDocumentNumber)
+          {
+          lvitem.state |= LVIS_SELECTED;
+          break;
+          }
+      }
+
     pList.SetItem (&lvitem);
 
 
@@ -282,9 +344,18 @@ CListCtrl & pList = GetListCtrl ();
 
 // make sure in same order that we left them
 
-  pList.SortItems (CompareFunc, m_reverse << 8 | m_last_col); 
+  if (bInserting)
+    pList.SetSelectionMark (restoredSelectionMark);
 
-  m_bUpdateLockout = FALSE;
+  if (!SortListItemsPreservingSelectionMark (pList.GetSafeHwnd (), CompareFunc, (LPARAM) this))
+    AfxThrowResourceException ();
+
+    }
+  catch (...)
+    {
+    App.m_bUpdateActivity = TRUE;
+    throw;
+    }
 
 }     // end of CActivityView::OnUpdate
 
@@ -429,6 +500,10 @@ void CActivityView::OnColumnclick(NMHDR* pNMHDR, LRESULT* pResult)
 
   int col = pNMListView->iSubItem;
 
+  // A closed world remains in the list until the deferred activity refresh.
+  if (App.m_bUpdateActivity)
+    OnUpdate (NULL, 0, NULL);
+
   if (col == m_last_col)
     m_reverse = !m_reverse;
   else
@@ -436,7 +511,8 @@ void CActivityView::OnColumnclick(NMHDR* pNMHDR, LRESULT* pResult)
 
   m_last_col = col;
     
-  GetListCtrl ().SortItems (CompareFunc, m_reverse << 8 | m_last_col); 
+  if (!SortListItemsPreservingSelectionMark (GetListCtrl ().GetSafeHwnd (), CompareFunc, (LPARAM) this))
+    AfxThrowResourceException ();
 	
 	*pResult = 0;
 }
@@ -447,12 +523,30 @@ int CALLBACK CActivityView::CompareFunc ( LPARAM lParam1,
                                           LPARAM lParamSort)
   { 
 
- CMUSHclientDoc * item1 = (CMUSHclientDoc *) lParam1;
- CMUSHclientDoc * item2 = (CMUSHclientDoc *) lParam2;
+ CActivityView * pView = (CActivityView *) lParamSort;
+ CMUSHclientDoc * item1 = pView->GetWorldForIndex ((int) lParam1);
+ CMUSHclientDoc * item2 = pView->GetWorldForIndex ((int) lParam2);
 
 int iResult = 0;
 
-  switch (lParamSort & 0xFF)   // which sort key
+ if (!item1 || !item2)
+   {
+   // Keep unresolved rows in a separate group so mixed comparisons agree.
+   if (item1)
+     iResult = -1;
+   else if (item2)
+     iResult = 1;
+   else
+     {
+     __int64 iDocument1 = lParam1 >= 0 && lParam1 < pView->m_DocumentNumbers.GetSize () ?
+                           pView->m_DocumentNumbers [(int) lParam1] : 0;
+     __int64 iDocument2 = lParam2 >= 0 && lParam2 < pView->m_DocumentNumbers.GetSize () ?
+                           pView->m_DocumentNumbers [(int) lParam2] : 0;
+     iResult = iDocument1 < iDocument2 ? -1 : iDocument1 > iDocument2 ? 1 : 0;
+     }
+   }
+ else
+  switch (pView->m_last_col)   // which sort key
     {
     case eColumnSeq: 
                 if (item1->m_view_number < item2->m_view_number)
@@ -519,7 +613,7 @@ int iResult = 0;
 
 // if reverse sort wanted, reverse sense of result
 
-  if (lParamSort & 0xFF00)
+  if (pView->m_reverse)
     iResult *= -1;
 
   return iResult;
@@ -613,9 +707,30 @@ int nItem = GetListCtrl ().GetNextItem(-1, LVNI_SELECTED);
   if (nItem == -1)
     return NULL;   // no item selected
 
-  return (CMUSHclientDoc*) GetListCtrl ().GetItemData (nItem);
+  return GetWorldForIndex ((int) GetListCtrl ().GetItemData (nItem));
 
-  } // end of  CActivityView::GetSelectedWorld
+  } // end of CActivityView::GetSelectedWorld
+
+CMUSHclientDoc * CActivityView::GetWorldForIndex (const int iIndex) const
+  {
+
+  if (iIndex < 0 || iIndex >= m_DocumentNumbers.GetSize ())
+    return NULL;
+
+  __int64 iDocumentNumber = m_DocumentNumbers [iIndex];
+
+  POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition ();
+  while (pos)
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+      return pDoc;
+    }
+
+  return NULL;
+
+  } // end of CActivityView::GetWorldForIndex
 
 void CActivityView::OnPopupSaveworlddetailsas() 
 {
