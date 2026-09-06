@@ -75,7 +75,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     {
     POSITION oldpos = chatpos;
     CChatSocket * pSocket = m_ChatList.GetNext (chatpos);
-    if (pSocket->m_bDeleteMe)
+    if (pSocket->m_bDeleteMe && !pSocket->m_bInReceive)
       {
       m_ChatList.RemoveAt (oldpos);
       delete pSocket;
