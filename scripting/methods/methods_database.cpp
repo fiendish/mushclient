@@ -71,20 +71,7 @@ long CMUSHclientDoc::DatabaseOpen(LPCTSTR Name, LPCTSTR Filename, long Flags)
 {
   tDatabaseMapIterator it = m_Databases.find (Name);
 
-  tDatabase * pDatabase = NULL;
-
-  if (it == m_Databases.end ())
-    {
-    pDatabase = new tDatabase;
-
-    pDatabase->db = NULL;
-    pDatabase->pStmt = NULL;
-    pDatabase->bValidRow = false;
-    pDatabase->db_name = Filename;
-    pDatabase->iColumns = 0;
-
-    }
-  else 
+  if (it != m_Databases.end ())
     {
     if (it->second->db_name == Filename)
       return SQLITE_OK;      // OK to re-use same database
@@ -92,13 +79,44 @@ long CMUSHclientDoc::DatabaseOpen(LPCTSTR Name, LPCTSTR Filename, long Flags)
       return DATABASE_ERROR_DATABASE_ALREADY_EXISTS;   // database already exists under this id but a different disk name
     }
 
+  std::unique_ptr<tDatabase> pDatabase (new tDatabase);
+
+  pDatabase->db = NULL;
+  pDatabase->pStmt = NULL;
+  pDatabase->bValidRow = false;
+  pDatabase->db_name = Filename;
+  pDatabase->iColumns = 0;
+
 	int rc = sqlite3_open_v2 (Filename, &pDatabase->db, Flags, NULL);
 
   // add to map if opened OK
   if (rc == SQLITE_OK && pDatabase->db != NULL)
-    m_Databases [Name] = pDatabase;
+    {
+    try
+      {
+      pair<tDatabaseMapIterator, bool> result =
+        m_Databases.insert (make_pair (Name, pDatabase.get ()));
+      if (!result.second)
+        {
+        sqlite3_close (pDatabase->db);
+        pDatabase->db = NULL;
+        return DATABASE_ERROR_DATABASE_ALREADY_EXISTS;
+        }
+      }
+    catch (...)
+      {
+      sqlite3_close (pDatabase->db);
+      pDatabase->db = NULL;
+      throw;
+      }
+    pDatabase.release ();
+    }
   else
-    delete pDatabase;
+    if (pDatabase->db != NULL)
+      {
+      sqlite3_close (pDatabase->db);
+      pDatabase->db = NULL;
+      }
 
   return rc;
 }   // end of CMUSHclientDoc::DatabaseOpen
