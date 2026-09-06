@@ -115,6 +115,7 @@ void Blit_Bitmap (CDC* pDestDC, CDC* pSrcDC,
                   const COLORREF TransparentColour = 0);
 
 void Send_Mouse_Event_To_Plugin (DISPID iDispatchID,
+                                 CMiniWindow & miniwindow,
                                  const string m_sPluginID, 
                                  const string sRoutineName, 
                                  const string HotspotId,
