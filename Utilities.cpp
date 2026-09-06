@@ -135,21 +135,20 @@ void FixFont (ptrCFont & pFont,
               const DWORD iCharset)
   {
 
-   delete pFont;         // get rid of old font
-
-   pFont = new CFont;    // create new font
-
-   if (pFont)
-    {
+   CFont * pNewFont = new CFont;
 
     CDC dc;
 
-    dc.CreateCompatibleDC (NULL);
+    if (!dc.CreateCompatibleDC (NULL))
+      {
+      delete pNewFont;
+      AfxThrowResourceException ();
+      }
 
      int lfHeight = -MulDiv(iSize,
                     dc.GetDeviceCaps(LOGPIXELSY), 72);
 
-     pFont->CreateFont(lfHeight, // int nHeight,
+     if (!pNewFont->CreateFont(lfHeight, // int nHeight,
             0, // int nWidth,
             0, // int nEscapement,
             0, // int nOrientation,
@@ -162,7 +161,14 @@ void FixFont (ptrCFont & pFont,
             0, // BYTE nClipPrecision,
             0, // BYTE nQuality,
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,
-            strName);// LPCTSTR lpszFacename );
+            strName)) // LPCTSTR lpszFacename
+       {
+       delete pNewFont;
+       AfxThrowResourceException ();
+       }
+
+      delete pFont;
+      pFont = pNewFont;
 
       // Get the metrics of the font.
 
@@ -174,9 +180,6 @@ void FixFont (ptrCFont & pFont,
                                    (WPARAM) pFont->m_hObject,
                                    MAKELPARAM (TRUE, 0));
       */
-     }  // end of having a font to select
-
-
   }   // end of FixFont
 
 

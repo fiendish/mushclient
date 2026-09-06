@@ -3360,37 +3360,22 @@ void CMUSHclientDoc::ChangeFont (const int nHeight,
 // Load the font we want to use.
 
 int i;
-
-  for (i = 0; i < NUMITEMS (m_font); i++)  
-    {
-    delete m_font [i];         // get rid of old font
-    m_font [i] = NULL;
-    }
+std::unique_ptr<CFont> newFonts [NUMITEMS (m_font)];
 
   CDC dc;
 
-  dc.CreateCompatibleDC (NULL);
+  if (!dc.CreateCompatibleDC (NULL))
+    AfxThrowResourceException ();
 
   for (i = 0; i < NUMITEMS (m_font); i++)  
     {
-     m_font [i] = new CFont;    // create new font
-
-     if (!m_font [i])
-      {
-      for (int j = 0; j < NUMITEMS (m_font); j++)  
-        {
-        delete m_font [j];         // get rid of old font
-        m_font [j] = NULL;
-        }
-      TMessageBox ("Unable to allocate memory for screen font");
-      return;
-      }
+     newFonts [i].reset (new CFont);    // create new font
 
     
      // if height is zero, default to 10 so it doesn't look stupid
      int lfHeight = -MulDiv(nHeight ? nHeight : 10, dc.GetDeviceCaps(LOGPIXELSY), 72);
 
-     m_font [i]->CreateFont(lfHeight, // int nHeight, 
+     if (!newFonts [i]->CreateFont(lfHeight, // int nHeight,
 				    0, // int nWidth, 
 				    0, // int nEscapement, 
 				    0, // int nOrientation, 
@@ -3403,16 +3388,34 @@ int i;
             0, // BYTE nClipPrecision, 
             0, // BYTE nQuality, 
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,    // was  FF_DONTCARE
-            lpszFacename);// LPCTSTR lpszFacename );
+            lpszFacename)) // LPCTSTR lpszFacename
+       {
+       TMessageBox ("Unable to create screen font");
+       return;
+       }
 
     }   // end of allocating 16 fonts
 
    // Get the metrics of the font - use the bold one - it will probably be wider
 
-    dc.SelectObject(m_font [HILITE]);
+    CFont * pOldDCFont = dc.SelectObject(newFonts [HILITE].get ());
+    if (!pOldDCFont)
+      AfxThrowResourceException ();
     
     TEXTMETRIC tm;
-    dc.GetTextMetrics(&tm);
+    if (!dc.GetTextMetrics(&tm))
+      {
+      dc.SelectObject (pOldDCFont);
+      AfxThrowResourceException ();
+      }
+
+    dc.SelectObject (pOldDCFont);
+
+    for (i = 0; i < NUMITEMS (m_font); i++)
+      {
+      delete m_font [i];
+      m_font [i] = newFonts [i].release ();
+      }
 
     if (iLineSpacing)
       m_FontHeight = iLineSpacing;    // override
@@ -3446,23 +3449,19 @@ void CMUSHclientDoc::ChangeInputFont (const int nHeight,
 {
 // Load the font we want to use.
 
-   delete m_input_font;         // get rid of old font
-
-   m_input_font = new CFont;    // create new font
-
-   if (!m_input_font)
-    {
-    TMessageBox ("Unable to allocate memory for screen font");
-    return;
-    }
+   CFont * pNewInputFont = new CFont;
 
 CDC dc;
 
-dc.CreateCompatibleDC (NULL);
+if (!dc.CreateCompatibleDC (NULL))
+  {
+  delete pNewInputFont;
+  AfxThrowResourceException ();
+  }
 
    int lfHeight = -MulDiv(nHeight ? nHeight : 10, dc.GetDeviceCaps(LOGPIXELSY), 72);
 
-   m_input_font->CreateFont(lfHeight, // int nHeight, 
+   if (!pNewInputFont->CreateFont(lfHeight, // int nHeight,
 				  0, // int nWidth, 
 				  0, // int nEscapement, 
 				  0, // int nOrientation, 
@@ -3475,35 +3474,76 @@ dc.CreateCompatibleDC (NULL);
           0, // BYTE nClipPrecision, 
           0, // BYTE nQuality, 
           MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,   // was FF_DONTCARE
-          lpszFacename);// LPCTSTR lpszFacename );
+          lpszFacename)) // LPCTSTR lpszFacename
+     {
+     delete pNewInputFont;
+     AfxThrowResourceException ();
+     }
 
     // Get the metrics of the font.
 
-    dc.SelectObject(m_input_font);
+    CFont * pOldDCFont = dc.SelectObject(pNewInputFont);
+    if (!pOldDCFont)
+      {
+      delete pNewInputFont;
+      AfxThrowResourceException ();
+      }
     
     TEXTMETRIC tm;
-    dc.GetTextMetrics(&tm);
+    if (!dc.GetTextMetrics(&tm))
+      {
+      dc.SelectObject(pOldDCFont);
+      delete pNewInputFont;
+      AfxThrowResourceException ();
+      }
 
-    m_InputFontHeight = tm.tmHeight; 
-    m_InputFontWidth = tm.tmAveCharWidth; 
+    dc.SelectObject(pOldDCFont);
+
+    CFont * pOldInputFont = m_input_font;
+    m_input_font = pNewInputFont;
+    int iOldInputFontHeight = m_InputFontHeight;
+    int iOldInputFontWidth = m_InputFontWidth;
+    m_InputFontHeight = tm.tmHeight;
+    m_InputFontWidth = tm.tmAveCharWidth;
 
     // fix up all input windows
-    if (m_input_font)
+    try
+      {
+      if (m_input_font)
+        for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
+          {
+          CView* pView = GetNextView(pos);
+
+          if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
+            {
+            CSendView* pmyView = (CSendView*)pView;
+
+            pmyView->SendMessage (WM_SETFONT,
+                                       (WPARAM) m_input_font->m_hObject,
+                                       MAKELPARAM (TRUE, 0));
+
+            pmyView->AdjustCommandWindowSize ();
+            }  // end of being a CSendView
+          }
+      }
+    catch (...)
+      {
+      m_input_font = pOldInputFont;
+      m_InputFontHeight = iOldInputFontHeight;
+      m_InputFontWidth = iOldInputFontWidth;
       for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
         {
         CView* pView = GetNextView(pos);
-
         if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-          {
-          CSendView* pmyView = (CSendView*)pView;
-
-          pmyView->SendMessage (WM_SETFONT,
-                                     (WPARAM) m_input_font->m_hObject,
-                                     MAKELPARAM (TRUE, 0));
-
-          pmyView->AdjustCommandWindowSize ();
-          }	  // end of being a CSendView
+          pView->SendMessage (WM_SETFONT,
+                              (WPARAM) m_input_font->m_hObject,
+                              MAKELPARAM (TRUE, 0));
         }
+      delete pNewInputFont;
+      throw;
+      }
+
+    delete pOldInputFont;
 
 } // end of CMUSHclientDoc::ChangeInputFont
 

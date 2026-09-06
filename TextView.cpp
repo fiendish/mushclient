@@ -797,16 +797,13 @@ void CTextView::SetTheFont (void)
 	CTextDocument * pDoc = (CTextDocument*) GetDocument();
 	ASSERT_VALID(pDoc);
 
-  delete m_font;
-
-  m_font = new CFont;
-
-  if (!m_font)
-    return;
-
+  CFont * pNewFont = new CFont;
   CDC dc;
-
-  dc.CreateCompatibleDC (NULL);
+  if (!dc.CreateCompatibleDC (NULL))
+    {
+    delete pNewFont;
+    AfxThrowResourceException ();
+    }
 
    int lfHeight = -MulDiv(pDoc->m_iFontSize, dc.GetDeviceCaps(LOGPIXELSY), 72);
 
@@ -819,7 +816,7 @@ void CTextView::SetTheFont (void)
      lfHeight = -MulDiv(App.m_iFixedPitchFontSize, dc.GetDeviceCaps(LOGPIXELSY), 72);
      }
 
-   m_font->CreateFont(lfHeight, // int nHeight, 
+   if (!pNewFont->CreateFont(lfHeight, // int nHeight,
 				  0, // int nWidth, 
 				  0, // int nEscapement, 
 				  0, // int nOrientation, 
@@ -832,15 +829,30 @@ void CTextView::SetTheFont (void)
           0, // BYTE nClipPrecision, 
           0, // BYTE nQuality, 
           MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,  
-          strFont);// LPCTSTR lpszFacename );
+          strFont)) // LPCTSTR lpszFacename
+     {
+     delete pNewFont;
+     AfxThrowResourceException ();
+     }
 
     // Get the metrics of the font.
 
-    dc.SelectObject(m_font);
+    CFont * pOldDCFont = dc.SelectObject(pNewFont);
+    if (!pOldDCFont)
+      {
+      delete pNewFont;
+      AfxThrowResourceException ();
+      }
+
+    CFont * pOldFont = m_font;
+    m_font = pNewFont;
 
     GetEditCtrl().SendMessage (WM_SETFONT,
                               (WPARAM) m_font->m_hObject,
                                MAKELPARAM (TRUE, 0));
+
+    dc.SelectObject(pOldDCFont);
+    delete pOldFont;
 
     SetTabStops (16);
 
