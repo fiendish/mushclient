@@ -613,7 +613,12 @@ static int luacom_CreateObject(lua_State *L)
     tCOMPtr<IPersistStreamInit> psi;
     hr = pdisp->QueryInterface(IID_IPersistStreamInit, (void**) &psi);
     if(SUCCEEDED(hr))
-      CHK_COM_CODE(psi->InitNew());
+    {
+      hr = psi->InitNew();
+      // E_NOTIMPL means this object needs no default initialization.
+      if(hr != E_NOTIMPL)
+        CHK_COM_CODE(hr);
+    }
 
     lcom = tLuaCOM::CreateLuaCOM(L, pdisp, clsid, NULL, untyped, (const char*)progId);
   }
