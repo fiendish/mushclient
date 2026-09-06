@@ -316,6 +316,7 @@ BOOL CMUSHclientApp::InitInstance()
         m_PreferencesDatabaseName.c_str (), 
         sqlite3_errmsg(db)));
     sqlite3_close(db);
+    db = NULL;
 		return FALSE;
     }
 
@@ -327,6 +328,7 @@ BOOL CMUSHclientApp::InitInstance()
         m_PreferencesDatabaseName.c_str () 
         ));
     sqlite3_close(db);
+    db = NULL;
 		return FALSE;
     }
 
@@ -341,7 +343,9 @@ BOOL CMUSHclientApp::InitInstance()
   if (db_version.empty () || atoi (db_version.c_str ()) < CURRENT_DB_VERSION)
     {
 
-    db_execute ("BEGIN TRANSACTION", true);
+    db_rc = db_execute ("BEGIN TRANSACTION", true);
+    if (db_rc != SQLITE_OK)
+      return FALSE;
 
     db_rc = db_execute (
       // general control information
@@ -355,7 +359,12 @@ BOOL CMUSHclientApp::InitInstance()
       return FALSE;        // SQL error
       }
 
-    db_write_int ("control", "database_version", CURRENT_DB_VERSION);
+    db_rc = db_write_int ("control", "database_version", CURRENT_DB_VERSION);
+    if (db_rc != SQLITE_OK)
+      {
+      db_execute ("ROLLBACK", true);
+      return FALSE;
+      }
 
     db_rc = db_execute (
 
@@ -383,7 +392,12 @@ BOOL CMUSHclientApp::InitInstance()
       return FALSE;        // SQL error
       }
 
-    db_execute ("COMMIT", true);
+    db_rc = db_execute ("COMMIT", true);
+    if (db_rc != SQLITE_OK)
+      {
+      db_execute ("ROLLBACK", true);
+      return FALSE;
+      }
 
     }   // end database empty
 
@@ -1131,31 +1145,57 @@ int * iColOrder;
 
   CString strTitle;
 
-  db_execute ("BEGIN TRANSACTION", true);
+  int db_rc = db_execute ("BEGIN TRANSACTION", true);
+  if (db_rc != SQLITE_OK)
+    {
+    delete [] iColOrder;
+    return;
+    }
 
   for (int nCol = 0; nCol < iColCount; nCol++)
     {
     strTitle.Format ("%s Col %i Width", strName, nCol);
-    App.db_write_int ("control", strTitle, 
-                          ctlList.GetColumnWidth (nCol));	
+    db_rc = App.db_write_int ("control", strTitle,
+                              ctlList.GetColumnWidth (nCol));
+    if (db_rc != SQLITE_OK)
+      break;
 
     strTitle.Format ("%s Col %i Order", strName, nCol);
-    App.db_write_int ("control", strTitle, 
-                        iColOrder [nCol]);	
+    db_rc = App.db_write_int ("control", strTitle, iColOrder [nCol]);
+    if (db_rc != SQLITE_OK)
+      break;
     } // end of doing each column
 
 
   delete [] iColOrder;
 
+  if (db_rc != SQLITE_OK)
+    {
+    db_execute ("ROLLBACK", true);
+    return;
+    }
+
   // what column they sorted on
   strTitle.Format ("%s Sort Sequence", strName);
-  App.db_write_int ("control", strTitle, iLastColumn);	
+  db_rc = App.db_write_int ("control", strTitle, iLastColumn);
+  if (db_rc != SQLITE_OK)
+    {
+    db_execute ("ROLLBACK", true);
+    return;
+    }
 
   // was it in reverse?
   strTitle.Format ("%s Sort Reverse", strName);
-  App.db_write_int ("control", strTitle, bReverse);	
+  db_rc = App.db_write_int ("control", strTitle, bReverse);
+  if (db_rc != SQLITE_OK)
+    {
+    db_execute ("ROLLBACK", true);
+    return;
+    }
 
-  db_execute ("COMMIT", true);
+  db_rc = db_execute ("COMMIT", true);
+  if (db_rc != SQLITE_OK)
+    db_execute ("ROLLBACK", true);
 
   } // end of SaveColumnConfiguration
 
