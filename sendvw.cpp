@@ -2583,11 +2583,28 @@ void CSendView::OnAcceleratorCommand (UINT nID)
 
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
-  BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
-  pDoc->m_bEnableAutoSay = FALSE;
+  CValueStateGuard<unsigned short> autoSayGuard
+    (pDoc->m_bEnableAutoSay, FALSE);
 
 
-  pDoc->m_iCurrentActionSource = eUserAccelerator;
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (pDoc->m_iCurrentActionSource, eUserAccelerator);
+
+  const string sPluginID = pDoc->m_CommandToPluginMap [nID];
+  CPlugin * pPlugin = NULL;
+
+  if (!sPluginID.empty ())
+    {
+    map<WORD, __int64>::const_iterator instanceIt =
+      pDoc->m_CommandToPluginInstanceMap.find (nID);
+    if (instanceIt == pDoc->m_CommandToPluginInstanceMap.end ())
+      return;
+
+    pPlugin = pDoc->GetPluginInstance (sPluginID.c_str (),
+                                       instanceIt->second);
+    if (!pPlugin)
+      return;
+    }
 
   // for backwards compatability, call the same thing as before
   if (pDoc->m_CommandToSendToMap [nID] == eSendToExecute)
@@ -2609,15 +2626,12 @@ void CSendView::OnAcceleratorCommand (UINT nID)
       key = KeyCodeToString (it->first >> 16, it->first);
 
     CString strExtraOutput;
-    pDoc->m_iCurrentActionSource = eUserAccelerator;  
-
-    CPlugin * pSavedPlugin = pDoc->m_CurrentPlugin;
-
     // which plugin wanted it
-    pDoc->m_CurrentPlugin = pDoc->GetPlugin (pDoc->m_CommandToPluginMap [nID].c_str ());
+    CPluginContextGuard pluginContextGuard (pDoc, pPlugin);
+    CPluginCallGuard pluginCallGuard (pPlugin, true);
 
     if (pDoc->m_CurrentPlugin != NULL ||
-        pDoc->m_CommandToPluginMap [nID].empty ())
+        sPluginID.empty ())
       {
       // ok let's do it now
       pDoc->SendTo (pDoc->m_CommandToSendToMap [nID], 
@@ -2630,20 +2644,12 @@ void CSendView::OnAcceleratorCommand (UINT nID)
               );
       }
 
-    pDoc->m_CurrentPlugin = pSavedPlugin;
-
     // display any stuff sent to output window
 
     if (!strExtraOutput.IsEmpty ())
        pDoc->DisplayMsg (strExtraOutput, strExtraOutput.GetLength (), COMMENT);
 
   }
-
-  pDoc->m_iCurrentActionSource = eUnknownActionSource;
-
-// restore auto-say
-
-  pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   }
 

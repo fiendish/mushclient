@@ -84,7 +84,16 @@ WORD key;
 	int iCount = CopyAcceleratorTable (hAccel, NULL, 10000);
   vAccel.resize (iCount);   // make room, set "size" to iCount
 
-	CopyAcceleratorTable (hAccel, &vAccel [0], iCount);
+	if (iCount && CopyAcceleratorTable (hAccel, &vAccel [0], iCount) != iCount)
+    return eBadParameter;
+
+  WORD nextAcceleratorCommand = m_nextAcceleratorCommand;
+  map<long, WORD> acceleratorToCommandMap (m_AcceleratorToCommandMap);
+  map<WORD, string> commandToMacroMap (m_CommandToMacroMap);
+  map<WORD, short> commandToSendToMap (m_CommandToSendToMap);
+  map<WORD, string> commandToPluginMap (m_CommandToPluginMap);
+  map<WORD, __int64> commandToPluginInstanceMap
+    (m_CommandToPluginInstanceMap);
 
   ACCEL aWanted;            // new accelerator
   aWanted.fVirt = fVirt;
@@ -105,16 +114,18 @@ WORD key;
     long virt_plus_key = ((long) fVirt) << 16 | key;
 
     // see if we have previously allocated that accelerator
-    map<long, WORD>::const_iterator it = m_AcceleratorToCommandMap.find (virt_plus_key);
+    map<long, WORD>::const_iterator it =
+      acceleratorToCommandMap.find (virt_plus_key);
 
-    if (it == m_AcceleratorToCommandMap.end ())
+    if (it == acceleratorToCommandMap.end ())
       {
       // check not too many ;)
-      if (m_nextAcceleratorCommand >= (ACCELERATOR_FIRST_COMMAND + ACCELERATOR_COUNT))
+      if (nextAcceleratorCommand >=
+          (ACCELERATOR_FIRST_COMMAND + ACCELERATOR_COUNT))
         return eBadParameter;   // too many of them
 
       // allocate new one
-      command = m_nextAcceleratorCommand++;
+      command = nextAcceleratorCommand++;
       }
     else
       command = it->second;  // re-use command
@@ -125,31 +136,48 @@ WORD key;
     vAccel.push_back (aWanted);
 
     // remember what the command was for that keystroke
-    m_AcceleratorToCommandMap [virt_plus_key] = command;
+    acceleratorToCommandMap [virt_plus_key] = command;
 
     // remember what to send if they use that command
-    m_CommandToMacroMap [command] = Send;
+    commandToMacroMap [command] = Send;
 
     // and where to send it
-    m_CommandToSendToMap [command] = SendTo;
+    commandToSendToMap [command] = SendTo;
 
     // remember which plugin did it
-    m_CommandToPluginMap [command].erase ();
+    commandToPluginMap [command].erase ();
+    commandToPluginInstanceMap [command] = 0;
 
     if (m_CurrentPlugin)
-      m_CommandToPluginMap [command] = m_CurrentPlugin->m_strID;
+      {
+      commandToPluginMap [command] = m_CurrentPlugin->m_strID;
+      commandToPluginInstanceMap [command] =
+        m_CurrentPlugin->m_iPluginInstanceNumber;
+      }
 
     }  // end of having something to do (ie. not deleting accelerator)
 
-  // create new handle
-  hAccel = CreateAcceleratorTable (&vAccel [0], vAccel.size ());
+  // create and validate the replacement before changing current state
+  HACCEL hNewAccel = NULL;
+  if (!vAccel.empty ())
+    {
+    hNewAccel = CreateAcceleratorTable (&vAccel [0], vAccel.size ());
+    if (!hNewAccel)
+      return eBadParameter;
+    }
+
+  HACCEL hOldAccel = m_accelerator;
+  m_accelerator = hNewAccel;
+  m_nextAcceleratorCommand = nextAcceleratorCommand;
+  m_AcceleratorToCommandMap.swap (acceleratorToCommandMap);
+  m_CommandToMacroMap.swap (commandToMacroMap);
+  m_CommandToSendToMap.swap (commandToSendToMap);
+  m_CommandToPluginMap.swap (commandToPluginMap);
+  m_CommandToPluginInstanceMap.swap (commandToPluginInstanceMap);
 
   // destroy old one, if we had one
-  if (m_accelerator)
-    DestroyAcceleratorTable (m_accelerator);
-
-  // replace accelerator table in document
-  m_accelerator = hAccel;
+  if (hOldAccel)
+    DestroyAcceleratorTable (hOldAccel);
 
   // test test test
 
