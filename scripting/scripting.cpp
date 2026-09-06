@@ -33,11 +33,29 @@ if (m_ScriptEngine)
   m_bSyntaxErrorOnly = false;
 
   m_ScriptEngine = new CScriptEngine (this, m_strLanguage);
-
-  if (m_ScriptEngine->CreateScriptEngine ())
+  CScriptEngine * pNewScriptEngine = m_ScriptEngine;
+  bool bCreateFailed;
+  try
     {
-    delete m_ScriptEngine;
+    bCreateFailed = pNewScriptEngine->CreateScriptEngine ();
+    }
+  catch (...)
+    {
+    if (m_ScriptEngine == pNewScriptEngine)
+      {
+      m_ScriptEngine = NULL;
+      delete pNewScriptEngine;
+      }
+    throw;
+    }
+
+  if (m_ScriptEngine != pNewScriptEngine)
+    return true;
+
+  if (bCreateFailed)
+    {
     m_ScriptEngine = NULL;
+    delete pNewScriptEngine;
     return true;
     }
 
