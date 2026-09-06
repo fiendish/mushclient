@@ -28,7 +28,8 @@ CMiniWindow::CMiniWindow ()  :
           m_client_mouseposition (0, 0),
           m_FlagsOnMouseDown (0),
           m_ZOrder (0),
-          m_bExecutingScript (false)
+          m_bExecutingScript (false),
+          m_bAddingHotspot (false)
   {
   pdc = new CDC;
   pdc->CreateCompatibleDC(NULL);
@@ -168,6 +169,48 @@ void CMiniWindow::Create (long Left, long Top, long Width, long Height,
                           COLORREF BackgroundColour)
   {
 
+  CDC * pNewDC = new CDC;
+  CBitmap * pNewBitmap = NULL;
+  CBitmap * pNewOldBitmap = NULL;
+  try
+    {
+    pNewBitmap = new CBitmap;
+    if (!pNewDC->CreateCompatibleDC(NULL))
+      AfxThrowResourceException ();
+    pNewDC->SetTextAlign (TA_LEFT | TA_TOP);
+
+    // CreateBitmap with zero dimensions creates a monochrome bitmap, so force at least 1x1.
+    if (!pNewBitmap->CreateBitmap (MAX (Width, 1), MAX (Height, 1), 1,
+                                   GetDeviceCaps((*pNewDC), BITSPIXEL), NULL))
+      AfxThrowResourceException ();
+    pNewOldBitmap = pNewDC->SelectObject (pNewBitmap);
+    if (!pNewOldBitmap)
+      AfxThrowResourceException ();
+    pNewDC->SetWindowOrg(0, 0);
+    pNewDC->FillSolidRect (0, 0, Width, Height, BackgroundColour);
+    }
+  catch (...)
+    {
+    if (pNewOldBitmap)
+      pNewDC->SelectObject (pNewOldBitmap);
+    delete pNewBitmap;
+    delete pNewDC;
+    throw;
+    }
+
+  // release the old resources only after the replacement is complete
+  if (m_Bitmap)
+    {
+    pdc->SelectObject(m_oldBitmap);    // swap old one back
+    m_Bitmap->DeleteObject ();
+    delete m_Bitmap;
+    }
+  delete pdc;
+
+  pdc = pNewDC;
+  m_Bitmap = pNewBitmap;
+  m_oldBitmap = pNewOldBitmap;
+
   m_Location.x           = Left            ;
   m_Location.y           = Top             ;
   m_iWidth               = Width           ;
@@ -175,29 +218,6 @@ void CMiniWindow::Create (long Left, long Top, long Width, long Height,
   m_iPosition            = Position        ;
   m_iFlags               = Flags           ;
   m_iBackgroundColour    = BackgroundColour;
-
-  // get rid of old one if any
-  if (m_Bitmap)
-    {
-    pdc->SelectObject(m_oldBitmap);    // swap old one back
-    m_Bitmap->DeleteObject ();
-    delete m_Bitmap;
-    }
-
-  // get rid of old device context and make a new one
-  delete pdc;
-  pdc = new CDC;
-  pdc->CreateCompatibleDC(NULL);
-  pdc->SetTextAlign (TA_LEFT | TA_TOP);
-
-  m_Bitmap = new CBitmap;
-
-  //  CreateBitmap with zero-dimensions creates a monochrome bitmap, so force to be at least 1x1
-  m_Bitmap->CreateBitmap (MAX (m_iWidth, 1), MAX (m_iHeight, 1), 1, GetDeviceCaps((*pdc), BITSPIXEL), NULL);
-  m_oldBitmap = pdc->SelectObject (m_Bitmap);
-  pdc->SetWindowOrg(0, 0);
-
-  pdc->FillSolidRect (0, 0, m_iWidth, m_iHeight, m_iBackgroundColour);
 
   m_bShow = false;
 
@@ -627,18 +647,20 @@ long CMiniWindow::Font (LPCTSTR FontId,        // eg. "inventory"
   {
 
   FontMapIterator it = m_Fonts.find (FontId);
-
-  if (it != m_Fonts.end ())
-    {
-    delete it->second;         // delete existing font
-    m_Fonts.erase (it);
-    }
+  CFont * pOldFont = it == m_Fonts.end () ? NULL : it->second;
 
   // no font name, and zero point size requested - delete old font
   if (FontName [0] == 0 && Size == 0.0)
+    {
+    if (it != m_Fonts.end ())
+      {
+      m_Fonts.erase (it);
+      delete pOldFont;
+      }
     return eOK;
+    }
 
-  CFont * pFont = new CFont;
+  std::unique_ptr<CFont> pFont (new CFont);
 
   int lfHeight = -MulDiv(Size ? Size : 10.0, pdc->GetDeviceCaps(LOGPIXELSY), 72);
 
@@ -657,12 +679,12 @@ long CMiniWindow::Font (LPCTSTR FontId,        // eg. "inventory"
                           PitchAndFamily,
                           FontName) == 0)
     {
-    delete pFont;
     return eCannotAddFont;
     }
 
-
-  m_Fonts [FontId] = pFont;
+  m_Fonts [FontId] = pFont.get ();
+  pFont.release ();
+  delete pOldFont;
   return eOK;
 
   }   // end of CMiniWindow::Font
@@ -777,8 +799,8 @@ void CMiniWindow::FontList (VARIANT & vaResult)
 
 
 
-//helper function to calculate length of UTF8 string
-static long CalculateUTF8length (LPCTSTR Text, size_t length)
+// helper function to calculate the required number of UTF-16 code units
+static long CalculateUTF16length (LPCTSTR Text, size_t length)
   {
 
   int erroroffset;
@@ -786,32 +808,9 @@ static long CalculateUTF8length (LPCTSTR Text, size_t length)
   if (iBad > 0)
     return -1;
 
-    // string is OK, calculate its length
+  return MultiByteToWideChar (CP_UTF8, 0, Text, length, NULL, 0);
 
-  int i = 0;   // length
-
-  // this algorithm assumes the UTF-8 is OK, based on the earlier check
-
-  for (register const unsigned char *p = (const unsigned char *) Text ;
-       length-- > 0;
-       i++)
-    {
-    register int ab;    // additional bytes
-    register int c = *p++;  // this byte
-
-    if (c < 128)
-      continue;     // zero additional bytes
-
-    ab = _pcre_utf8_table4 [c & 0x3f];  /* Number of additional bytes */
-
-    length -= ab;  // we know string is valid already, so just skip the additional bytes (ab)
-    p += ab;
-
-    }
-
-  return i;
-
-  }   // end of CalculateUTF8length
+  }   // end of CalculateUTF16length
 
 // output text, ordinary or UTF8 - returns length of text
 long CMiniWindow::Text (LPCTSTR FontId,  // which previously-created font
@@ -827,7 +826,7 @@ long CMiniWindow::Text (LPCTSTR FontId,  // which previously-created font
     return -2;
 
   size_t length = strlen (Text);
-  long utf8_length = 0;
+  long utf16_length = 0;
 
   // give up if no text
   if (length <= 0)
@@ -836,8 +835,8 @@ long CMiniWindow::Text (LPCTSTR FontId,  // which previously-created font
   // quick sanity check on our UTF8 stuff
   if (Unicode)
     {
-    utf8_length = CalculateUTF8length (Text, length);
-    if (utf8_length < 0)
+    utf16_length = CalculateUTF16length (Text, length);
+    if (utf16_length <= 0)
       return -3;    // ohno!
     }
 
@@ -851,10 +850,10 @@ long CMiniWindow::Text (LPCTSTR FontId,  // which previously-created font
 
   if (Unicode)
     {
-    vector<WCHAR> v (utf8_length);    // get correct size vector
+    vector<WCHAR> v (utf16_length);    // get correct size vector
     int iUnicodeCharacters = MultiByteToWideChar (CP_UTF8, 0,
                               Text, length,            // input
-                              &v [0], utf8_length);    // output
+                              &v [0], utf16_length);    // output
 
     ExtTextOutW (pdc->m_hDC, Left, Top, ETO_CLIPPED, CRect (Left, Top, FixRight (Right), FixBottom (Bottom) ),
                   &v [0], iUnicodeCharacters, NULL);
@@ -895,7 +894,7 @@ long CMiniWindow::TextWidth (LPCTSTR FontId,  // which previously-created font
     return -2;
 
   size_t length = strlen (Text);
-  long utf8_length = 0;
+  long utf16_length = 0;
 
   // give up if no text
   if (length <= 0)
@@ -904,8 +903,8 @@ long CMiniWindow::TextWidth (LPCTSTR FontId,  // which previously-created font
   // quick sanity check on our UTF8 stuff
   if (Unicode)
     {
-    utf8_length = CalculateUTF8length (Text, length);
-    if (utf8_length < 0)
+    utf16_length = CalculateUTF16length (Text, length);
+    if (utf16_length <= 0)
       return -3;    // ohno!
     }
 
@@ -916,10 +915,10 @@ long CMiniWindow::TextWidth (LPCTSTR FontId,  // which previously-created font
 
   if (Unicode)
     {
-    vector<WCHAR> v (utf8_length);    // get correct size vector
+    vector<WCHAR> v (utf16_length);    // get correct size vector
     int iUnicodeCharacters = MultiByteToWideChar (CP_UTF8, 0,
                               Text, length,           // input
-                              &v [0], utf8_length);   // output
+                              &v [0], utf16_length);   // output
 
     // now calculate width of Unicode pixels
     GetTextExtentPoint32W(
@@ -1043,17 +1042,46 @@ void CMiniWindow::Info (long InfoType, VARIANT & vaResult)
   }  // end of CMiniWindow::Info
 
 
+static long StoreLoadedBitmap (ImageMap & images, LPCTSTR ImageId, HBITMAP hBmp)
+  {
+  CBitmap * pImage = NULL;
+
+  try
+    {
+    pImage = new CBitmap;
+    if (!pImage->Attach (hBmp))
+      {
+      delete pImage;
+      DeleteObject (hBmp);
+      return eUnableToLoadImage;
+      }
+
+    hBmp = NULL;
+
+    ImageMapIterator it = images.find (ImageId);
+    CBitmap * pOldImage = it == images.end () ? NULL : it->second;
+
+    images [ImageId] = pImage;
+    delete pOldImage;
+    }
+  catch (...)
+    {
+    if (pImage)
+      {
+      pImage->DeleteObject ();
+      delete pImage;
+      }
+    if (hBmp)
+      DeleteObject (hBmp);
+    throw;
+    }
+
+  return eOK;
+  }
+
 // loads an image file, ready for drawing into window
 long CMiniWindow::LoadImage (LPCTSTR ImageId, LPCTSTR FileName)
   {
-  ImageMapIterator it = m_Images.find (ImageId);
-
-  if (it != m_Images.end ())
-    {
-    delete it->second;         // delete existing image
-    m_Images.erase (it);
-    }
-
   CString strFileName = FileName;
 
   strFileName.TrimLeft ();
@@ -1061,7 +1089,16 @@ long CMiniWindow::LoadImage (LPCTSTR ImageId, LPCTSTR FileName)
 
   // no file name means get rid of image
   if (strFileName.IsEmpty ())
+    {
+    ImageMapIterator it = m_Images.find (ImageId);
+    if (it != m_Images.end ())
+      {
+      CBitmap * pOldImage = it->second;
+      m_Images.erase (it);
+      delete pOldImage;
+      }
     return eOK;
+    }
 
   // have to be long enough to have x.bmp
   if (strFileName.GetLength () < 5)
@@ -1086,12 +1123,7 @@ long CMiniWindow::LoadImage (LPCTSTR ImageId, LPCTSTR FileName)
                   );
 
    if (hBmp)
-     {
-      CBitmap * pImage = new CBitmap;
-      pImage->Attach (hBmp);
-      m_Images [ImageId] = pImage;
-      return eOK;
-     }  // end of having a bitmap loaded
+     return StoreLoadedBitmap (m_Images, ImageId, hBmp);
 
 
    if (GetLastError () == 2)
@@ -1109,14 +1141,6 @@ long CMiniWindow::LoadImageMemory(LPCTSTR ImageId,
                                  const size_t Length,
                                  const bool bAlpha)
   {
-  ImageMapIterator it = m_Images.find (ImageId);
-
-  if (it != m_Images.end ())
-    {
-    delete it->second;         // delete existing image
-    m_Images.erase (it);
-    }
-
   HBITMAP hbmp;
 
   long result =  LoadPngMemory (Buffer, Length, hbmp, bAlpha);
@@ -1124,12 +1148,7 @@ long CMiniWindow::LoadImageMemory(LPCTSTR ImageId,
   if (result != eOK)
     return result;
 
-  // make bitmap to add to images list
-  CBitmap * pImage = new CBitmap;
-  pImage->Attach (hbmp);
-  m_Images [ImageId] = pImage;
-
-  return eOK;
+  return StoreLoadedBitmap (m_Images, ImageId, hbmp);
 
   } // end of CMiniWindow::LoadImageMemory
 
@@ -1158,12 +1177,7 @@ long CMiniWindow::LoadPngImage (LPCTSTR ImageId, LPCTSTR FileName)
   if (result != eOK)
     return result;
 
-  // make bitmap to add to images list
-  CBitmap * pImage = new CBitmap;
-  pImage->Attach (hbmp);
-  m_Images [ImageId] = pImage;
-
-  return eOK;
+  return StoreLoadedBitmap (m_Images, ImageId, hbmp);
   } // end of CMiniWindow::LoadPngImage
 
 
@@ -1209,6 +1223,9 @@ long CMiniWindow::Write (LPCTSTR FileName)
 
   HBITMAP hbmG = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
 
+  if (!hbmG)
+    return eUnableToLoadImage;
+
   HBITMAP hOldAbmp = (HBITMAP) SelectObject(gDC.m_hDC, hbmG);
 
   // copy image from miniwindow to bitmap
@@ -1225,7 +1242,9 @@ long CMiniWindow::Write (LPCTSTR FileName)
     // create requested file
     CFile file;
     if( !file.Open (FileName, CFile::modeWrite | CFile::modeCreate))
-      return eCouldNotOpenFile;
+      iReturn = eCouldNotOpenFile;
+    else
+      {
 
     BITMAPFILEHEADER  hdr;
     ZeroMemory (&hdr, sizeof hdr);
@@ -1251,6 +1270,7 @@ long CMiniWindow::Write (LPCTSTR FileName)
       e->Delete ();
       iReturn = eLogFileBadWrite;
       } // end of catching a file exception
+      }
 
     }   // end of writing BMP file
 
@@ -1731,23 +1751,9 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
-  m_sCallbackPlugin = sPluginID;
-
   HotspotMapIterator it = m_Hotspots.find (HotspotId);
-
-  if (it != m_Hotspots.end ())
-    {
-    delete it->second;         // delete existing hotspot
-    m_Hotspots.erase (it);
-    if (m_sMouseOverHotspot == HotspotId)
-      m_sMouseOverHotspot.erase ();
-
-    if (m_sMouseDownHotspot == HotspotId)
-      m_sMouseDownHotspot.erase ();
-
-    }
-
-  CHotspot * pHotspot = new CHotspot;
+  CHotspot * pOldHotspot = it == m_Hotspots.end () ? NULL : it->second;
+  std::unique_ptr<CHotspot> pHotspot (new CHotspot);
 
   pHotspot->m_rect              = CRect (Left, Top, FixRight (Right), FixBottom (Bottom));
   pHotspot->m_sMouseOver        = MouseOver;
@@ -1771,7 +1777,17 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
     pHotspot->m_dispid_MouseUp          = pDoc->GetProcedureDispid (MouseUp, "mouse up", "", strErrorMessage);
     }
 
-  m_Hotspots [HotspotId] = pHotspot;
+  m_Hotspots [HotspotId] = pHotspot.get ();
+  pHotspot.release ();
+  delete pOldHotspot;
+
+  m_sCallbackPlugin.swap (sPluginID);
+
+  if (m_sMouseOverHotspot == HotspotId)
+    m_sMouseOverHotspot.erase ();
+
+  if (m_sMouseDownHotspot == HotspotId)
+    m_sMouseDownHotspot.erase ();
 
   return eOK;
   }    // end of CMiniWindow::AddHotspot
@@ -1796,7 +1812,9 @@ long CMiniWindow::DeleteHotspot(LPCTSTR HotspotId)
     m_sMouseDownHotspot.erase ();
 
   if (m_Hotspots.empty ())
+    {
     m_sCallbackPlugin.erase ();
+    }
 
   return eOK;
   }    // end of CMiniWindow::DeleteHotspot
@@ -1961,22 +1979,19 @@ long CMiniWindow::CreateImage(LPCTSTR ImageId, long Row1, long Row2, long Row3, 
   {
 
   ImageMapIterator it = m_Images.find (ImageId);
-
-  if (it != m_Images.end ())
-    {
-    delete it->second;         // delete existing image
-    m_Images.erase (it);
-    }
-
-  CBitmap * pImage = new CBitmap;
+  CBitmap * pOldImage = it == m_Images.end () ? NULL : it->second;
+  std::unique_ptr<CBitmap> pImage (new CBitmap);
 
   // bottom row comes first in a bitmap
   WORD    wBits[8] = { (WORD) Row8, (WORD) Row7, (WORD) Row6, (WORD) Row5,
                        (WORD) Row4, (WORD) Row3, (WORD) Row2, (WORD) Row1 };
 
-  pImage->CreateBitmap (8, 8, 1, 1, wBits);
+  if (!pImage->CreateBitmap (8, 8, 1, 1, wBits))
+    AfxThrowResourceException ();
 
-  m_Images [ImageId] = pImage;
+  m_Images [ImageId] = pImage.get ();
+  pImage.release ();
+  delete pOldImage;
   return eOK;
 
   }  // end of CMiniWindow::CreateImage
@@ -2100,6 +2115,9 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
   if (iWidth <= 0 || iHeight <= 0)   // sanity check
     return eOK;
 
+  if (Mode < 1 || Mode > 64)
+    return eUnknownOption;
+
   BITMAPINFO bmi;
   ZeroMemory (&bmi, sizeof bmi);
 
@@ -2118,6 +2136,9 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
   unsigned char * pA = NULL;
 
   HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
+
+  if (!hbmA)
+    return eUnableToLoadImage;
 
   HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
 
@@ -2139,6 +2160,13 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
   unsigned char * pB = NULL;
 
   HBITMAP hbmB = CreateDIBSection(pdc->m_hDC, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
+
+  if (!hbmB)
+    {
+    SelectObject(A_DC.m_hDC, hOldAbmp);
+    DeleteObject (hbmA);
+    return eUnableToLoadImage;
+    }
 
   HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
 
@@ -2521,32 +2549,45 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
 long CMiniWindow::ImageFromWindow(LPCTSTR ImageId, CMiniWindow * pSrcWindow)
   {
 
-
   ImageMapIterator it = m_Images.find (ImageId);
-
-  if (it != m_Images.end ())
-    {
-    delete it->second;         // delete existing image
-    m_Images.erase (it);
-    }
+  CBitmap * pOldImage = it == m_Images.end () ? NULL : it->second;
 
   // make new bitmap of appropriate size to hold image from other miniwindow
   CBitmap * pImage = new CBitmap;
-  pImage->CreateCompatibleBitmap (&(*pdc), pSrcWindow->m_iWidth, pSrcWindow->m_iHeight);
+  CBitmap *pOldbmp = NULL;
 
-  // prepare to copy it
   CDC bmDC;
-  bmDC.CreateCompatibleDC(&(*pdc));
-  CBitmap *pOldbmp = bmDC.SelectObject(pImage);
+  try
+    {
+    if (!pImage->CreateCompatibleBitmap (&(*pdc), pSrcWindow->m_iWidth, pSrcWindow->m_iHeight))
+      AfxThrowResourceException ();
+    if (!bmDC.CreateCompatibleDC(&(*pdc)))
+      AfxThrowResourceException ();
+    pOldbmp = bmDC.SelectObject(pImage);
+    if (!pOldbmp)
+      AfxThrowResourceException ();
 
-  // copy into our bitmap
-  bmDC.BitBlt (0, 0, pSrcWindow->m_iWidth, pSrcWindow->m_iHeight, pSrcWindow->pdc, 0, 0, SRCCOPY);
+    // copy into our bitmap
+    if (!bmDC.BitBlt (0, 0, pSrcWindow->m_iWidth, pSrcWindow->m_iHeight,
+                      pSrcWindow->pdc, 0, 0, SRCCOPY))
+      AfxThrowResourceException ();
 
-  // done
-  bmDC.SelectObject(pOldbmp);
+    if (!bmDC.SelectObject(pOldbmp))
+      AfxThrowResourceException ();
+    pOldbmp = NULL;
 
-  // save in map
-  m_Images [ImageId] = pImage;
+    // save in map
+    m_Images [ImageId] = pImage;
+    }
+  catch (...)
+    {
+    if (pOldbmp)
+      bmDC.SelectObject (pOldbmp);
+    delete pImage;
+    throw;
+    }
+
+  delete pOldImage;
   return eOK;
 
   } // end of CMiniWindow::ImageFromWindow
@@ -2620,6 +2661,9 @@ long CMiniWindow::Gradient(long Left, long Top, long Right, long Bottom,
     unsigned char * pA = NULL;
 
     HBITMAP hbmG = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
+
+    if (!hbmG)
+      return eUnableToLoadImage;
 
     HBITMAP hOldAbmp = (HBITMAP) SelectObject(gDC.m_hDC, hbmG);
 
@@ -3182,6 +3226,9 @@ long CMiniWindow::Filter(long Left, long Top, long Right, long Bottom,
   if (iWidth < 1 || iHeight < 1)   // sanity check
     return eOK;
 
+  if (Operation < 1 || Operation > 27)
+    return eUnknownOption;
+
   // upper layer (from image id)
   CDC gDC;
   gDC.CreateCompatibleDC(&(*pdc));
@@ -3201,6 +3248,9 @@ long CMiniWindow::Filter(long Left, long Top, long Right, long Bottom,
   unsigned char * pA = NULL;
 
   HBITMAP hbmG = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
+
+  if (!hbmG)
+    return eUnableToLoadImage;
 
   HBITMAP hOldAbmp = (HBITMAP) SelectObject(gDC.m_hDC, hbmG);
 
@@ -3387,6 +3437,9 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
   if (bi.bmHeight < SrcBottom)
     return eBadParameter;
 
+  if (Mode < 0 || Mode > 1)
+    return eUnknownOption;
+
 
   // merge layer (from image id)
   CDC A_DC;
@@ -3406,6 +3459,9 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
   unsigned char * pA = NULL;
 
   HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
+
+  if (!hbmA)
+    return eUnableToLoadImage;
 
   HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
 
@@ -3428,6 +3484,13 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
 
   HBITMAP hbmB = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
 
+  if (!hbmB)
+    {
+    SelectObject(A_DC.m_hDC, hOldAbmp);
+    DeleteObject (hbmA);
+    return eUnableToLoadImage;
+    }
+
   HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
 
   // copy base image from miniwindow to bitmap
@@ -3443,6 +3506,15 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
   unsigned char * pM = NULL;
 
   HBITMAP hbmM = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pM, NULL, 0);
+
+  if (!hbmM)
+    {
+    SelectObject(A_DC.m_hDC, hOldAbmp);
+    SelectObject(B_DC.m_hDC, hOldBbmp);
+    DeleteObject (hbmA);
+    DeleteObject (hbmB);
+    return eUnableToLoadImage;
+    }
 
   HBITMAP hOldMbmp = (HBITMAP) SelectObject(M_DC.m_hDC, hbmM);
 
@@ -3568,20 +3640,27 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
 
   } // end of CMiniWindow::MergeImageAlpha
 
-static CString strMXP_menu_item [MXP_MENU_COUNT];
-
 CMenu* GrabAMenu (void)
   {
-  CMenu menu;
-  VERIFY(menu.LoadMenu(IDR_MXP_MENU));
-
-  CMenu* pPopup = menu.GetSubMenu(0);
-  if (pPopup == NULL)
+  CMenu rootMenu;
+  if (!rootMenu.LoadMenu (IDR_MXP_MENU))
     return NULL;
-  menu.Detach ();    // CMenu is temporary on stack
+
+  HMENU hPopup = ::GetSubMenu (rootMenu.m_hMenu, 0);
+  if (hPopup == NULL)
+    return NULL;
+
+  std::unique_ptr<CMenu> pPopup (new CMenu);
+  if (!rootMenu.RemoveMenu (0, MF_BYPOSITION))
+    return NULL;
+  if (!pPopup->Attach (hPopup))
+    {
+    ::DestroyMenu (hPopup);
+    return NULL;
+    }
   pPopup->DeleteMenu (0, MF_BYPOSITION);  // get rid of dummy item
 
-  return pPopup;
+  return pPopup.release ();
   }   // end of GrabAMenu
 
 CString CMiniWindow::Menu(long Left, long Top, LPCTSTR Items, CMUSHView* pView)
@@ -3675,11 +3754,38 @@ int align = TPM_LEFTALIGN | TPM_TOPALIGN;  // these are actually both zero
 CPoint menupoint (Left, Top);
 
 
-  list<CMenu*> vPopup;    // nested menus
+  list<CMenu*> vPopup;    // active nested-menu stack
+  vector<CMenu*> allMenus;  // all allocated menu wrappers
 
   CMenu* pPopup = GrabAMenu ();   // top level
   if (pPopup == NULL)
     return strResult;     // doesn't exist, strange
+  std::unique_ptr<CMenu> rootMenuOwner (pPopup);
+  allMenus.push_back (pPopup);
+  rootMenuOwner.release ();
+
+  class CMenuGuard
+    {
+    public:
+      CMenuGuard (vector<CMenu*> & menus) : m_Menus (menus) { }
+      ~CMenuGuard ()
+        {
+        for (size_t i = 1; i < m_Menus.size (); i++)
+          {
+          m_Menus [i]->Detach ();
+          delete m_Menus [i];
+          }
+        if (!m_Menus.empty ())
+          {
+          m_Menus [0]->DestroyMenu ();
+          delete m_Menus [0];
+          }
+        }
+
+    private:
+      vector<CMenu*> & m_Menus;
+    } menuGuard (allMenus);
+
   vPopup.push_back (pPopup);
 
   CWnd* pWndPopupOwner = (CWnd *) pView;
@@ -3689,6 +3795,8 @@ CPoint menupoint (Left, Top);
   ClientToScreen(pView->m_hWnd, &menupoint);
 
   int j = 0;
+  vector<CString> menuItems;
+  menuItems.reserve (MXP_MENU_COUNT);
 
   for (vector<string>::const_iterator i = v.begin (); i != v.end (); i++)
     {
@@ -3701,7 +3809,18 @@ CPoint menupoint (Left, Top);
       CMenu* pNestedMenu = GrabAMenu ();   // nested menu
       if (pNestedMenu)
         {
-        vPopup.back ()->AppendMenu (MF_POPUP | MF_ENABLED, (UINT ) pNestedMenu->m_hMenu, strItem.Mid (1));
+        std::unique_ptr<CMenu> nestedMenuOwner (pNestedMenu);
+        allMenus.push_back (pNestedMenu);
+        nestedMenuOwner.release ();
+        if (!vPopup.back ()->AppendMenu (MF_POPUP | MF_ENABLED,
+                                         (UINT) pNestedMenu->m_hMenu,
+                                         strItem.Mid (1)))
+          {
+          allMenus.pop_back ();
+          pNestedMenu->DestroyMenu ();
+          delete pNestedMenu;
+          AfxThrowResourceException ();
+          }
         vPopup.push_back (pNestedMenu);  // add to menu stack
         }
       }
@@ -3732,7 +3851,7 @@ CPoint menupoint (Left, Top);
         vPopup.back ()->AppendMenu (iFlags, 0, strItem);
       else
         {
-        strMXP_menu_item [j] = strItem;
+        menuItems.push_back (strItem);
         vPopup.back ()->AppendMenu (iFlags, MXP_FIRST_MENU + j, strItem);
         j++;
         if (j >= MXP_MENU_COUNT)
@@ -3743,32 +3862,34 @@ CPoint menupoint (Left, Top);
     }
 
   // without this line the auto-enable always set "no items" to active
-  Frame.m_bAutoMenuEnable  = FALSE;
+  CValueStateGuard<BOOL> autoMenuEnableGuard (Frame.m_bAutoMenuEnable, FALSE);
 
   int iResult = vPopup.front ()->TrackPopupMenu(align | TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_RETURNCMD,
                           menupoint.x,
                           menupoint.y,
                           pWndPopupOwner);
 
-  // put things back how they were
-  Frame.m_bAutoMenuEnable  = TRUE;
-
   if (iResult > 0)
     {
     if (bReturnNumber)
       strResult = CFormat ("%i", iResult - MXP_FIRST_MENU + 1);
     else
-      strResult = strMXP_menu_item [iResult - MXP_FIRST_MENU];
+      {
+      const int iMenuItem = iResult - MXP_FIRST_MENU;
+      if (iMenuItem >= 0 && iMenuItem < static_cast<int> (menuItems.size ()))
+        strResult = menuItems [iMenuItem];
+      }
     }
-
-  vPopup.front ()->DestroyMenu ();   // clean up
 
   return  strResult;  // will be empty for errors or cancelled
 
 
   }  // end of CMiniWindow::Menu
 
-long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId, string sPluginID, LPCTSTR MoveCallback, LPCTSTR ReleaseCallback, long Flags)
+long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
+                              string sPluginID,
+                              LPCTSTR MoveCallback,
+                              LPCTSTR ReleaseCallback, long Flags)
   {
 
   if (strlen (MoveCallback) > 0 && CheckLabel (MoveCallback, true))
@@ -3892,6 +4013,9 @@ long CMiniWindow::DrawImageAlpha(LPCTSTR ImageId,
 
   HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
 
+  if (!hbmA)
+    return eUnableToLoadImage;
+
   HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
 
   CDC bmDC;   // for loading bitmaps into
@@ -3912,6 +4036,13 @@ long CMiniWindow::DrawImageAlpha(LPCTSTR ImageId,
   unsigned char * pB = NULL;
 
   HBITMAP hbmB = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
+
+  if (!hbmB)
+    {
+    SelectObject(A_DC.m_hDC, hOldAbmp);
+    DeleteObject (hbmA);
+    return eUnableToLoadImage;
+    }
 
   HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
 
@@ -4026,6 +4157,9 @@ long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
 
   HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
 
+  if (!hbmA)
+    return eUnableToLoadImage;
+
   HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
 
   CDC bmDC;   // for loading bitmaps into
@@ -4046,6 +4180,13 @@ long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
   unsigned char * pB = NULL;
 
   HBITMAP hbmB = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
+
+  if (!hbmB)
+    {
+    SelectObject(A_DC.m_hDC, hOldAbmp);
+    DeleteObject (hbmA);
+    return eUnableToLoadImage;
+    }
 
   HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
 
@@ -4081,7 +4222,10 @@ long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
   } // end of  CMiniWindow::GetImageAlpha
 
 
-long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId, string sPluginID, LPCTSTR MoveCallback)
+long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
+                                     LPCTSTR HotspotId,
+                                     string sPluginID,
+                                     LPCTSTR MoveCallback)
   {
 
   if (strlen (MoveCallback) > 0 && CheckLabel (MoveCallback, true))
@@ -4127,35 +4271,61 @@ long CMiniWindow::Resize(long Width, long Height, long BackgroundColour)
 
 
   CDC bmDC;   // for loading bitmaps into
-  bmDC.CreateCompatibleDC(&(*pdc));
-
-  // temporary bitmap
   CBitmap tempBitmap;
-  tempBitmap.CreateCompatibleBitmap (&(*pdc), 1, 1);
-
-  // select temporary bitmap into device context
-  pdc->SelectObject(tempBitmap);
-
-  // save old bitmap for copying from
+  CBitmap * pOldBmDCBitmap = NULL;
+  CBitmap * pOldWindowDCBitmap = NULL;
+  CBitmap * pTempWindowDCBitmap = NULL;
   CBitmap * previousWindowBitmap = m_Bitmap;
+  std::unique_ptr<CBitmap> pNewBitmap (new CBitmap);
 
-  // select into new device context
-  CBitmap * pOldbmp = bmDC.SelectObject (previousWindowBitmap);
+  try
+    {
+    if (!bmDC.CreateCompatibleDC(&(*pdc)))
+      AfxThrowResourceException ();
+    if (!tempBitmap.CreateCompatibleBitmap (&(*pdc), 1, 1))
+      AfxThrowResourceException ();
 
-  // make new bitmap for different size
-  m_Bitmap = new CBitmap;
+    // CreateBitmap with zero dimensions creates a monochrome bitmap, so force at least 1x1.
+    if (!pNewBitmap->CreateBitmap (MAX (Width, 1), MAX (Height, 1), 1,
+                                   GetDeviceCaps((*pdc), BITSPIXEL), NULL))
+      AfxThrowResourceException ();
 
-  //  CreateBitmap with zero-dimensions creates a monochrome bitmap, so force to be at least 1x1
-  m_Bitmap->CreateBitmap (MAX (Width, 1), MAX (Height, 1), 1, GetDeviceCaps((*pdc), BITSPIXEL), NULL);
-  pdc->SelectObject(m_Bitmap);
-  pdc->SetWindowOrg(0, 0);
+    // Unselect the old bitmap before selecting it into the copy DC.
+    pOldWindowDCBitmap = pdc->SelectObject (&tempBitmap);
+    if (!pOldWindowDCBitmap)
+      AfxThrowResourceException ();
+    pOldBmDCBitmap = bmDC.SelectObject (previousWindowBitmap);
+    if (!pOldBmDCBitmap)
+      AfxThrowResourceException ();
 
-  // fill with requested fill colour
-  pdc->FillSolidRect (0, 0, Width, Height, BackgroundColour);
+    pTempWindowDCBitmap = pdc->SelectObject (pNewBitmap.get ());
+    if (!pTempWindowDCBitmap)
+      AfxThrowResourceException ();
+    pdc->SetWindowOrg(0, 0);
 
-  // copy old contents back
-  pdc->BitBlt (0, 0, m_iWidth, m_iHeight, &bmDC, 0, 0, SRCCOPY);
-  bmDC.SelectObject(pOldbmp);
+    // fill with requested fill colour
+    pdc->FillSolidRect (0, 0, Width, Height, BackgroundColour);
+
+    // copy old contents back
+    if (!pdc->BitBlt (0, 0, m_iWidth, m_iHeight, &bmDC, 0, 0, SRCCOPY))
+      AfxThrowResourceException ();
+
+    if (!bmDC.SelectObject(pOldBmDCBitmap))
+      AfxThrowResourceException ();
+    pOldBmDCBitmap = NULL;
+    }
+  catch (...)
+    {
+    if (pOldBmDCBitmap)
+      bmDC.SelectObject (pOldBmDCBitmap);
+    if (pTempWindowDCBitmap)
+      pdc->SelectObject (pTempWindowDCBitmap);
+    if (pOldWindowDCBitmap)
+      pdc->SelectObject (pOldWindowDCBitmap);
+    throw;
+    }
+
+  m_Bitmap = pNewBitmap.release ();
 
   // done with previous bitmap from this miniwindow
   previousWindowBitmap->DeleteObject ();
