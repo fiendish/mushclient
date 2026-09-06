@@ -34,12 +34,14 @@
 
 bool CMUSHclientDoc::SwitchToNotepad (void)
   {
+  CMUSHclientDoc * pThisDocument = this;
+  __int64 iThisDocumentNumber = m_iUniqueDocumentNumber;
   int iCount = 0;
 
   for (POSITION docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
       docPos != NULL; )
     {
-    CTextDocument * pTextDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+    CTextDocument * pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
     // ignore unrelated worlds
     if (pTextDoc->m_pRelatedWorld == this &&
@@ -52,9 +54,26 @@ bool CMUSHclientDoc::SwitchToNotepad (void)
     CChooseNotepadDlg dlg;
 
     dlg.m_pWorld = this;
+    dlg.m_iWorldDocumentNumber = iThisDocumentNumber;
 
     if (dlg.DoModal () != IDOK)
       return true;   // they gave up
+
+    bool bDocumentLive = false;
+    for (POSITION worldPos = App.m_pWorldDocTemplate->GetFirstDocPosition(); worldPos; )
+      {
+      CMUSHclientDoc * pWorld =
+        (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (worldPos);
+      if (pWorld == pThisDocument &&
+          pWorld->m_iUniqueDocumentNumber == iThisDocumentNumber)
+        {
+        bDocumentLive = true;
+        break;
+        }
+      }
+
+    if (!bDocumentLive)
+      return true;
 
     if (dlg.m_pTextDocument)  // they chose an existing one
       {
@@ -213,7 +232,7 @@ CTextDocument * pTextDoc = NULL;
   for (POSITION docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
       docPos != NULL; )
     {
-    pTextDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+    pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
     // ignore unrelated worlds
     if (pTextDoc->m_pRelatedWorld == this &&
