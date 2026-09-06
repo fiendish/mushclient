@@ -289,6 +289,7 @@ CMUSHView::CMUSHView()
   m_nLastToolTipColumn = 0;
   m_scroll_position = 0;
   m_mousedover = false;
+  m_bInSelectionChanged = false;
   m_iMXPMenuAction = 0;
   m_bottomview = NULL;
 
@@ -2328,7 +2329,8 @@ int line,
             }   // end of passing special syntax test
           else
             {  // plugin does not exist - just execute it
-            pDoc->m_iExecutionDepth = 0;
+            CValueStateGuard<int> executionDepthGuard
+              (pDoc->m_iExecutionDepth, 0);
             pDoc->Execute (strAction);
             }
           } // end of note hyperlink
@@ -3351,11 +3353,11 @@ int lastline;
   // very bizarre bug - fixed in 4.39
   // we seem to get size messages if we are maximized and in the background
 
-  bool bOldFreeze = m_freeze;  
+  {
+  CValueStateGuard<BOOL> freezeGuard (m_freeze, m_freeze);
   if (m_bAtBufferEnd)
-    OnTestEnd ();   
-
-  m_freeze = bOldFreeze;
+    OnTestEnd ();
+  }
   
   Frame.FixUpTitleBar ();   // in case we need to add the mud name to the title bar
 
@@ -7697,8 +7699,7 @@ ASSERT_VALID(pDoc);
 
 void CMUSHView::NotifySelectionChanged(void)
 {
-  static bool bInSelectionChanged = false;
-  if (bInSelectionChanged)  // don't recurse into infinite loops
+  if (m_bInSelectionChanged)  // don't recurse into infinite loops
     return;
 
   // we seem to get called when there wasn't really a change
@@ -7713,7 +7714,7 @@ void CMUSHView::NotifySelectionChanged(void)
   m_old_selend_line   = m_selend_line;
   m_old_selend_col    = m_selend_col;
 
-  bInSelectionChanged = true;
+  CBoolStateGuard selectionGuard (m_bInSelectionChanged, true);
 
   CMUSHclientDoc* pDoc = GetDocument();
   ASSERT_VALID(pDoc);
@@ -7721,7 +7722,6 @@ void CMUSHView::NotifySelectionChanged(void)
   if (pDoc->m_ScriptEngine)
     pDoc->SendToAllPluginCallbacks(ON_PLUGIN_SELECTION_CHANGED);
 
-  bInSelectionChanged = false;
   // end of notify plugins
 }
 

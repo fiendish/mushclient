@@ -99,6 +99,7 @@ public:
   string m_sPreviousMiniWindow;
 
   BOOL m_mousedover;
+  bool m_bInSelectionChanged;
   int m_iMXPMenuAction;
   CMXPMenuItemList m_MXPMenuItems;
 
