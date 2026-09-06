@@ -1965,7 +1965,9 @@ void CMUSHclientDoc::Load_One_Variable_XML (CXMLelement & node,
                                             const unsigned long iFlags)
   {                           
 
-CVariable * v = new CVariable;
+std::unique_ptr<CVariable> newVariable (new CVariable);
+CVariable * v = newVariable.get ();
+CVariable * oldVariable = NULL;
 CString strVariableName;
 CString strNewContents;
 bool bTrim;
@@ -1996,31 +1998,29 @@ bool bTrim;
                              (LPCTSTR) strVariableName);
 
     // get rid of old variable, if any
-    CVariable * variable_item;
-    if (GetVariableMap ().Lookup (strVariableName, variable_item))
+    if (GetVariableMap ().Lookup (strVariableName, oldVariable))
       {
       // don't warn if new contents are the same :)
-      if (variable_item->strContents != strNewContents)
+      if (oldVariable->strContents != strNewContents)
         if (!(iMask & XML_OVERWRITE))
-          LoadError (strVariableName, 
+          LoadError (strVariableName,
                      "overwriting existing variable contents",
                      node.iLine);
-      delete variable_item;
       }
 
     v->strContents = strNewContents;
+    CheckUsed (node);   // check we used all attributes
 
     } // end of try
 
   catch(CException*)
     {
-    delete v; // get rid of variable
     throw;
     }
 
   GetVariableMap ().SetAt (strVariableName, v);
-
-  CheckUsed (node);   // check we used all attributes
+  newVariable.release ();
+  delete oldVariable;
 
   } // end of CMUSHclientDoc::Load_One_Variable_XML
 
