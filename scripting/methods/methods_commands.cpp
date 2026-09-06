@@ -228,8 +228,9 @@ void CMUSHclientDoc::DeleteCommandHistory()
 		  CSendView* pmyView = (CSendView*)pView;
 
       // OK, do it ...
-	    pmyView->m_msgList.RemoveAll ();
+      pmyView->m_msgList.RemoveAll ();
       pmyView->m_HistoryPosition = NULL;
+      pmyView->m_iHistoryStatus = eAtBottom;
       pmyView->m_inputcount = 0;
       pmyView->m_HistoryFindInfo.m_pFindPosition = NULL;
       pmyView->m_HistoryFindInfo.m_nCurrentLine = 0;

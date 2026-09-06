@@ -68,27 +68,9 @@ long CMUSHclientDoc::SendNoEcho(LPCTSTR Message)
 
 void CMUSHclientDoc::AddToCommandHistory (LPCTSTR Message)
   {
-
   CSendView * pmyView = GetCommandView ();
   if (pmyView)
-    {
-
-      if (strlen (Message) > 0 && strcmp (Message, pmyView->m_last_command) != 0)
-        {
-        if (pmyView->m_inputcount >= m_nHistoryLines)
-          {
-          pmyView->m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
-          pmyView->m_HistoryFindInfo.m_nCurrentLine--;     // adjust for a "find again"
-          if (pmyView->m_HistoryFindInfo.m_nCurrentLine < 0)
-            pmyView->m_HistoryFindInfo.m_nCurrentLine = 0;
-          }   // end of buffer full
-        else
-          pmyView->m_inputcount++;
-        pmyView->m_msgList.AddTail (Message);
-        pmyView->m_last_command = Message;
-        } // end of different from last one
-
-    }
+    pmyView->AddToCommandHistory (Message, false, false);
 
   } // end of CMUSHclientDoc::AddToCommandHistory
 

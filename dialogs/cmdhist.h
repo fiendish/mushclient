@@ -11,9 +11,12 @@ public:
 	CCmdHistory(CWnd* pParent = NULL);   // standard constructor
 
   CStringList * m_msgList;
+  CStringList m_msgListSnapshot;
   CSendView * m_sendview;
   CFindInfo * m_pHistoryFindInfo;
   CMUSHclientDoc* m_pDoc;
+  __int64 m_iDocumentNumber;
+  HWND m_hSendView;
 
 // Dialog Data
 	//{{AFX_DATA(CCmdHistory)
@@ -43,6 +46,7 @@ protected:
                            CString & strLine);
 
   void DoFind (bool bAgain);
+  bool IsContextLive (void) const;
 
 
   // Generated message map functions
