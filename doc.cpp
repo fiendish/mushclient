@@ -8154,21 +8154,22 @@ bool lessWindow (const pair<string, CMiniWindow *> & w1, const pair<string, CMin
   }   // end of lessWindow
 
 // sort miniwindows vector into Z-order
-void CMUSHclientDoc::SortWindows (void)
+void CMUSHclientDoc::SortWindows (const CMiniWindow * pExclude)
   {
-  // start again
-  m_MiniWindowsOrder.clear ();
+  MiniWindowVector newMiniWindowsOrder;
 
   // reserve correct space
-  m_MiniWindowsOrder.reserve (m_MiniWindows.size ());
+  newMiniWindowsOrder.reserve (m_MiniWindows.size ());
 
   // rebuild vector of existing miniwindows
-  for (MiniWindowMapIterator win_it = m_MiniWindows.begin (); 
+  for (MiniWindowMapIterator win_it = m_MiniWindows.begin ();
        win_it != m_MiniWindows.end ();
        win_it++)
-    m_MiniWindowsOrder.push_back (make_pair (win_it->first, win_it->second));
+    if (win_it->second != pExclude)
+      newMiniWindowsOrder.push_back (make_pair (win_it->first, win_it->second));
 
-  sort (m_MiniWindowsOrder.begin (), m_MiniWindowsOrder.end (), lessWindow); 
+  sort (newMiniWindowsOrder.begin (), newMiniWindowsOrder.end (), lessWindow);
+  m_MiniWindowsOrder.swap (newMiniWindowsOrder);
 
   }   // end of CMUSHclientDoc::SortWindows
 

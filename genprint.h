@@ -43,7 +43,6 @@ typedef struct
   HDC hDC;           // print device context
   DOCINFO di;  // document info (document name, print file name)
   HWND hwnd;      // copy of the view's window handle
-  char docname [256]; // name of document being printed
   BOOL initialised;   // true if we opened the printer OK
   BOOL ok;          // are we still printing OK?
   BOOL cancelled;   // did they cancel the print job?
@@ -89,6 +88,7 @@ BOOL print_start_page (t_print_control_block & pcb);
 BOOL print_printline (t_print_control_block & pcb, int skip, const char * theline, ...);
 BOOL print_end_page (t_print_control_block & pcb);
 BOOL print_end_document (t_print_control_block & pcb);
+void print_abort_document (t_print_control_block & pcb);
 
 // font changing stuff
 

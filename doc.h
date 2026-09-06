@@ -1365,7 +1365,7 @@ public:
   MiniWindowVector m_MiniWindowsOrder;
 
   // sort miniwindows into Z-order
-  void SortWindows (void);
+  void SortWindows (const CMiniWindow * pExclude = NULL);
 
   // all our databases
   tDatabaseMap m_Databases;

@@ -91,6 +91,7 @@
 #include <iostream>
 #include <iterator>
 #include <sstream>
+#include <memory>
 #pragma warning (pop)
 
 #ifdef LUA_52
@@ -365,8 +366,49 @@ void FixFont (ptrCFont & pFont,
 // for escaping out things like \r in a trigger
 CString FixupEscapeSequences (const CString & strSource);
 
+template <class T>
+class CValueStateGuard
+  {
+  public:
+  CValueStateGuard (T & value, const T newValue)
+    : m_value (value), m_savedValue (value)
+    {
+    m_value = newValue;
+    }
+
+  ~CValueStateGuard ()
+    {
+    m_value = m_savedValue;
+    }
+
+  private:
+  T & m_value;
+  T m_savedValue;
+  CValueStateGuard (const CValueStateGuard &);
+  CValueStateGuard & operator= (const CValueStateGuard &);
+  };
+
 // translates "send to" numbers
 CString GetSendToString (const unsigned short iWhere);
+
+class CBoolStateGuard
+  {
+  public:
+  CBoolStateGuard (bool & bValue, const bool bNewValue)
+    : m_bValue (bValue), m_bSavedValue (bValue)
+    {
+    m_bValue = bNewValue;
+    }
+
+  ~CBoolStateGuard ()
+    {
+    m_bValue = m_bSavedValue;
+    }
+
+  private:
+  bool & m_bValue;
+  bool m_bSavedValue;
+  };
 
 // translates connection status to text
 CString GetConnectionStatus (const int iStatus);
