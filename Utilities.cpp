@@ -3345,7 +3345,9 @@ extern char file_browsing_dir [_MAX_PATH];
 void ChangeToFileBrowsingDirectory ()
   {
 
-  _chdir(file_browsing_dir);
+  if (_chdir(file_browsing_dir) != 0)
+    AfxThrowFileException (CFileException::genericException, errno,
+                           file_browsing_dir);
 
   }  // end of ChangeToFileBrowsingDirectory
 
@@ -3354,18 +3356,28 @@ void ChangeToStartupDirectory ()
 
 // first, remember the file_browsing directory
 
-  _getdcwd (0, file_browsing_dir, sizeof (file_browsing_dir) - 1);
+  char strCurrentDirectory [_MAX_PATH];
+  if (!_getdcwd (0, strCurrentDirectory, sizeof (strCurrentDirectory) - 1))
+    {
+    int iError = errno;
+    _chdir (working_dir);
+    AfxThrowFileException (CFileException::genericException, iError);
+    }
 
 // make sure directory name ends in a slash
 
-  file_browsing_dir [sizeof (file_browsing_dir) - 2] = 0;
+  strCurrentDirectory [sizeof (strCurrentDirectory) - 2] = 0;
 
-  if (file_browsing_dir [strlen (file_browsing_dir) - 1] != '\\')
-    strcat (file_browsing_dir, "\\");
+  if (strCurrentDirectory [strlen (strCurrentDirectory) - 1] != '\\')
+    strcat (strCurrentDirectory, "\\");
+
+  strcpy (file_browsing_dir, strCurrentDirectory);
 
 
   // now change back to startup directory
-  _chdir(working_dir);
+  if (_chdir(working_dir) != 0)
+    AfxThrowFileException (CFileException::genericException, errno,
+                           working_dir);
 
   } // end of ChangeToStartupDirectory
 
