@@ -96,7 +96,7 @@ long CMUSHclientDoc::ChatCallGeneral (LPCTSTR Server, long Port, const bool zCha
   if (Port == 0)
     Port = DEFAULT_CHAT_PORT;
 
-CChatSocket * pSocket = new CChatSocket (this);
+  std::unique_ptr<CChatSocket> pSocket (new CChatSocket (this));
 
   if (zChat)
     {
@@ -111,7 +111,6 @@ CChatSocket * pSocket = new CChatSocket (this);
                          FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE,
                          NULL))
 	  {
-		delete pSocket;
 		return eCannotCreateChatSocket;
 	  }     // end of can't create socket
 
@@ -127,11 +126,17 @@ CChatSocket * pSocket = new CChatSocket (this);
 
 	if (pSocket->m_ServerAddr.sin_addr.s_addr == INADDR_NONE)
 	 {
-    pSocket->m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
+    try
+      {
+      pSocket->m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
+      }
+    catch (...)
+      {
+      throw;
+      }
 
     if (!pSocket->m_pGetHostStruct)
       {
-  		delete pSocket;
       return eCannotLookupDomainName;
       }
 
@@ -144,11 +149,11 @@ CChatSocket * pSocket = new CChatSocket (this);
 
    if (!pSocket->m_hNameLookup)
      {
-		  delete pSocket;
       return eCannotLookupDomainName;
      }
 
-    m_ChatList.AddTail (pSocket);
+    m_ChatList.AddTail (pSocket.get ());
+    pSocket.release ();
   	return eOK;
 
 	 }   // end of address not being an IP address
@@ -156,9 +161,10 @@ CChatSocket * pSocket = new CChatSocket (this);
 
 // the name was a dotted IP address - just make the connection
 
-  m_ChatList.AddTail (pSocket);
+  m_ChatList.AddTail (pSocket.get ());
+  CChatSocket * pPublishedSocket = pSocket.release ();
 
-  pSocket->MakeCall ();
+  pPublishedSocket->MakeCall ();
   return eOK;   // OK for now, eh?
 
   }   // end of CMUSHclientDoc::ChatCallGeneral
@@ -516,19 +522,33 @@ long CMUSHclientDoc::ChatAcceptCalls(short Port)
    m_bAcceptIncomingChatConnections = true;
    }
 
+ class CChatStatusGuard
+   {
+   public:
+     CChatStatusGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc), m_bKeepStatus (false) { }
+     ~CChatStatusGuard ()
+       {
+       if (!m_bKeepStatus)
+         m_pDoc->ShowStatusLine (true);
+       }
+     void KeepStatus () { m_bKeepStatus = true; }
+
+   private:
+     CMUSHclientDoc * m_pDoc;
+     bool m_bKeepStatus;
+   } statusGuard (this);
+
  Frame.SetStatusMessageNow (TFormat ("Accepting chat calls on port %d",
                               m_IncomingChatPort));
 
- m_pChatListenSocket = new CChatListenSocket (this);
+ std::unique_ptr<CChatListenSocket> pChatListenSocket (new CChatListenSocket (this));
 
-	if (!m_pChatListenSocket->Create (m_IncomingChatPort,
+	if (!pChatListenSocket->Create (m_IncomingChatPort,
                          SOCK_STREAM,
                          FD_ACCEPT | FD_CLOSE ,
                          NULL))
 	  {
     int nError = GetLastError ();
-		delete m_pChatListenSocket;
-    m_pChatListenSocket = NULL;
     ChatNote (eChatConnection,
               TFormat (
               "Cannot accept calls on port %i, code = %i (%s)", 
@@ -538,7 +558,20 @@ long CMUSHclientDoc::ChatAcceptCalls(short Port)
 		return eCannotCreateChatSocket;
 	  }     // end of can't create socket
 
-  m_pChatListenSocket->Listen ();
+  if (!pChatListenSocket->Listen ())
+    {
+    int nError = GetLastError ();
+    ChatNote (eChatConnection,
+              TFormat (
+              "Cannot listen for calls on port %i, code = %i (%s)",
+                    m_IncomingChatPort,
+                    nError,
+                    GetSocketError (nError)));
+    return eCannotCreateChatSocket;
+    }
+
+  m_pChatListenSocket = pChatListenSocket.release ();
+  statusGuard.KeepStatus ();
 
   ChatNote (eChatConnection,
             TFormat (
