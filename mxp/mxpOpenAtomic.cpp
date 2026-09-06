@@ -24,14 +24,47 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 extern tConfigurationNumericOption OptionsTable [];
 
+static void QueueMXPMessage (vector<CDeferredMXPMessage> & messages,
+                             const int iLevel,
+                             const long iMessageNumber,
+                             const CString & strMessage)
+  {
+  messages.push_back (
+    CDeferredMXPMessage (iLevel, iMessageNumber, strMessage));
+  }
+
+class CScopedMXPAction
+  {
+  public:
+    CScopedMXPAction (CAction * pAction) : m_pAction (pAction) { }
+    ~CScopedMXPAction ()
+      {
+      if (m_pAction)
+        m_pAction->Release ();
+      }
+    CAction * Release ()
+      {
+      CAction * pAction = m_pAction;
+      m_pAction = NULL;
+      return pAction;
+      }
+
+  private:
+    CAction * m_pAction;
+  };
+
 // do the action required to open a single atomic tag (iAction)
-void CMUSHclientDoc::MXP_OpenAtomicTag (const CString strTag,
+bool CMUSHclientDoc::MXP_OpenAtomicTag (const CString strTag,
                                         int iAction, 
                                         CStyle * pStyle,
+                                        CStyle * & pResultStyle,
                                         CString & strAction,    // new action
                                         CString & strHint,      // new hint
                                         CString & strVariable,   // new variable
-                                        CArgumentList & ArgumentList)
+                                        CArgumentList & ArgumentList,
+                                        const __int64 iStateOwner,
+                                        COutputAppendTransaction * pOutputTransaction,
+                                        vector<CDeferredMXPMessage> & deferredMessages)
   {
 CString strArgument;
 CString strArgumentName;
@@ -42,50 +75,10 @@ COLORREF colour1,
 unsigned short iFlags      = pStyle->iFlags;      
 COLORREF       iForeColour = pStyle->iForeColour; 
 COLORREF       iBackColour = pStyle->iBackColour; 
-
-  // call script if required
-  if ((m_dispidOnMXP_OpenTag != DISPID_UNKNOWN) || m_bPluginProcessesOpenTag)
-    {
-    // dummy-up an argument list
-    CString strArgument;
-    CArgument * pArgument;
-    POSITION pos;
-
-    // put the arguments into the array
-
-    for (pos = ArgumentList.GetHeadPosition (); pos; )
-      {
-      pArgument = ArgumentList.GetNext (pos);
-      
-      // empty ones we will put there by position
-      if (pArgument->strName.IsEmpty ())
-        strArgument += CFormat ("'%s'",
-                      (LPCTSTR) pArgument->strValue);
-      else
-        strArgument += CFormat ("%s='%s'",
-                      (LPCTSTR) pArgument->strName,
-                      (LPCTSTR) pArgument->strValue);
-
-      if (pos)
-        strArgument += " ";
-
-      }      // end of looping through each argument
-
-    bool bNotWanted = MXP_StartTagScript (strTag, strArgument, ArgumentList);
-
-    // re-get current style in case the script did a world.note
-    pStyle = m_pCurrentLine->styleList.GetTail ();
-
-    // put things backt to how they were
-    pStyle->iFlags      = iFlags;      
-    pStyle->iForeColour = iForeColour; 
-    pStyle->iBackColour = iBackColour; 
-
-    if (bNotWanted)
-      return;   // they didn't want to go ahead with this tag
-
-    }
-
+const __int64 iOpeningActiveTagCreationNumber =
+  m_ActiveTagList.IsEmpty () ? 0 :
+    m_ActiveTagList.GetTail ()->nCreationNumber;
+pResultStyle = pStyle;
 
 // find current foreground and background RGB values
   GetStyleRGB (pStyle, colour1, colour2);
@@ -134,17 +127,23 @@ COLORREF       iBackColour = pStyle->iBackColour;
          strArgument = GetArgument (ArgumentList, "fore", 1, true);  // get foreground colour
          if (!m_bIgnoreMXPcolourChanges)
            if (SetColour (strArgument, pStyle->iForeColour)) 
-             MXP_error (DBG_ERROR, errMXP_UnknownColour,
-                        TFormat ("Unknown colour: \"%s\"" ,
+             {
+             QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
+                        TFormat ("Unknown colour: \"%s\"",
                                  (LPCTSTR) strArgument));
+             return false;
+             }
 
          // background colour
          strArgument = GetArgument (ArgumentList, "back", 2, true);  // get background colour
          if (!m_bIgnoreMXPcolourChanges)
            if (SetColour (strArgument, pStyle->iBackColour)) 
-             MXP_error (DBG_ERROR, errMXP_UnknownColour,
-                        TFormat ("Unknown colour: \"%s\"" ,
+             {
+             QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
+                        TFormat ("Unknown colour: \"%s\"",
                                  (LPCTSTR) strArgument));
+             return false;
+             }
          }
          break;   // end of COLOR
 
@@ -263,9 +262,12 @@ COLORREF       iBackColour = pStyle->iBackColour;
               // foreground colour
               if (!m_bIgnoreMXPcolourChanges)
                 if (SetColour (strItem, pStyle->iForeColour)) 
-                  MXP_error (DBG_ERROR, errMXP_UnknownColour,
-                              TFormat ("Unknown colour: \"%s\"" ,
+                  {
+                  QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
+                              TFormat ("Unknown colour: \"%s\"",
                                       (LPCTSTR) strItem));
+                  return false;
+                  }
               } // end of colour
 
             } // end of handling each item in the list
@@ -276,9 +278,12 @@ COLORREF       iBackColour = pStyle->iBackColour;
 
           if (!m_bIgnoreMXPcolourChanges)
             if (SetColour (strArgument, pStyle->iBackColour)) 
-              MXP_error (DBG_ERROR, errMXP_UnknownColour,
-                        TFormat ("Unknown colour: \"%s\"" ,
+              {
+              QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
+                        TFormat ("Unknown colour: \"%s\"",
                                   (LPCTSTR) strArgument));
+              return false;
+              }
 
           // get font size argument to avoid warnings about unused arguments
           strArgument = GetArgument (ArgumentList,"size", 0, true);  // get font size
@@ -296,7 +301,7 @@ COLORREF       iBackColour = pStyle->iBackColour;
                      );
 
             SendPacket (strVersion, strVersion.GetLength ());  // send version info back
-            MXP_error (DBG_INFO, infoMXP_VersionSent,
+            QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_VersionSent,
                       TFormat ("Sent version response: %s" ,
                                 (LPCTSTR) strVersion.Mid (4)));
 
@@ -317,7 +322,7 @@ COLORREF       iBackColour = pStyle->iBackColour;
                      );
 
             SendPacket (strAFK, strAFK.GetLength ());  // send AFK info back
-            MXP_error (DBG_INFO, infoMXP_AFKSent,
+            QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_AFKSent,
                       TFormat ("Sent AFK response: %s" ,
                                 (LPCTSTR) strAFK.Mid (4)));
             } // end of AFK
@@ -367,10 +372,10 @@ COLORREF       iBackColour = pStyle->iBackColour;
                 // should be one or two words, eg. send.prompt or color
                 if (questionlist.GetCount () > 2)
                   {
-                  MXP_error (DBG_ERROR, errMXP_InvalidSupportArgument,
+                  QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidSupportArgument,
                             TFormat ("Invalid <support> argument: %s" ,
                                       (LPCTSTR) pArgument->strValue));
-                  return;
+                  return false;
                   }
                 
                 CString strTag =  questionlist.RemoveHead ();
@@ -379,10 +384,10 @@ COLORREF       iBackColour = pStyle->iBackColour;
                 // check valid name requested
                 if (!IsValidName (strTag))
                   {
-                  MXP_error (DBG_ERROR, errMXP_InvalidSupportArgument,
+                  QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidSupportArgument,
                             TFormat ("Invalid <support> argument: %s" ,
                                       (LPCTSTR) strTag));
-                  return;
+                  return false;
                   }
 
                 // look up main element name
@@ -427,10 +432,10 @@ COLORREF       iBackColour = pStyle->iBackColour;
                   // check valid name requested
                   if (!IsValidName (strSubtag))
                     {
-                    MXP_error (DBG_ERROR, errMXP_InvalidSupportArgument,
+                    QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidSupportArgument,
                               TFormat ("Invalid <support> argument: %s" ,
                                         (LPCTSTR) strSubtag));
-                    return;
+                    return false;
                     }
 
                   // so, see if that word is in our arguments list
@@ -457,7 +462,7 @@ COLORREF       iBackColour = pStyle->iBackColour;
                                           ENDLINE);
 
             SendPacket (strMessage, strMessage.GetLength ());  // send version info back
-            MXP_error (DBG_INFO, infoMXP_SupportsSent,
+            QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_SupportsSent,
                       TFormat ("Sent supports response: %s" ,
                                 (LPCTSTR) strMessage.Mid (4)));
 
@@ -503,7 +508,7 @@ COLORREF       iBackColour = pStyle->iBackColour;
                                           ENDLINE);
 
             SendPacket (strMessage, strMessage.GetLength ());  // send version info back
-            MXP_error (DBG_INFO, infoMXP_OptionsSent,
+            QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_OptionsSent,
                       TFormat ("Sent options response: %s" ,
                                 (LPCTSTR) strMessage.Mid (4)));
 
@@ -527,23 +532,23 @@ COLORREF       iBackColour = pStyle->iBackColour;
               int iResult = FindBaseOption (pArgument->strName, OptionsTable, iItem);
 
               if (iResult != eOK)
-                MXP_error (DBG_ERROR, errMXP_InvalidOptionArgument,
+                QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidOptionArgument,
                           TFormat ("Option named '%s' not known.",
                           (LPCTSTR) pArgument->strName));      
               else if (!(OptionsTable [iItem].iFlags & OPT_SERVER_CAN_WRITE))
-                MXP_error (DBG_ERROR, errMXP_CannotChangeOption,
+                QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_CannotChangeOption,
                           TFormat ("Option named '%s' cannot be changed.",
                           (LPCTSTR) pArgument->strName));      
               else
                 {
                 iResult = SetOptionItem (iItem, atol (pArgument->strValue), true, false);
                 if (iResult == eOK)
-                  MXP_error (DBG_INFO, infoMXP_OptionChanged,
+                  QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_OptionChanged,
                             TFormat ("Option named '%s' changed to '%s'.",
                             (LPCTSTR) pArgument->strName,
                             (LPCTSTR) pArgument->strValue)); 
                 else
-                  MXP_error (DBG_ERROR, errMXP_OptionOutOfRange,
+                  QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_OptionOutOfRange,
                             TFormat ("Option named '%s' could not be changed to '%s' (out of range).",
                             (LPCTSTR) pArgument->strName,
                             (LPCTSTR) pArgument->strValue));      
@@ -563,21 +568,21 @@ COLORREF       iBackColour = pStyle->iBackColour;
               {
               CString strPacket = m_name + ENDLINE;
               SendPacket (strPacket, strPacket.GetLength ());  // send name to MUD
-              MXP_error (DBG_INFO, infoMXP_CharacterNameSent,
+              QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_CharacterNameSent,
                           TFormat ("Sent character name: %s" ,
                                   (LPCTSTR) m_name));      
               }
             else if (m_connect_now != eConnectMXP)
-              MXP_error (DBG_WARNING, wrnMXP_CharacterNameRequestedButNotDefined,
+              QueueMXPMessage (deferredMessages, DBG_WARNING, wrnMXP_CharacterNameRequestedButNotDefined,
                         Translate ("Character name requested but auto-connect not set to MXP."));      
             else
-              MXP_error (DBG_WARNING, wrnMXP_CharacterNameRequestedButNotDefined,
+              QueueMXPMessage (deferredMessages, DBG_WARNING, wrnMXP_CharacterNameRequestedButNotDefined,
                         Translate ("Character name requested but none defined."));      
             break;  // end of USER
 
     case MXP_ACTION_PASSWORD:
             if (m_nTotalLinesSent > 10)     // security check
-              MXP_error (DBG_WARNING, wrnMXP_PasswordNotSent,
+              QueueMXPMessage (deferredMessages, DBG_WARNING, wrnMXP_PasswordNotSent,
                         "Too many lines sent to MUD - password not sent.");      
             else
             if (!m_password.IsEmpty () && 
@@ -585,14 +590,14 @@ COLORREF       iBackColour = pStyle->iBackColour;
               {
               CString strPacket = m_password + ENDLINE;
               SendPacket (strPacket, strPacket.GetLength ());  // send password to MUD
-              MXP_error (DBG_INFO, infoMXP_PasswordSent,
+              QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_PasswordSent,
                         "Sent password to world.");      
               }
             else if (m_connect_now != eConnectMXP)
-              MXP_error (DBG_WARNING, wrnMXP_PasswordRequestedButNotDefined,
+              QueueMXPMessage (deferredMessages, DBG_WARNING, wrnMXP_PasswordRequestedButNotDefined,
                         "Password requested but auto-connect not set to MXP.");      
             else
-              MXP_error (DBG_WARNING, wrnMXP_PasswordRequestedButNotDefined,
+              QueueMXPMessage (deferredMessages, DBG_WARNING, wrnMXP_PasswordRequestedButNotDefined,
                         "Password requested but none defined.");      
             break;  // end of PASSWORD
 
@@ -600,15 +605,31 @@ COLORREF       iBackColour = pStyle->iBackColour;
     case MXP_ACTION_P:
           // experimental
           m_cLastChar = 0;
-          m_bInParagraph = true;      
+          m_bInParagraph = true;
+          m_iMXPParagraphOwner = iStateOwner;
           break;  // end of MXP_ACTION_P
     
           // new line
     case MXP_ACTION_BR:
           bIgnoreUnusedArgs = true; // don't worry about args for now :)
 
-          StartNewLine (true, 0);
-          SetNewLineColour (0);
+          {
+          ASSERT (pOutputTransaction);
+          if (!pOutputTransaction)
+            return false;
+          pOutputTransaction->Reserve (2);
+          bool bCreatedLine = false;
+          if (!pOutputTransaction->StartNewLine (
+                true, 0, true, &bCreatedLine))
+            return false;
+          if (bCreatedLine)
+            {
+            SetNewLineColour (0);
+            pResultStyle = m_pCurrentLine->styleList.GetTail ();
+            }
+          else
+            pResultStyle = NULL;
+          }
           break;  // end of MXP_ACTION_BR
 
           // reset
@@ -625,32 +646,32 @@ COLORREF       iBackColour = pStyle->iBackColour;
           /*
           if (GetKeyword (ArgumentList, "default_open"))
             {
-            MXP_error (DBG_INFO, "MXP default mode now OPEN.");
+            QueueMXPMessage (deferredMessages, DBG_INFO, "MXP default mode now OPEN.");
             m_iMXP_defaultMode = eMXP_open;
             }  // end of DEFAULT_OPEN
 
           if (GetKeyword (ArgumentList, "default_secure"))
             {
-            MXP_error (DBG_INFO, "MXP default mode now SECURE.");
+            QueueMXPMessage (deferredMessages, DBG_INFO, "MXP default mode now SECURE.");
             m_iMXP_defaultMode = eMXP_secure;
             }  // end of DEFAULT_SECURE
 
           if (GetKeyword (ArgumentList, "default_locked"))
             {
-            MXP_error (DBG_INFO, "MXP default mode now LOCKED.");
+            QueueMXPMessage (deferredMessages, DBG_INFO, "MXP default mode now LOCKED.");
             m_iMXP_defaultMode = eMXP_locked;
             }  // end of DEFAULT_LOCKED
 
 
           if (GetKeyword (ArgumentList, "use_newlines"))
             {
-            MXP_error (DBG_INFO, "Now interpreting newlines as normal.");
+            QueueMXPMessage (deferredMessages, DBG_INFO, "Now interpreting newlines as normal.");
             m_bInParagraph = false;      
             }   // end of USE_NEWLINES
 
           if (GetKeyword (ArgumentList, "ignore_newlines"))
             {
-            MXP_error (DBG_INFO, "Now ignoring newlines.");
+            QueueMXPMessage (deferredMessages, DBG_INFO, "Now ignoring newlines.");
             m_bInParagraph = true;      
             }   // end of IGNORE_NEWLINES
 
@@ -659,17 +680,29 @@ COLORREF       iBackColour = pStyle->iBackColour;
           break;  // end of MXP_ACTION_MXP
 
     case MXP_ACTION_SCRIPT:
-          MXP_error (DBG_INFO, infoMXP_ScriptCollectionStarted,
-                      "Script collection mode entered (discarding script).");
           m_bMXP_script = true;
+          m_iMXPScriptOwner = iStateOwner;
+          QueueMXPMessage (deferredMessages, DBG_INFO, infoMXP_ScriptCollectionStarted,
+                      "Script collection mode entered (discarding script).");
           break;  // end of MXP_ACTION_SCRIPT
 
     case MXP_ACTION_HR: 
 
           {
+          ASSERT (pOutputTransaction);
+          if (!pOutputTransaction)
+            return false;
+          pOutputTransaction->Reserve (3);
+          bool bOwnHorizontalLine = true;
           // wrap up previous line if necessary
           if (m_pCurrentLine->len > 0)
-             StartNewLine (true, 0);
+            {
+            bool bCreatedLine = false;
+            if (!pOutputTransaction->StartNewLine (
+                  true, 0, true, &bCreatedLine))
+              return false;
+            bOwnHorizontalLine = bCreatedLine;
+            }
 
           /*
           CString strLine;
@@ -678,34 +711,83 @@ COLORREF       iBackColour = pStyle->iBackColour;
           strLine.ReleaseBuffer (m_nWrapColumn);
           AddToLine (strLine, 0);
           */
-          // mark line as HR line
-          m_pCurrentLine->flags = HORIZ_RULE;
+          // Do not overwrite a continuation line supplied by a callback.
+          if (!bOwnHorizontalLine)
+            {
+            pResultStyle = NULL;
+            break;
+            }
+          pOutputTransaction->SetLineFlags (m_pCurrentLine, HORIZ_RULE);
           
-          StartNewLine (true, 0); // now finish this line
+          bool bCreatedLine = false;
+          if (!pOutputTransaction->StartNewLine (
+                true, 0, true, &bCreatedLine)) // now finish this line
+            return false;
+          pResultStyle = bCreatedLine ?
+            m_pCurrentLine->styleList.GetTail () : NULL;
           }
           break;  // end of MXP_ACTION_HR
 
     case MXP_ACTION_PRE: 
           m_bPreMode = true;
+          m_iMXPPreOwner = iStateOwner;
           break;  // end of MXP_ACTION_PRE
 
      case MXP_ACTION_UL:   
           m_iListMode = eUnorderedList;
           m_iListCount = 0;
+          m_iMXPListOwner = iStateOwner;
           break;  // end of MXP_ACTION_UL
      case MXP_ACTION_OL:   
           m_iListMode = eOrderedList;
           m_iListCount = 0;
+          m_iMXPListOwner = iStateOwner;
           break;  // end of MXP_ACTION_OL
      case MXP_ACTION_LI:   
          {
+          ASSERT (pOutputTransaction);
+          if (!pOutputTransaction)
+            return false;
           // wrap up previous line if necessary
           if (m_pCurrentLine->len > 0)
-             StartNewLine (true, 0);
+            {
+            bool bCreatedLine = false;
+            if (!pOutputTransaction->StartNewLine (
+                  true, 0, true, &bCreatedLine))
+              return false;
+            if (!bCreatedLine)
+              {
+              pResultStyle = NULL;
+              break;
+              }
+            }
           CString strListItem = " * ";
-          if (m_iListMode == eOrderedList)
-            strListItem.Format (" %i. ", ++m_iListCount);
-          AddToLine (strListItem, 0);
+          const bool bOrderedList = m_iListMode == eOrderedList;
+          const int iOpeningListCount = m_iListCount;
+          const __int64 iOpeningListOwner = m_iMXPListOwner;
+          if (bOrderedList)
+            strListItem.Format (" %i. ", iOpeningListCount + 1);
+          pOutputTransaction->Reserve (strListItem.GetLength () + 1);
+          pOutputTransaction->MarkCurrentLineStyles ();
+          pResultStyle = pOutputTransaction->PrepareAppendStyle ();
+          if (!AddToLineInternal (strListItem, 0, pOutputTransaction))
+            return false;
+          if (bOrderedList)
+            {
+            if (m_iListMode != eOrderedList ||
+                m_iListCount != iOpeningListCount ||
+                m_iMXPListOwner != iOpeningListOwner)
+              return false;
+            pOutputTransaction->SetListCount (iOpeningListCount + 1);
+            }
+          const __int64 iCurrentActiveTagCreationNumber =
+            m_ActiveTagList.IsEmpty () ? 0 :
+              m_ActiveTagList.GetTail ()->nCreationNumber;
+          if (iCurrentActiveTagCreationNumber !=
+              iOpeningActiveTagCreationNumber)
+            pResultStyle = NULL;
+          else
+            pResultStyle = m_pCurrentLine->styleList.GetTail ();
           }
           break;  // end of MXP_ACTION_LI
 
@@ -747,17 +829,38 @@ COLORREF       iBackColour = pStyle->iBackColour;
             {
 
             CString strOldAction = strAction;
+            CString strOldHint = strHint;
+            CString strOldVariable = strVariable;
             int iFlags = pStyle->iFlags;
             COLORREF iForeColour = pStyle->iForeColour;
             COLORREF iBackColour = pStyle->iBackColour;
 
+            strArgument += strFilename;   // append filename to URL
+            CString strImagePlaceholder = "[";
+            strImagePlaceholder += strArgument;
+            strImagePlaceholder += "]";
+            CScopedMXPAction replacementAction (
+              GetAction (strArgument, strHint, strVariable));
+
+            ASSERT (pOutputTransaction);
+            if (!pOutputTransaction)
+              return false;
+            pOutputTransaction->Reserve (
+              strImagePlaceholder.GetLength () + 2);
+
             // ensure on new line
             if (m_pCurrentLine->len > 0)
-               StartNewLine (true, 0);
+              {
+              bool bCreatedLine = false;
+              if (!pOutputTransaction->StartNewLine (
+                    true, 0, true, &bCreatedLine))
+                return false;
+              }
 
-            // starting a new line may have deleted pStyle
-
-            pStyle = m_pCurrentLine->styleList.GetTail ();
+            // Starting a new line can publish callback output. Keep it outside
+            // the image-owned style so rollback does not remove it.
+            pOutputTransaction->MarkCurrentLineStyles ();
+            pStyle = pOutputTransaction->PrepareAppendStyle ();
 
             if (m_bUseCustomLinkColour)
               {
@@ -767,7 +870,6 @@ COLORREF       iBackColour = pStyle->iBackColour;
               pStyle->iFlags |= COLOUR_RGB;
               }
 
-            strArgument += strFilename;   // append filename to URL
             strAction = strArgument;   // hyperlink
             pStyle->iFlags &= ~ACTIONTYPE;   // cancel old actions
             pStyle->iFlags |= ACTION_HYPERLINK;   // send-to action
@@ -775,21 +877,46 @@ COLORREF       iBackColour = pStyle->iBackColour;
             if (m_bUnderlineHyperlinks)
               pStyle->iFlags |= UNDERLINE;   // send-to action
 
-            AddToLine ("[", 0);          
-            AddToLine (strArgument, 0);
-            AddToLine ("]", 0);
-
-            // have to add the action now, before we start a new line
-            pStyle->pAction = GetAction (strAction, strHint, strVariable);
+            // Install the action before output because wrapping copies styles.
+            CAction * pOldAction = pStyle->pAction;
+            pStyle->pAction = replacementAction.Release ();
+            if (pOldAction)
+              pOldAction->Release ();
             strAction.Empty ();
+            strHint.Empty ();
+            strVariable.Empty ();
+            if (!AddToLineInternal (strImagePlaceholder,
+                                    0,
+                                    pOutputTransaction))
+              return false;
 
-            StartNewLine (true, 0);   // new line after image tag
+            bool bCreatedLine = false;
+            if (!pOutputTransaction->StartNewLine (
+                  true, 0, true, &bCreatedLine))
+              return false;
+
+            const __int64 iCurrentActiveTagCreationNumber =
+              m_ActiveTagList.IsEmpty () ? 0 :
+                m_ActiveTagList.GetTail ()->nCreationNumber;
+            if (iCurrentActiveTagCreationNumber !=
+                iOpeningActiveTagCreationNumber)
+              {
+              pResultStyle = NULL;
+              break;
+              }
+
             // go back to old style (ie. lose the underlining)
-            AddStyle (iFlags, 
-                     iForeColour, 
-                     iBackColour, 
-                     0, 
-                     strOldAction);
+            pResultStyle = AddStyle (iFlags,
+                                     iForeColour,
+                                     iBackColour,
+                                     0,
+                                     strOldAction,
+                                     strOldHint,
+                                     strOldVariable);
+            pOutputTransaction->OwnStyle (pResultStyle);
+            strAction = strOldAction;
+            strHint = strOldHint;
+            strVariable = strOldVariable;
 
             }
         }
@@ -811,11 +938,11 @@ COLORREF       iBackColour = pStyle->iBackColour;
 
           if (!IsValidName (strVariable))
             {
-            MXP_error (DBG_ERROR, errMXP_InvalidDefinition,
+            QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidDefinition,
                       TFormat ("Invalid MXP entity name: <!%s>", 
                       (LPCTSTR) strVariable)); 
             strVariable.Empty ();
-            return;
+            return false;
             }
 
             { // protect local variable
@@ -823,11 +950,11 @@ COLORREF       iBackColour = pStyle->iBackColour;
 
             if (App.m_EntityMap.Lookup (strVariable, strEntityContents))
               {
-              MXP_error (DBG_ERROR, errMXP_CannotRedefineEntity,
+              QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_CannotRedefineEntity,
                         TFormat ("Cannot redefine entity: &%s;", 
                         (LPCTSTR) strVariable)); 
               strVariable.Empty ();
-              return;
+              return false;
               }
               }
 
@@ -837,15 +964,18 @@ COLORREF       iBackColour = pStyle->iBackColour;
     default:
           {
           // warn them it is not implemented
-          MXP_error (DBG_WARNING, wrnMXP_TagNotImplemented,
+          QueueMXPMessage (deferredMessages, DBG_WARNING, wrnMXP_TagNotImplemented,
                      TFormat ("MXP tag <%s> is not implemented" ,
                              (LPCTSTR) strTag));
           }   // end of default
 
     } // end of switch on iAction
 
-  if (!bIgnoreUnusedArgs)
-    CheckArgumentsUsed (strTag, ArgumentList);
+  if (bIgnoreUnusedArgs)
+    for (POSITION pos = ArgumentList.GetHeadPosition (); pos; )
+      ArgumentList.GetNext (pos)->bUsed = true;
+
+  return true;
 
   } // end of CMUSHclientDoc::MXP_OpenAtomicTag
 

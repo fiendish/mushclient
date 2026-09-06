@@ -111,6 +111,22 @@ bool GetWord (CString & strResult, CString & str)
 bool CMUSHclientDoc::BuildArgumentList (CArgumentList & ArgumentList, 
                                         CString strTag) 
   {
+class CArgumentBuildGuard
+  {
+  public:
+    CArgumentBuildGuard (CArgumentList & list) : m_list (list), m_bRelease (false) { }
+    ~CArgumentBuildGuard ()
+      {
+      if (!m_bRelease)
+        DELETE_LIST (m_list);
+      }
+    void Release () { m_bRelease = true; }
+
+  private:
+    CArgumentList & m_list;
+    bool m_bRelease;
+  } argumentBuildGuard (ArgumentList);
+
 CArgument * pArgument;
 int iArgumentNumber = 0;
 bool bEnd;
@@ -145,6 +161,7 @@ CString strArgumentValue;
       // NB - not implemented yet - we have detected an empty tag.
       //      eg.  <sound blah blah />
 
+      argumentBuildGuard.Release ();
       return false;   // OK return
 
       } // end of / at end of list
@@ -174,19 +191,24 @@ CString strArgumentValue;
 
       strArgumentName.MakeLower ();
       // named arguments don't have a numbered position
-      pArgument = new CArgument (strArgumentName, strArgumentValue, 0);
-      ArgumentList.AddTail (pArgument);
+      std::unique_ptr<CArgument> pNewArgument
+        (new CArgument (strArgumentName, strArgumentValue, 0));
+      ArgumentList.AddTail (pNewArgument.get ());
+      pArgument = pNewArgument.release ();
       bEnd = GetWord (strArgumentName, strTag); // get next argument
       }   // end of name=value
     else
       { // positional argument, no name=value
       // thus, name is value
-      pArgument = new CArgument ("", strArgumentName, ++iArgumentNumber);
-      ArgumentList.AddTail (pArgument);
+      std::unique_ptr<CArgument> pNewArgument
+        (new CArgument ("", strArgumentName, ++iArgumentNumber));
+      ArgumentList.AddTail (pNewArgument.get ());
+      pArgument = pNewArgument.release ();
       strArgumentName = strEquals;    // and strEquals is next argument, if any      
       }   // end of value alone
     }  // end of processing each argument                             
 
+  argumentBuildGuard.Release ();
   return false; // all OK
   } // end of CMUSHclientDoc::BuildArgumentList 
 
@@ -455,12 +477,13 @@ unsigned long iHash = MakeActionHash (strAction, strHint, strVariable);
 
   // here when action not found
 
-  CAction * pAction = new CAction (strAction, strHint, strVariable, this);
+  std::unique_ptr<CAction> pAction
+    (new CAction (strAction, strHint, strVariable, this));
 
+  m_ActionList.AddTail (pAction.get ());
   pAction->AddRef ();
-  m_ActionList.AddTail (pAction);   
   
-  return pAction;
+  return pAction.release ();
   } // end of CMUSHclientDoc::GetAction
 
 

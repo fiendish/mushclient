@@ -18,8 +18,32 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 #define MAX_TEXT 1000     // max size for &text; variable
 
-void CMUSHclientDoc::MXP_CloseTag (CString strTag, const bool bOpen)
+bool CMUSHclientDoc::MXP_PrepareCloseTag (
+  CString strTag,
+  const bool bOpen,
+  const __int64 iExpectedOpeningStyleCreationNumber,
+  const vector<int> & closeActions,
+  const CActiveTag * pActiveTag,
+  CPreparedMXPClose & preparedClose)
   {
+  preparedClose = CPreparedMXPClose ();
+  preparedClose.strTag = strTag;
+  preparedClose.closeActions = closeActions;
+  preparedClose.iActiveTagCreationNumber =
+    pActiveTag ? pActiveTag->nCreationNumber : 0;
+  if (pActiveTag)
+    {
+    preparedClose.bOpeningInParagraph = pActiveTag->bOpeningInParagraph;
+    preparedClose.bOpeningPreMode = pActiveTag->bOpeningPreMode;
+    preparedClose.bOpeningMXPScript = pActiveTag->bOpeningMXPScript;
+    preparedClose.iOpeningListMode = pActiveTag->iOpeningListMode;
+    preparedClose.iOpeningListCount = pActiveTag->iOpeningListCount;
+    preparedClose.iOpeningParagraphOwner =
+      pActiveTag->iOpeningParagraphOwner;
+    preparedClose.iOpeningPreOwner = pActiveTag->iOpeningPreOwner;
+    preparedClose.iOpeningScriptOwner = pActiveTag->iOpeningScriptOwner;
+    preparedClose.iOpeningListOwner = pActiveTag->iOpeningListOwner;
+    }
 
   POSITION linepos = 0, 
            stylepos, 
@@ -42,8 +66,9 @@ void CMUSHclientDoc::MXP_CloseTag (CString strTag, const bool bOpen)
       oldstylepos = stylepos;   // where we found it
       pStyle = pLine->styleList.GetPrev (stylepos);
 
-      if ((pStyle->iFlags & START_TAG) &&
-           pStyle->pAction)
+      if ((pStyle->iFlags & START_TAG) && pStyle->pAction &&
+          (!iExpectedOpeningStyleCreationNumber ||
+           pStyle->nCreationNumber == iExpectedOpeningStyleCreationNumber))
         if (pStyle->pAction->m_strAction == strTag)
           bFoundit = true;
 
@@ -55,26 +80,115 @@ void CMUSHclientDoc::MXP_CloseTag (CString strTag, const bool bOpen)
       }   // end of style loop
     } // end of line loop
 
-  if (!bFoundit)
+  bool bOpeningMarkerMissing = !bFoundit && pActiveTag;
+
+  if (!bFoundit && !bOpeningMarkerMissing)
     {
     MXP_error (DBG_WARNING, wrnMXP_OpenTagNotInOutputBuffer,
               TFormat ("Opening MXP tag <%s> not found in output buffer", 
               (LPCTSTR) strTag)); 
-    return;
+    return false;
     }
 
-  // OK - tag was opened at pStyle in pLine at position oldstylepos
+  if (bOpeningMarkerMissing)
+    {
+    oldlinepos = NULL;
+    oldstylepos = NULL;
+    pLine = NULL;
+    pStyle = NULL;
 
-CString strVariable = "mxp_";
-bool bHaveVariable = false;
+    // A destructive tail change publishes an exact replacement boundary.
+    // Find that range first because a reused older line can contain new text.
+    if (pActiveTag->nFallbackStyleRangeNumber)
+      for (POSITION candidateLinePosition = m_LineList.GetHeadPosition ();
+           candidateLinePosition && !oldstylepos; )
+        {
+        POSITION currentLinePosition = candidateLinePosition;
+        CLine * pCandidateLine = m_LineList.GetNext (candidateLinePosition);
+        for (POSITION candidateStylePosition =
+               pCandidateLine->styleList.GetHeadPosition ();
+             candidateStylePosition; )
+          {
+          POSITION currentStylePosition = candidateStylePosition;
+          CStyle * pCandidateStyle =
+            pCandidateLine->styleList.GetNext (candidateStylePosition);
+          if (pCandidateLine->nCreationNumber <
+                pActiveTag->nFallbackLineCreationNumber ||
+              pCandidateStyle->nRangeCreationNumber !=
+              pActiveTag->nFallbackStyleRangeNumber)
+            continue;
 
-   if (pStyle->pAction &&
+          oldlinepos = currentLinePosition;
+          oldstylepos = currentStylePosition;
+          pLine = pCandidateLine;
+          break;
+          }
+        }
+
+    // Front pruning does not need a replacement boundary. Use only lines and
+    // styles that were created after the original opening point.
+    for (POSITION candidateLinePosition = m_LineList.GetHeadPosition ();
+         candidateLinePosition && !oldstylepos; )
+      {
+      POSITION currentLinePosition = candidateLinePosition;
+      CLine * pCandidateLine = m_LineList.GetNext (candidateLinePosition);
+
+      if (pCandidateLine->nCreationNumber <
+          pActiveTag->nOpeningLineCreationNumber)
+        continue;
+
+      POSITION candidateStylePosition =
+        pCandidateLine->styleList.GetHeadPosition ();
+
+      if (pCandidateLine->nCreationNumber ==
+          pActiveTag->nOpeningLineCreationNumber)
+        {
+        while (candidateStylePosition)
+          {
+          POSITION currentStylePosition = candidateStylePosition;
+          CStyle * pCandidateStyle =
+            pCandidateLine->styleList.GetNext (candidateStylePosition);
+          if (pCandidateStyle->nCreationNumber >
+              pActiveTag->nOpeningStyleCreationNumber)
+            {
+            oldstylepos = currentStylePosition;
+            break;
+            }
+          }
+        }
+
+      if (!oldstylepos &&
+          pCandidateLine->nCreationNumber >
+            pActiveTag->nOpeningLineCreationNumber)
+        oldstylepos = pCandidateLine->styleList.GetHeadPosition ();
+
+      if (oldstylepos)
+        {
+        oldlinepos = currentLinePosition;
+        pLine = pCandidateLine;
+        break;
+        }
+      }
+    }
+
+CString & strVariable = preparedClose.strVariable;
+bool & bHaveVariable = preparedClose.bHaveVariable;
+strVariable = "mxp_";
+
+   if (bOpeningMarkerMissing && !pActiveTag->strVariable.IsEmpty ())
+     {
+     bHaveVariable = true;
+     strVariable += pActiveTag->strVariable;
+     }
+   else if (!bOpeningMarkerMissing && pStyle->pAction &&
      !pStyle->pAction->m_strVariable.IsEmpty ())
      {
      bHaveVariable = true;
      strVariable += pStyle->pAction->m_strVariable;
      }
-   else if (((strTag == "var") || (strTag == "v")) && !strFoundVariable.IsEmpty ())
+   else if (!bOpeningMarkerMissing &&
+            ((strTag == "var") || (strTag == "v")) &&
+            !strFoundVariable.IsEmpty ())
      {
      // <var>blah</var> is a bit different
      bHaveVariable = true;
@@ -83,27 +197,40 @@ bool bHaveVariable = false;
  
   // establish text of characters between start tag and end of buffer
 
-  CString strText;
+  CString & strText = preparedClose.strText;
   bool bStart = false;
+  set<__int64> & contentStyleRangeNumbers =
+    preparedClose.contentStyleRangeNumbers;
   int iBytesToGo = MAX_TEXT;
   char * p = strText.GetBuffer (MAX_TEXT);
 
-  for (linepos = oldlinepos; linepos && iBytesToGo > 2; )
+  for (linepos = oldlinepos; linepos; )
     {
+    POSITION currentLinePosition = linepos;
     CLine * pLine2 = m_LineList.GetNext (linepos);
     int iCol = 0;
     int iLen = 0;
  
     for (stylepos = pLine2->styleList.GetHeadPosition () ; stylepos; )
       {
+      POSITION currentStylePosition = stylepos;
       CStyle * pStyle2 = pLine2->styleList.GetNext (stylepos);
-      if (pStyle2 == pStyle)
+      if ((!bOpeningMarkerMissing && pStyle2 == pStyle) ||
+          (bOpeningMarkerMissing &&
+           currentLinePosition == oldlinepos &&
+           currentStylePosition == oldstylepos))
         bStart = true;
       if (bStart)
+        {
         iLen += pStyle2->iLength; // count length
+        contentStyleRangeNumbers.insert (pStyle2->nRangeCreationNumber);
+        }
       else
         iCol += pStyle2->iLength; // starting column
       }   // end of each style
+
+    if (iBytesToGo <= 2)
+      continue;
 
     int iCopy = MIN (iLen, iBytesToGo);
 
@@ -126,6 +253,68 @@ bool bHaveVariable = false;
     }   // end of each line
 
   strText.ReleaseBuffer (MAX_TEXT - iBytesToGo);
+
+  if (!bOpeningMarkerMissing)
+    contentStyleRangeNumbers.erase (pStyle->nRangeCreationNumber);
+
+  // Publish the restored style before any callback. A callback can open a new
+  // tag, and that tag must inherit the style outside the tag being closed.
+  CStyle * pRestoredStyle = NULL;
+
+  if (bOpeningMarkerMissing)
+    {
+    pRestoredStyle = AddStyle (pActiveTag->iOpeningFlags,
+                               pActiveTag->iOpeningForeColour,
+                               pActiveTag->iOpeningBackColour,
+                               0,
+                               pActiveTag->pOpeningAction);
+    }
+  else
+    {
+    // The opening marker remembers the style that must be restored.
+    CStyle * pLastStyle = m_pCurrentLine->styleList.GetTail ();
+    POSITION lastStylePosition =
+      m_pCurrentLine->styleList.GetTailPosition ();
+
+    m_pCurrentLine->styleList.AddTail (pStyle);
+    pLine->styleList.RemoveAt (oldstylepos);
+
+    if (pLastStyle->iLength == 0 &&
+        (pLastStyle->iFlags & START_TAG) == 0)
+      {
+      m_pCurrentLine->styleList.RemoveAt (lastStylePosition);
+      DELETESTYLE (pLastStyle);
+      }
+
+    pStyle->iFlags &= ~START_TAG;
+    CAction * pTagAction = pStyle->pAction;
+    pStyle->pAction = pActiveTag ? pActiveTag->pOpeningAction : NULL;
+    if (pStyle->pAction)
+      pStyle->pAction->AddRef ();
+    if (pTagAction)
+      pTagAction->Release ();
+
+    pRestoredStyle = pStyle;
+    }
+
+  RememberStyle (pRestoredStyle);
+
+  return true;
+  } // end of CMUSHclientDoc::MXP_PrepareCloseTag
+
+void CMUSHclientDoc::MXP_FinishCloseTag (
+  const CPreparedMXPClose & preparedClose)
+  {
+  CPluginContextGuard pluginContextGuard (this, NULL);
+
+  const CString & strTag = preparedClose.strTag;
+  const CString & strText = preparedClose.strText;
+  const CString & strVariable = preparedClose.strVariable;
+  const bool bHaveVariable = preparedClose.bHaveVariable;
+
+  exception_ptr pendingException;
+  try
+    {
 
   // call script if required
   if (m_dispidOnMXP_CloseTag != DISPID_UNKNOWN)
@@ -183,22 +372,29 @@ bool bHaveVariable = false;
                               (LPCTSTR) strTag,
                               (LPCTSTR) strText));
 
-  m_CurrentPlugin = NULL;
-
   // if this tag had a FLAG directive, set the desired variable - prefixed with mxp_
   if (bHaveVariable)
     {
-    CVariable * variable_item;
+    CVariable * old_variable_item = NULL;
+    m_VariableMap.Lookup (strVariable, old_variable_item);
 
-    // get rid of old variable, if any
-    if (m_VariableMap.Lookup (strVariable, variable_item))
+    CVariable * variable_item = new CVariable;
+    try
+      {
+      variable_item->nUpdateNumber = App.GetUniqueNumber ();   // for concurrency checks
+      variable_item->strLabel = strVariable;
+      variable_item->strContents = strText;
+      m_VariableMap.SetAt (strVariable, variable_item);
+      }
+    catch (...)
+      {
       delete variable_item;
+      throw;
+      }
 
-    // create new variable item and insert in variable map
-    m_VariableMap.SetAt (strVariable, variable_item = new CVariable);
+    delete old_variable_item;
     m_bVariablesChanged = true;
 //    SetModifiedFlag (TRUE);
-    variable_item->nUpdateNumber = App.GetUniqueNumber ();   // for concurrency checks
 
     // if auto-mapping, add to auto-map string
 
@@ -218,10 +414,6 @@ bool bHaveVariable = false;
       // update status line
       DrawMappingStatusLine ();
       }
-
-    // set up variable item contents
-    variable_item->strLabel = strVariable;
-    variable_item->strContents = strText;
 
     // call script if required
     if (m_dispidOnMXP_SetVariable != DISPID_UNKNOWN)
@@ -296,112 +488,258 @@ bool bHaveVariable = false;
 
     } // end of setting the variable's contents
 
-// see if we know of this element
-
-CAtomicElement * pAtomicElement;
-  
-  // atomic element?
-  if (App.m_ElementMap.Lookup (strTag, pAtomicElement))
-    MXP_CloseAtomicTag (pAtomicElement->iAction, 
-                        strText,
-                        oldlinepos,
-                        oldstylepos);
-  else
+    }
+  catch (...)
     {
-    CElement * pElement;
-
-    // custom element?
-    if (!m_CustomElementMap.Lookup (strTag, pElement))
-      {
-        MXP_error (DBG_ERROR, errMXP_ClosingUnknownTag,
-                  TFormat ("Unknown MXP element: <%s>" ,
-                          (LPCTSTR) m_strMXPstring));
-      return;
-      }
-
-    CElementItem * pElementItem;
-
-    for (POSITION pos = pElement->ElementItemList.GetHeadPosition (); pos; )
-      {
-      pElementItem = pElement->ElementItemList.GetNext (pos);
-      MXP_CloseAtomicTag (pElementItem->pAtomicElement->iAction, 
-                          strText,
-                          oldlinepos,
-                          oldstylepos);
-      } // end of doing each one
-    } // end of user-defined element
-
-  // I don't need the opening style tag any more, and as it remembers the style at
-  // the moment it was made it will make a good way of restoring existing styles 
-  // eg. underline off 
-
-  pLine->styleList.RemoveAt (oldstylepos);
-
-  // however if the last thing on the current line is a zero-length style,
-  // we may as well get rid of it.
-
-  CStyle * pLastStyle = m_pCurrentLine->styleList.GetTail ();
-
-  if (pLastStyle->iLength == 0 && (pLastStyle->iFlags & START_TAG) == 0)
-    {
-    DELETESTYLE (pLastStyle);
-    m_pCurrentLine->styleList.RemoveTail ();
+    pendingException = current_exception ();
     }
 
-  m_pCurrentLine->styleList.AddTail (pStyle);
+  // Keep the original callback-before-close-action order. Range actions use
+  // the saved logical identities, so callback-created output is not included.
+  for (vector<int>::const_iterator it = preparedClose.closeActions.begin ();
+       it != preparedClose.closeActions.end (); ++it)
+    try
+      {
+      MXP_CloseAtomicTag (*it, preparedClose);
+      }
+    catch (...)
+      {
+      if (!pendingException)
+        pendingException = current_exception ();
+      }
 
-  pStyle->iFlags &= ~START_TAG;   // isn't a start tag any more
-  pStyle->pAction->Release ();     // get rid of style name
-  pStyle->pAction = NULL;
+  if (pendingException)
+    rethrow_exception (pendingException);
 
-  RememberStyle (pStyle);
-
-  } // end of  CMUSHclientDoc::MXP_CloseTag
+  } // end of CMUSHclientDoc::MXP_FinishCloseTag
 
 
 
 void CMUSHclientDoc::MXP_CloseOpenTags (void)
   {
-
-// see if we know of this element
-
-  while (!m_ActiveTagList.IsEmpty ())
+  struct CTagToClose
     {
-    CActiveTag * pTag = m_ActiveTagList.GetTail ();
+    __int64 iCreationNumber;
+    __int64 iOpeningStyleCreationNumber;
+    CString strName;
+    vector<int> closeActions;
+    };
+  vector<CTagToClose> tagsToClose;
 
-    // don't close securely-opened tags here
+  for (POSITION pos = m_ActiveTagList.GetTailPosition (); pos; )
+    {
+    CActiveTag * pTag = m_ActiveTagList.GetPrev (pos);
     if (pTag->bSecure)
-      return;
+      break;
 
-    CString strTag = pTag->strName;
+    CTagToClose tagToClose;
+    tagToClose.iCreationNumber = pTag->nCreationNumber;
+    tagToClose.iOpeningStyleCreationNumber =
+      pTag->nOpeningStyleCreationNumber;
+    tagToClose.strName = pTag->strName;
+    tagToClose.closeActions = pTag->closeActions;
+    tagsToClose.push_back (tagToClose);
+    }
 
-    MXP_error (DBG_WARNING, wrnMXP_OpenTagClosedAtEndOfLine,
-              TFormat ("End-of-line closure of open MXP tag: <%s>", 
-              (LPCTSTR) strTag)); 
-    MXP_CloseTag (strTag);
+  vector<CPreparedMXPClose> preparedCloses;
+  preparedCloses.reserve (tagsToClose.size ());
+  exception_ptr prepareException;
 
-    m_ActiveTagList.RemoveTail ();  // get rid of it
+  for (vector<CTagToClose>::const_iterator it = tagsToClose.begin ();
+       it != tagsToClose.end (); ++it)
+    {
+    CActiveTag * pTag = NULL;
+    POSITION tagPosition = NULL;
+    for (POSITION pos = m_ActiveTagList.GetTailPosition (); pos; )
+      {
+      POSITION current = pos;
+      CActiveTag * pCandidate = m_ActiveTagList.GetPrev (pos);
+      if (pCandidate->nCreationNumber == it->iCreationNumber)
+        {
+        pTag = pCandidate;
+        tagPosition = current;
+        break;
+        }
+      }
+
+    if (!pTag)
+      continue;
+
+    bool bCloseSlotAdded = false;
+    bool bPrepared = false;
+    try
+      {
+      preparedCloses.push_back (CPreparedMXPClose ());
+      bCloseSlotAdded = true;
+      bPrepared = MXP_PrepareCloseTag (it->strName,
+                                       false,
+                                       it->iOpeningStyleCreationNumber,
+                                       it->closeActions,
+                                       pTag,
+                                       preparedCloses.back ());
+      }
+    catch (...)
+      {
+      if (bCloseSlotAdded)
+        preparedCloses.pop_back ();
+      prepareException = current_exception ();
+      break;
+      }
+
+    if (!bPrepared)
+      {
+      preparedCloses.pop_back ();
+      continue;
+      }
+
+    m_ActiveTagList.RemoveAt (tagPosition);
     delete pTag;
     }
 
+  exception_ptr finishException;
+  for (vector<CPreparedMXPClose>::const_iterator it = preparedCloses.begin ();
+       it != preparedCloses.end (); ++it)
+    {
+    try
+      {
+      MXP_error (DBG_WARNING, wrnMXP_OpenTagClosedAtEndOfLine,
+                TFormat ("End-of-line closure of open MXP tag: <%s>",
+                         (LPCTSTR) it->strTag));
+      }
+    catch (...)
+      {
+      if (!finishException)
+        finishException = current_exception ();
+      }
+
+    try
+      {
+      MXP_FinishCloseTag (*it);
+      }
+    catch (...)
+      {
+      if (!finishException)
+        finishException = current_exception ();
+      }
+    }
+
+  if (prepareException)
+    rethrow_exception (prepareException);
+  if (finishException)
+    rethrow_exception (finishException);
   }  // end of CMUSHclientDoc::MXP_CloseOpenTags
 
 void CMUSHclientDoc::MXP_CloseAllTags (void)
   {
-  while (!m_ActiveTagList.IsEmpty ())
+  struct CTagToClose
     {
-    CActiveTag * pTag = m_ActiveTagList.GetTail ();
+    __int64 iCreationNumber;
+    __int64 iOpeningStyleCreationNumber;
+    CString strName;
+    vector<int> closeActions;
+    };
+  vector<CTagToClose> tagsToClose;
 
-    // if protected from reset, stop closing
+  for (POSITION pos = m_ActiveTagList.GetTailPosition (); pos; )
+    {
+    CActiveTag * pTag = m_ActiveTagList.GetPrev (pos);
     if (pTag->bNoReset)
-      return;
+      break;
 
-    MXP_error (DBG_WARNING, wrnMXP_TagClosedAtReset,
-              TFormat ("<reset> closure of MXP tag: <%s>", 
-              (LPCTSTR) pTag->strName)); 
-    MXP_CloseTag (pTag->strName);
-    m_ActiveTagList.RemoveTail ();
+    CTagToClose tagToClose;
+    tagToClose.iCreationNumber = pTag->nCreationNumber;
+    tagToClose.iOpeningStyleCreationNumber =
+      pTag->nOpeningStyleCreationNumber;
+    tagToClose.strName = pTag->strName;
+    tagToClose.closeActions = pTag->closeActions;
+    tagsToClose.push_back (tagToClose);
+    }
+
+  vector<CPreparedMXPClose> preparedCloses;
+  preparedCloses.reserve (tagsToClose.size ());
+  exception_ptr prepareException;
+
+  for (vector<CTagToClose>::const_iterator it = tagsToClose.begin ();
+       it != tagsToClose.end (); ++it)
+    {
+    CActiveTag * pTag = NULL;
+    POSITION tagPosition = NULL;
+    for (POSITION pos = m_ActiveTagList.GetTailPosition (); pos; )
+      {
+      POSITION current = pos;
+      CActiveTag * pCandidate = m_ActiveTagList.GetPrev (pos);
+      if (pCandidate->nCreationNumber == it->iCreationNumber)
+        {
+        pTag = pCandidate;
+        tagPosition = current;
+        break;
+        }
+      }
+
+    if (!pTag)
+      continue;
+
+    bool bCloseSlotAdded = false;
+    bool bPrepared = false;
+    try
+      {
+      preparedCloses.push_back (CPreparedMXPClose ());
+      bCloseSlotAdded = true;
+      bPrepared = MXP_PrepareCloseTag (it->strName,
+                                       false,
+                                       it->iOpeningStyleCreationNumber,
+                                       it->closeActions,
+                                       pTag,
+                                       preparedCloses.back ());
+      }
+    catch (...)
+      {
+      if (bCloseSlotAdded)
+        preparedCloses.pop_back ();
+      prepareException = current_exception ();
+      break;
+      }
+
+    if (!bPrepared)
+      {
+      preparedCloses.pop_back ();
+      continue;
+      }
+
+    m_ActiveTagList.RemoveAt (tagPosition);
     delete pTag;
     }
+
+  exception_ptr finishException;
+  for (vector<CPreparedMXPClose>::const_iterator it = preparedCloses.begin ();
+       it != preparedCloses.end (); ++it)
+    {
+    try
+      {
+      MXP_error (DBG_WARNING, wrnMXP_TagClosedAtReset,
+                TFormat ("<reset> closure of MXP tag: <%s>",
+                         (LPCTSTR) it->strTag));
+      }
+    catch (...)
+      {
+      if (!finishException)
+        finishException = current_exception ();
+      }
+
+    try
+      {
+      MXP_FinishCloseTag (*it);
+      }
+    catch (...)
+      {
+      if (!finishException)
+        finishException = current_exception ();
+      }
+    }
+
+  if (prepareException)
+    rethrow_exception (prepareException);
+  if (finishException)
+    rethrow_exception (finishException);
   } // end of CMUSHclientDoc::MXP_CloseAllTags
 

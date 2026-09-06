@@ -49,9 +49,8 @@ CString strEntityContents = MXP_GetEntity (m_strMXPstring);
   if (!strEntityContents.IsEmpty ())
     {
 //  if the entity happens to be < & > etc. don't reprocess it
-    m_bMXP = false;
+    CValueStateGuard<bool> mxpGuard (m_bMXP, false);
     DisplayMsg (strEntityContents, strEntityContents.GetLength (), 0, true);  // fake packet
-    m_bMXP = true;
     }
 
   } // end of CMUSHclientDoc::MXP_collected_entity
