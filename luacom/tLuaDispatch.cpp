@@ -819,6 +819,34 @@ void tLuaDispatch::SetCoClassinfo(ITypeInfo *coclassinfo)
 
 void tLuaDispatch::BeConnectable(void)
 {
+  tCOMPtr<IProvideClassInfo2> class_info;
+  CHK_COM_CODE(QueryInterface(IID_IProvideClassInfo2, (void**)&class_info));
+  tCOMPtr<ITypeInfo> coclass_info;
+  CHK_COM_CODE(class_info->GetClassInfo(&coclass_info));
+  CHK_LCOM_ERR(coclass_info, "Coclass type information is unavailable.");
+
+  TYPEATTR* attributes = NULL;
+  CHK_COM_CODE(coclass_info->GetTypeAttr(&attributes));
+  CHK_LCOM_ERR(attributes, "Coclass attributes are unavailable.");
+  const UINT interface_count = attributes->cImplTypes;
+  coclass_info->ReleaseTypeAttr(attributes);
+
+  // A class without a selectable source interface has no connection point.
+  bool has_source = false;
+  for(UINT i = 0; i < interface_count; i++)
+  {
+    int flags = 0;
+    CHK_COM_CODE(coclass_info->GetImplTypeFlags(i, &flags));
+    if(((flags & IMPLTYPEFLAG_FDEFAULT) || interface_count == 1) &&
+       (flags & IMPLTYPEFLAG_FSOURCE))
+    {
+      has_source = true;
+      break;
+    }
+  }
+  if(!has_source)
+    return;
+
   cpc = new tLuaCOMConnPointContainer(L, (IDispatch*)this);
 }
 
