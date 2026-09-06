@@ -9057,12 +9057,23 @@ CalculateMemoryUsage ();
 void CPrefsP15::CalculateMemoryUsage ()
   {
 
-  CProgressDlg * pProgressDlg = NULL;
+  class CStatusLineGuard
+    {
+    public:
+      CStatusLineGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc) { }
+      ~CStatusLineGuard () { m_pDoc->ShowStatusLine (); }
+
+    private:
+      CMUSHclientDoc * m_pDoc;
+    } statusLineGuard (m_doc);
+
+  std::unique_ptr<CProgressDlg> pProgressDlg;
 
   if (m_doc->m_LineList.GetCount () > 1000)
     {
-    pProgressDlg = new CProgressDlg; 
-    pProgressDlg->Create ();                           
+    pProgressDlg.reset (new CProgressDlg);
+    if (!pProgressDlg->Create ())
+      AfxThrowResourceException ();
     pProgressDlg->SetStatus (Translate ("Calculating memory usage..."));               
     pProgressDlg->SetRange (0, m_doc->m_LineList.GetCount ());
     pProgressDlg->SetWindowText (Translate ("Memory used by output buffer"));                              
@@ -9086,10 +9097,7 @@ void CPrefsP15::CalculateMemoryUsage ()
         pProgressDlg->SetPos (iCount); 
 
       if (pProgressDlg->CheckCancelButton())     // abort if user cancels
-        {
-        delete pProgressDlg;
         return;
-        }
       }
 
     CLine * pLine = m_doc->m_LineList.GetNext (pos);
@@ -9125,13 +9133,7 @@ void CPrefsP15::CalculateMemoryUsage ()
     strMemory.Format ("%s", (LPCTSTR) strKb);
 
 	SetDlgItemText(IDC_OUTPUT_MEMORY, strMemory);
-
-  m_doc->ShowStatusLine ();
-	
   GetDlgItem (IDC_CALCULATE_MEMORY)->EnableWindow (FALSE);  // only do it once
-
-
-  delete pProgressDlg;
 
   } // end of  CPrefsP15::CalculateMemoryUsage 
 
