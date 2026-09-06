@@ -4115,7 +4115,7 @@ t_print_control_block pcb;
 
   print_end_page (pcb);
   
-  if (pcb.cancelled)
+  if (pcb.cancelled || !pcb.ok)
     print_abort_document (pcb);
   else
     print_end_document (pcb);
