@@ -1199,8 +1199,8 @@ long CMUSHclientDoc::ChatSendFile(long ID, LPCTSTR FileName)
     pSocket->m_strOurFileName.Empty ();
     pSocket->m_iFileSize = 0;
 
-    delete pNewFile;
-    delete [] pNewFileBuffer;
+    delete pNewFile;    // in case it was set up
+    delete [] pNewFileBuffer;  // and get rid of buffer
 
     return eFileNotFound;
     } // end of catching a file exception
