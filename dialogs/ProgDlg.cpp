@@ -2,7 +2,6 @@
 // CG: This file was added by the Progress Dialog component
 
 #include "stdafx.h"
-#include "..\MUSHclient.h"
 #include "..\resource.h"
 #include "ProgDlg.h"
 
@@ -168,10 +167,9 @@ void CProgressDlg::PumpMessages()
       if(!IsDialogMessage(&msg))
       {
         TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        DispatchMessage(&msg);  
       }
     }
-
 }
 
 BOOL CProgressDlg::CheckCancelButton()
