@@ -1,8 +1,8 @@
 LuaCOM source: https://github.com/fiendish/luacom
 Revision: 96f9e5bfacd8aec6c5e98d85e55854188eba7412
 
-Copy the files from src/library into this directory, along with
-include/luacom.h and COPYRIGHT.
+Copy the files from src/library and include/luacom.h into this directory.
+Copy COPYRIGHT to ../licences/LuaCOM licence.txt.
 
 Local changes in luacom.cpp:
 
