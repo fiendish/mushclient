@@ -2003,7 +2003,7 @@ bool bTrim;
       // don't warn if new contents are the same :)
       if (oldVariable->strContents != strNewContents)
         if (!(iMask & XML_OVERWRITE))
-          LoadError (strVariableName,
+          LoadError (strVariableName, 
                      "overwriting existing variable contents",
                      node.iLine);
       }

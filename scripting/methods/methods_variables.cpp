@@ -32,10 +32,12 @@ long nStatus;
   CVariable * old_variable_item = NULL;
   GetVariableMap ().Lookup (strVariableName, old_variable_item);
 
+  // create new variable item and insert in variable map
   variable_item = new CVariable;
   try
     {
     variable_item->nUpdateNumber = App.GetUniqueNumber ();   // for concurrency checks
+    // set up variable item contents
     variable_item->strLabel = VariableName;
     variable_item->strContents = Contents;
     GetVariableMap ().SetAt (strVariableName, variable_item);
@@ -46,6 +48,7 @@ long nStatus;
     throw;
     }
 
+  // get rid of old variable, if any
   delete old_variable_item;
   m_bVariablesChanged = true;
 //  SetModifiedFlag (TRUE); // set flag instead now
