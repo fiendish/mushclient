@@ -336,16 +336,16 @@ void CMUSHclientDoc::CheckTimers ()
   if (m_bEnableTimers)
     {
 
-  // timer has kicked in unexpectedly - ignore it
-  if (m_CurrentPlugin)
-    return;
+    // timer has kicked in unexpectedly - ignore it
+    if (m_CurrentPlugin)
+      return;
 
   CPluginContextGuard timerContextGuard (this, NULL);
 
    // Do only the plugin instances that existed at the start of this tick.
    CPluginInstanceSnapshot plugins;
    GetPluginInstanceSnapshot (m_PluginList, plugins);
-  CheckTimerList (GetTimerMap ());
+    CheckTimerList (GetTimerMap ());
    for (size_t iPlugin = 0; iPlugin < plugins.size (); iPlugin++)
       {
       m_CurrentPlugin = GetPluginInstance (

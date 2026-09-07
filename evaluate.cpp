@@ -174,11 +174,11 @@ OneShotItemMap AliasList;
       continue;
 
     ExecuteAliasScript (alias_item, input);
-    }       // end of list of aliases that fired
+    }       // end of list of aliass that fired
 
 
 
-// now that we have run all scripts etc., delete one-shot aliases
+// now that we have run all scripts etc., delete one-shot aliases      
 
   int iDeletedNonTemporaryCount = 0;
   typedef map<string, CAlias *> AliasDeletionMap;
@@ -346,12 +346,12 @@ string FixWildcard (const string sWildcard,       // the wildcard
   } // end of FixWildcard
 
 
-CTrigger * CMUSHclientDoc::EvaluateTrigger (const CString & input,
+CTrigger * CMUSHclientDoc::EvaluateTrigger (const CString & input, 
                                             CString & output,
                                             int & iStartCol,
                                             int & iEndCol,
                                             CTrigger * trigger_item)
-  {
+  {          
 //  timer t ("EvaluateTrigger");
 
   output.Empty ();
@@ -807,7 +807,7 @@ bool bStagedReplacementPublished = false;
 
       switch (set_type)
         {
-        case TRIGGER:
+        case TRIGGER: 
           if (!replace)
             Load_World_XML (*ar, XML_TRIGGERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
           else
@@ -846,7 +846,7 @@ bool bStagedReplacementPublished = false;
             }
           break;  
 
-        case ALIAS:
+        case ALIAS:   
           if (!replace)
             Load_World_XML (*ar, XML_ALIASES | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
           else
@@ -893,7 +893,7 @@ bool bStagedReplacementPublished = false;
           Load_World_XML (*ar, XML_MACROS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);  
           break;   
 
-        case TIMER:
+        case TIMER:   
           if (!replace)
             Load_World_XML (*ar, XML_TIMERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
           else
@@ -1124,7 +1124,7 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
 
     if (alias_item->bOneShot)
       mapOneShotItems.push_back (
-          OneShotItem (m_CurrentPlugin,
+          OneShotItem (m_CurrentPlugin, 
                       (const char *) alias_item->strInternalName,
                       alias_item->nCreationNumber));
 
