@@ -1491,9 +1491,8 @@ public:
                const bool bQueueIt,
                const bool bLogIt);
 	void ReceiveMsg();
-  void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
+	void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
   bool AddToLine (LPCTSTR lpszText, const int flags);
-  bool AddToLineAtomically (LPCTSTR lpszText, const int flags);
   bool AddToLineInternal (LPCTSTR lpszText, const int flags,
                           COutputAppendTransaction * pTransaction);
   bool StartNewLine_KeepPreviousStyle (const int flags,
@@ -3023,7 +3022,6 @@ class COutputAppendTransaction
       {
       __int64 iPreviousLineCreationNumber;
       __int64 iNewLineCreationNumber;
-      int iOldLineLength;
       int iSplitLength;
       vector<CWrapStyleBackup> styleBackups;
       bool bPublished;

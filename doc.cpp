@@ -1843,7 +1843,6 @@ size_t COutputAppendTransaction::PrepareWrap (
   CWrapMove wrap;
   wrap.iPreviousLineCreationNumber = pPreviousLine->nCreationNumber;
   wrap.iNewLineCreationNumber = 0;
-  wrap.iOldLineLength = pPreviousLine->len;
   wrap.iSplitLength = iSplitLength;
   wrap.bPublished = false;
 
@@ -2183,29 +2182,6 @@ void COutputAppendTransaction::Rollback ()
 bool CMUSHclientDoc::AddToLine (LPCTSTR lpszText, const int flags)
   { return AddToLineInternal (lpszText, flags, NULL); }
 
-bool CMUSHclientDoc::AddToLineAtomically (LPCTSTR lpszText, const int flags)
-  {
-  COutputAppendTransaction transaction (this, strlen (lpszText));
-  transaction.MarkCurrentLineStyles ();
-  try
-    {
-    if (!AddToLineInternal (lpszText,
-                            flags,
-                            &transaction))
-      {
-      transaction.Rollback ();
-      return false;
-      }
-    transaction.Commit ();
-    return true;
-    }
-  catch (...)
-    {
-    transaction.Rollback ();
-    throw;
-    }
-  }
-
 bool CMUSHclientDoc::AddToLineInternal (
   LPCTSTR lpszText,
   const int flags,
@@ -2316,7 +2292,7 @@ Unicode range              UTF-8 bytes
           {
           // save portion of text destined for new line
           CString strText = CString (&m_pCurrentLine->text [last_space],
-                                     saved_count);
+                                     saved_count); 
           const __int64 iPreviousLineCreationNumber =
             m_pCurrentLine->nCreationNumber;
           const size_t iPreparedWrap = iAppendCreationNumber ?
