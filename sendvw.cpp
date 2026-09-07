@@ -333,6 +333,7 @@ ASSERT_VALID(pDoc);
 
 	if (nChar == VK_RETURN)
   	{
+
     CValueStateGuard<unsigned short> actionSourceGuard
       (pDoc->m_iCurrentActionSource, eUserTyping);
 
@@ -671,6 +672,7 @@ void CSendView::SendCommand (const CString strOriginalCommand,
     StringToList (strFullCommand, ENDLINE, strList);
     CValueStateGuard<unsigned short> autoSayGuard
       (pDoc->m_bEnableAutoSay, false); // disable to prevent loop
+    // disable command stacking
     CValueStateGuard<unsigned short> commandStackGuard
       (pDoc->m_enable_command_stack, false);
 
@@ -683,7 +685,7 @@ void CSendView::SendCommand (const CString strOriginalCommand,
         // evaluate aliases, speed walking, command stacking etc.
 
         CValueStateGuard<int> executionDepthGuard
-          (pDoc->m_iExecutionDepth, 0); // hand-typed command
+          (pDoc->m_iExecutionDepth, 0); // hand-typed command, assume depth zero
 
         // execution is now done separately :)
 
@@ -712,7 +714,7 @@ void CSendView::SendCommand (const CString strOriginalCommand,
     // evaluate aliases, speed walking, command stacking etc.
 
     CValueStateGuard<int> executionDepthGuard
-      (pDoc->m_iExecutionDepth, 0); // hand-typed command
+      (pDoc->m_iExecutionDepth, 0); // hand-typed command, assume depth zero
 
     // execution is now done separately :)
 
