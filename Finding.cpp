@@ -134,7 +134,7 @@ CFindDlg dlg (FindInfo.m_strFindStringList);
     FindInfo.m_bAgain = false;
     FindInfo.m_MatchesOnLine.clear ();
 
-    delete FindInfo.m_regexp;
+    delete FindInfo.m_regexp;    // get rid of earlier regular expression
     FindInfo.m_regexp = newRegexp.release ();
 
     }   // end of not starting a new find
