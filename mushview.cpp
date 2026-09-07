@@ -271,7 +271,6 @@ BEGIN_MESSAGE_MAP(CMUSHView, CView)
 CMUSHView::CMUSHView()
 {
 
-
   m_selstart_line = 0;
   m_selstart_col = 0;
   m_selend_line = 0;
@@ -3767,7 +3766,7 @@ ASSERT_VALID(pDoc);
             (m_MXPMenuItems, menuItems);
           const UINT nCommand = pPopup->TrackPopupMenu(
                                 TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
-                                menupoint.x,
+                                menupoint.x, 
                                 menupoint.y,
                                 pWndPopupOwner);
           if (nCommand)
@@ -3807,7 +3806,7 @@ ASSERT_VALID(pDoc);
             (m_MXPMenuItems, menuItems);
           const UINT nCommand = pPopup->TrackPopupMenu(
                                 TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
-                                menupoint.x,
+                                menupoint.x, 
                                 menupoint.y,
                                 pWndPopupOwner);
           if (nCommand)
@@ -5684,7 +5683,7 @@ ASSERT_VALID(pDoc);
 
     case ACTION_PROMPT:
       if (m_bottomview->CheckTyping (pDoc, menuItem.m_strAction))
-        return;
+        return;             
       m_bottomview->SetCommand (menuItem.m_strAction);
       break; // end of ACTION_PROMPT
 
@@ -5942,13 +5941,14 @@ ASSERT_VALID(pDoc);
       CValueStateGuard<unsigned short> actionSourceGuard
         (pDoc->m_iCurrentActionSource, eUserMenuAction);
 
-      pDoc->SendTo (pAlias->iSendTo,
-                    strAction,
-                    pAlias->bOmitFromOutput,
-                    pAlias->bOmitFromLog,
-                    TFormat ("Alias: %s", (LPCTSTR) pAlias->strLabel),
-                    pAlias->strVariable,
-                    strExtraOutput);
+      pDoc->SendTo (pAlias->iSendTo, 
+              strAction, 
+              pAlias->bOmitFromOutput,
+              pAlias->bOmitFromLog,
+              TFormat ("Alias: %s", (LPCTSTR) pAlias->strLabel),
+              pAlias->strVariable,
+              strExtraOutput
+              );
       }
 
       if (!strExtraOutput.IsEmpty ())
