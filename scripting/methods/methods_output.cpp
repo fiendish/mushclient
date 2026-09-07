@@ -237,7 +237,7 @@ POSITION pos;
   if (m_bInSendToScript)
     return;   // can't do it
 
-  if (Count <= 0)
+  if (Count <= 0) 
      return;        // nothing to do
 
   // if we have the empty line at the end of the buffer, delete that too

@@ -747,14 +747,13 @@ void CMUSHclientDoc::Hyperlink_Helper (LPCTSTR Action,
 
   // Output the link text. Always publish the finishing note style, including
   // when line wrapping reports a failure or throws after partial output.
-  bool bOutputSucceeded = false;
   exception_ptr pendingException;
   try
     {
     if (strlen (Text) > 0)
-      bOutputSucceeded = AddToLine (Text, COMMENT);
+      AddToLine (Text, COMMENT);
     else
-      bOutputSucceeded = AddToLine (Action, COMMENT);
+      AddToLine (Action, COMMENT);
     }
   catch (...)
     {
@@ -780,8 +779,6 @@ void CMUSHclientDoc::Hyperlink_Helper (LPCTSTR Action,
 
   if (pendingException)
     rethrow_exception (pendingException);
-  if (!bOutputSucceeded)
-    return;
 
 }   // end of CMUSHclientDoc::Hyperlink_Helper
 

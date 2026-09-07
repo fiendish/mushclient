@@ -719,7 +719,7 @@ public:
   CAliasArray m_AliasArray;       // array of aliases for sequencing
   CAliasRevMap m_AliasRevMap;     // for getting name back from pointer
   CAlias * m_pRetiredAliases;  // replaced while their script was active
-  CTriggerMap m_TriggerMap;
+  CTriggerMap m_TriggerMap;       
   CTriggerArray m_TriggerArray;   // array of triggers for sequencing
   CTriggerRevMap m_TriggerRevMap; // for getting name back from pointer
   CTrigger * m_pRetiredTriggers;  // replaced while their script was active
@@ -1491,9 +1491,8 @@ public:
                const bool bQueueIt,
                const bool bLogIt);
 	void ReceiveMsg();
-  void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
+	void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
   bool AddToLine (LPCTSTR lpszText, const int flags);
-  bool AddToLineAtomically (LPCTSTR lpszText, const int flags);
   bool AddToLineInternal (LPCTSTR lpszText, const int flags,
                           COutputAppendTransaction * pTransaction);
   bool StartNewLine_KeepPreviousStyle (const int flags,
@@ -1802,19 +1801,19 @@ public:
   UINT Load_Triggers_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
-  bool Load_One_Trigger_XML (CXMLelement & node,
+  bool Load_One_Trigger_XML (CXMLelement & node, 
     const unsigned long iMask,
-    const long iVersion,
-    bool bUseDefault,
+    const long iVersion, 
+    bool bUseDefault, 
     const unsigned long iFlags,
     CXMLLoadChange<CTrigger> & change);
   UINT Load_Aliases_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
-  bool Load_One_Alias_XML (CXMLelement & node,
+  bool Load_One_Alias_XML (CXMLelement & node, 
     const unsigned long iMask,
-    const long iVersion,
-    bool bUseDefault,
+    const long iVersion, 
+    bool bUseDefault, 
     const unsigned long iFlags,
     CXMLLoadChange<CAlias> & change);
   UINT Load_Variables_XML (CXMLelement & parent, 
@@ -1828,10 +1827,10 @@ public:
   UINT Load_Timers_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
-  bool Load_One_Timer_XML (CXMLelement & node,
+  bool Load_One_Timer_XML (CXMLelement & node, 
     const unsigned long iMask,
-    const long iVersion,
-    bool bUseDefault,
+    const long iVersion, 
+    bool bUseDefault, 
     const unsigned long iFlags,
     CXMLLoadChange<CTimer> & change);
   UINT Load_Macros_XML (CXMLelement & parent, 
@@ -1908,8 +1907,8 @@ public:
                         bool & bOmitFromLog,
                         const bool bTest = false);
 
-  CTrigger * EvaluateTrigger (const CString & input,
-                              CString & output,
+  CTrigger * EvaluateTrigger (const CString & input, 
+                              CString & output, 
                               int & iStartCol,
                               int & iEndCol,
                               CTrigger * trigger_item);
@@ -3030,7 +3029,6 @@ class COutputAppendTransaction
       {
       __int64 iPreviousLineCreationNumber;
       __int64 iNewLineCreationNumber;
-      int iOldLineLength;
       int iSplitLength;
       vector<CWrapStyleBackup> styleBackups;
       bool bPublished;
