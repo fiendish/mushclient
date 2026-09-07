@@ -2590,22 +2590,6 @@ void CSendView::OnAcceleratorCommand (UINT nID)
   CValueStateGuard<unsigned short> actionSourceGuard
     (pDoc->m_iCurrentActionSource, eUserAccelerator);
 
-  const string sPluginID = pDoc->m_CommandToPluginMap [nID];
-  CPlugin * pPlugin = NULL;
-
-  if (!sPluginID.empty ())
-    {
-    map<WORD, __int64>::const_iterator instanceIt =
-      pDoc->m_CommandToPluginInstanceMap.find (nID);
-    if (instanceIt == pDoc->m_CommandToPluginInstanceMap.end ())
-      return;
-
-    pPlugin = pDoc->GetPluginInstance (sPluginID.c_str (),
-                                       instanceIt->second);
-    if (!pPlugin)
-      return;
-    }
-
   // for backwards compatability, call the same thing as before
   if (pDoc->m_CommandToSendToMap [nID] == eSendToExecute)
     SendCommand (sCommand.c_str (), TRUE, FALSE); // save previous, don't keep in history
@@ -2627,6 +2611,8 @@ void CSendView::OnAcceleratorCommand (UINT nID)
 
     CString strExtraOutput;
     // which plugin wanted it
+    const string sPluginID = pDoc->m_CommandToPluginMap [nID];
+    CPlugin * pPlugin = pDoc->GetPlugin (sPluginID.c_str ());
     CPluginContextGuard pluginContextGuard (pDoc, pPlugin);
     CPluginCallGuard pluginCallGuard (pPlugin, true);
 

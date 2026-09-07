@@ -92,8 +92,6 @@ WORD key;
   map<WORD, string> commandToMacroMap (m_CommandToMacroMap);
   map<WORD, short> commandToSendToMap (m_CommandToSendToMap);
   map<WORD, string> commandToPluginMap (m_CommandToPluginMap);
-  map<WORD, __int64> commandToPluginInstanceMap
-    (m_CommandToPluginInstanceMap);
 
   ACCEL aWanted;            // new accelerator
   aWanted.fVirt = fVirt;
@@ -146,14 +144,9 @@ WORD key;
 
     // remember which plugin did it
     commandToPluginMap [command].erase ();
-    commandToPluginInstanceMap [command] = 0;
 
     if (m_CurrentPlugin)
-      {
       commandToPluginMap [command] = m_CurrentPlugin->m_strID;
-      commandToPluginInstanceMap [command] =
-        m_CurrentPlugin->m_iPluginInstanceNumber;
-      }
 
     }  // end of having something to do (ie. not deleting accelerator)
 
@@ -173,7 +166,6 @@ WORD key;
   m_CommandToMacroMap.swap (commandToMacroMap);
   m_CommandToSendToMap.swap (commandToSendToMap);
   m_CommandToPluginMap.swap (commandToPluginMap);
-  m_CommandToPluginInstanceMap.swap (commandToPluginInstanceMap);
 
   // destroy old one, if we had one
   if (hOldAccel)
