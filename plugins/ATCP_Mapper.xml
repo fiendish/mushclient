@@ -470,13 +470,15 @@ room_not_in_database = {}
 room_in_database = {}
 
 local function db_success (code)
-  return code == sqlite3.OK or code == sqlite3.ROW or code == sqlite3.DONE
+  return code == sqlite3.OK or    -- no error
+         code == sqlite3.ROW or   -- completed OK with another row of data
+         code == sqlite3.DONE     -- completed OK, no more rows
 end -- db_success
 
 function dbcheck (code, database)
 
   if not db_success (code) then
-    error ((database or db):errmsg (), 2)
+    error ((database or db):errmsg (), 2)            -- show error in caller's context
   end -- if
 
   return code
