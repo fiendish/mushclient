@@ -686,6 +686,8 @@ CString strMsg;
   HTREEITEM hdlNewParent = NULL;
   int nNewItem = -1;
   int nOldItem = nItem;
+  bool bRestoreSelectionMark = !m_bWantTreeControl &&
+    m_ctlList->GetSelectionMark () == nItem;
 
   // Build the replacement UI row before publishing the replacement object.
   if (m_bWantTreeControl)
@@ -775,9 +777,13 @@ CString strMsg;
       {
       delete pstrObjectName;
       pstrObjectName = NULL;
+      if (nOldItem < nNewItem)
+        nNewItem--;
       }
     m_ctlList->SetItemState (nNewItem, LVIS_FOCUSED | LVIS_SELECTED,
                                        LVIS_FOCUSED | LVIS_SELECTED);
+    if (bOldRowDeleted && bRestoreSelectionMark)
+      m_ctlList->SetSelectionMark (nNewItem);
     m_ctlList->EnsureVisible (nNewItem, FALSE);
     m_ctlList->RedrawItems (nNewItem, nNewItem);
     }
@@ -1097,6 +1103,8 @@ int CGenPropertyPage::add_list_item (CObject * pItem,
 
   if (!bInsert)
     {
+    UINT iState = m_ctlList->GetItemState (nItem, LVIS_FOCUSED | LVIS_SELECTED);
+    bool bRestoreSelectionMark = m_ctlList->GetSelectionMark () == nItem;
     std::unique_ptr<CString> pReplacementName
       (new CString (*pstrObjectName));
     int nNewItem = AddItem (pItem, nItem, TRUE);
@@ -1118,6 +1126,11 @@ int CGenPropertyPage::add_list_item (CObject * pItem,
 
     pReplacementName.release ();
     delete pstrObjectName;
+    if (nOldItem < nNewItem)
+      nNewItem--;
+    m_ctlList->SetItemState (nNewItem, iState, LVIS_FOCUSED | LVIS_SELECTED);
+    if (bRestoreSelectionMark)
+      m_ctlList->SetSelectionMark (nNewItem);
     SetModificationNumber (pItem, m_nUpdateNumber);
     return nNewItem;
     }
