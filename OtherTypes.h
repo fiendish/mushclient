@@ -281,15 +281,15 @@ class CStyle : public CObject
   COLORREF       iForeColour; // RGB foreground colour, or ANSI/custom colour number
   COLORREF       iBackColour; // RGB background colour, or ANSI/custom colour number
   CAction *      pAction;     // what action, if any this item carries out
-                              //  - also stores variables
+                              //  - also stores variables  
   __int64        nCreationNumber; // immutable identity for this style instance
   __int64        nRangeCreationNumber; // identity shared by split style fragments
   __int64        nOutputAppendCreationNumber; // transactional append owner
-  CStyle ()
+  CStyle () 
     { 
     iForeColour = WHITE;
     iBackColour = BLACK;
-    iLength = iFlags = 0;
+    iLength = iFlags = 0; 
     pAction = NULL;
     nCreationNumber = 0;
     nRangeCreationNumber = 0;
@@ -331,7 +331,7 @@ class CLine : public CObject
   char * text;          // allocated as necessary and then resized
   CStyleList styleList; // list of styles applying to text, see above
   CTime m_theTime;      // time this line arrived
-  LARGE_INTEGER m_lineHighPerformanceTime;
+  LARGE_INTEGER m_lineHighPerformanceTime;  
   __int64 nCreationNumber;        // immutable identity for this line instance
   int iMemoryAllocated; // size of buffer allocated for "text"
 
@@ -924,7 +924,7 @@ class CActiveTag :public CObject
   public:
 
   CString strName;    // name of tag we opened
-  bool    bSecure;    // was it secure mode at the time?
+  bool    bSecure;    // was it secure mode at the time?  
   bool    bNoReset;   // protected from reset?
   __int64 nCreationNumber; // immutable identity for this active tag
   __int64 nOpeningStyleCreationNumber; // exact opening marker for this tag
