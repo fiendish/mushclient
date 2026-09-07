@@ -131,7 +131,6 @@ pResultStyle = pStyle;
              QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
                         TFormat ("Unknown colour: \"%s\"" ,
                                  (LPCTSTR) strArgument));
-             return false;
              }
 
          // background colour
@@ -142,7 +141,6 @@ pResultStyle = pStyle;
              QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
                         TFormat ("Unknown colour: \"%s\"" ,
                                  (LPCTSTR) strArgument));
-             return false;
              }
          }
          break;   // end of COLOR
@@ -266,7 +264,6 @@ pResultStyle = pStyle;
                   QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
                               TFormat ("Unknown colour: \"%s\"" ,
                                       (LPCTSTR) strItem));
-                  return false;
                   }
               } // end of colour
 
@@ -282,7 +279,6 @@ pResultStyle = pStyle;
               QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
                         TFormat ("Unknown colour: \"%s\"" ,
                                   (LPCTSTR) strArgument));
-              return false;
               }
 
           // get font size argument to avoid warnings about unused arguments
