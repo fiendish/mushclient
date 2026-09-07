@@ -481,8 +481,6 @@ function dbcheck (code, database)
     error ((database or db):errmsg (), 2)            -- show error in caller's context
   end -- if
 
-  return code
-
 end -- dbcheck 
 
 local function dbtransaction (callback)
