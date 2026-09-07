@@ -24,6 +24,12 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 extern tConfigurationNumericOption OptionsTable [];
 
+static void MarkMXPArgumentsUsed (CArgumentList & arguments)
+  {
+  for (POSITION pos = arguments.GetHeadPosition (); pos; )
+    arguments.GetNext (pos)->bUsed = true;
+  }
+
 static void QueueMXPMessage (vector<CDeferredMXPMessage> & messages,
                              const int iLevel,
                              const long iMessageNumber,
@@ -371,7 +377,8 @@ pResultStyle = pStyle;
                   QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidSupportArgument,
                             TFormat ("Invalid <support> argument: %s" ,
                                       (LPCTSTR) pArgument->strValue));
-                  return false;
+                  MarkMXPArgumentsUsed (ArgumentList);
+                  return true;
                   }
                 
                 CString strTag =  questionlist.RemoveHead ();
@@ -383,7 +390,8 @@ pResultStyle = pStyle;
                   QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidSupportArgument,
                             TFormat ("Invalid <support> argument: %s" ,
                                       (LPCTSTR) strTag));
-                  return false;
+                  MarkMXPArgumentsUsed (ArgumentList);
+                  return true;
                   }
 
                 // look up main element name
@@ -431,7 +439,8 @@ pResultStyle = pStyle;
                     QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_InvalidSupportArgument,
                               TFormat ("Invalid <support> argument: %s" ,
                                         (LPCTSTR) strSubtag));
-                    return false;
+                    MarkMXPArgumentsUsed (ArgumentList);
+                    return true;
                     }
 
                   // so, see if that word is in our arguments list
@@ -938,7 +947,8 @@ pResultStyle = pStyle;
                       TFormat ("Invalid MXP entity name: <!%s>", 
                       (LPCTSTR) strVariable)); 
             strVariable.Empty ();
-            return false;
+            MarkMXPArgumentsUsed (ArgumentList);
+            return true;
             }
 
             { // protect local variable
@@ -950,7 +960,8 @@ pResultStyle = pStyle;
                         TFormat ("Cannot redefine entity: &%s;", 
                         (LPCTSTR) strVariable)); 
               strVariable.Empty ();
-              return false;
+              MarkMXPArgumentsUsed (ArgumentList);
+              return true;
               }
               }
 
@@ -968,8 +979,7 @@ pResultStyle = pStyle;
     } // end of switch on iAction
 
   if (bIgnoreUnusedArgs)
-    for (POSITION pos = ArgumentList.GetHeadPosition (); pos; )
-      ArgumentList.GetNext (pos)->bUsed = true;
+    MarkMXPArgumentsUsed (ArgumentList);
 
   return true;
 
