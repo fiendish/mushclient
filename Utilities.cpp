@@ -135,7 +135,7 @@ void FixFont (ptrCFont & pFont,
               const DWORD iCharset)
   {
 
-   CFont * pNewFont = new CFont;
+   CFont * pNewFont = new CFont;    // create new font
 
     CDC dc;
 
@@ -161,13 +161,13 @@ void FixFont (ptrCFont & pFont,
             0, // BYTE nClipPrecision,
             0, // BYTE nQuality,
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,
-            strName)) // LPCTSTR lpszFacename
+            strName)) // LPCTSTR lpszFacename );
        {
        delete pNewFont;
        AfxThrowResourceException ();
        }
 
-      delete pFont;
+      delete pFont;         // get rid of old font
       pFont = pNewFont;
 
       // Get the metrics of the font.

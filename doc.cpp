@@ -3388,7 +3388,7 @@ std::unique_ptr<CFont> newFonts [NUMITEMS (m_font)];
             0, // BYTE nClipPrecision, 
             0, // BYTE nQuality, 
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,    // was  FF_DONTCARE
-            lpszFacename)) // LPCTSTR lpszFacename
+            lpszFacename)) // LPCTSTR lpszFacename );
        {
        TMessageBox ("Unable to create screen font");
        return;
@@ -3413,7 +3413,7 @@ std::unique_ptr<CFont> newFonts [NUMITEMS (m_font)];
 
     for (i = 0; i < NUMITEMS (m_font); i++)
       {
-      delete m_font [i];
+      delete m_font [i];         // get rid of old font
       m_font [i] = newFonts [i].release ();
       }
 
@@ -3449,7 +3449,7 @@ void CMUSHclientDoc::ChangeInputFont (const int nHeight,
 {
 // Load the font we want to use.
 
-   CFont * pNewInputFont = new CFont;
+   CFont * pNewInputFont = new CFont;    // create new font
 
 CDC dc;
 
@@ -3474,7 +3474,7 @@ if (!dc.CreateCompatibleDC (NULL))
           0, // BYTE nClipPrecision, 
           0, // BYTE nQuality, 
           MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,   // was FF_DONTCARE
-          lpszFacename)) // LPCTSTR lpszFacename
+          lpszFacename)) // LPCTSTR lpszFacename );
      {
      delete pNewInputFont;
      AfxThrowResourceException ();
@@ -3503,8 +3503,8 @@ if (!dc.CreateCompatibleDC (NULL))
     m_input_font = pNewInputFont;
     int iOldInputFontHeight = m_InputFontHeight;
     int iOldInputFontWidth = m_InputFontWidth;
-    m_InputFontHeight = tm.tmHeight;
-    m_InputFontWidth = tm.tmAveCharWidth;
+    m_InputFontHeight = tm.tmHeight; 
+    m_InputFontWidth = tm.tmAveCharWidth; 
 
     // fix up all input windows
     try
@@ -3543,7 +3543,7 @@ if (!dc.CreateCompatibleDC (NULL))
       throw;
       }
 
-    delete pOldInputFont;
+    delete pOldInputFont;         // get rid of old font
 
 } // end of CMUSHclientDoc::ChangeInputFont
 

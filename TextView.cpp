@@ -829,7 +829,7 @@ void CTextView::SetTheFont (void)
           0, // BYTE nClipPrecision, 
           0, // BYTE nQuality, 
           MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,  
-          strFont)) // LPCTSTR lpszFacename
+          strFont)) // LPCTSTR lpszFacename );
      {
      delete pNewFont;
      AfxThrowResourceException ();
