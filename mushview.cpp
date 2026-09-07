@@ -5424,7 +5424,7 @@ char * sColours [8] =
 CTextAttributesDlg dlg;
 
   dlg.m_pDoc = pDoc;
-  dlg.m_iLine = m_selstart_line + 1;    // make 1-relative
+  dlg.m_iLine = iSelectedLine + 1;    // make 1-relative
   dlg.m_pLine = pStartLine; 
 
   dlg.m_strLetter = c;
