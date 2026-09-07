@@ -1942,14 +1942,15 @@ typedef struct tagGLYPHSET
 static int glyph_available (lua_State *L) 
   {
   // which glyph?
-  const char * fontName = luaL_checkstring (L, 1);
+  const char * fontName   = luaL_checkstring (L, 1);
+  // test a single character
   WORD glyph = (WORD) luaL_checknumber (L, 2);  // which Unicode character
 
   // this DLL might not be available
-  HMODULE hDLL = LoadLibrary ("gdi32");
+	HMODULE hDLL = LoadLibrary ("gdi32");
   if (!hDLL)
     {
-    lua_pushnil (L);
+    lua_pushnil (L); 
     return 1;
     }
 
@@ -1970,23 +1971,23 @@ static int glyph_available (lua_State *L)
     return 1;
     }
 
-  int lfHeight = -MulDiv (5, dc.GetDeviceCaps (LOGPIXELSY), 72);
+  int lfHeight = -MulDiv(5, dc.GetDeviceCaps(LOGPIXELSY), 72);
   CFont font;
 
   // select requested font into it
   if (!font.CreateFont (lfHeight, // int nHeight,
-        0,                        // int nWidth,
-        0,                        // int nEscapement,
-        0,                        // int nOrientation,
-        FW_DONTCARE,              // int nWeight,
-        0,                        // BYTE bItalic,
-        0,                        // BYTE bUnderline,
-        0,                        // BYTE cStrikeOut,
-        DEFAULT_CHARSET,          // BYTE nCharSet,
-        OUT_DEVICE_PRECIS,        // BYTE nOutPrecision,
-        CLIP_DEFAULT_PRECIS,      // BYTE nClipPrecision,
-        DEFAULT_QUALITY,          // BYTE nQuality,
-        FF_DONTCARE,              // BYTE nPitchAndFamily,
+        0,                  // int nWidth, 
+        0,                  // int nEscapement, 
+        0,                  // int nOrientation, 
+        FW_DONTCARE,        // int nWeight, 
+        0,                  // BYTE bItalic, 
+        0,                  // BYTE bUnderline, 
+        0,                  // BYTE cStrikeOut, 
+        DEFAULT_CHARSET,    // BYTE nCharSet, 
+        OUT_DEVICE_PRECIS,  // BYTE nOutPrecision, 
+        CLIP_DEFAULT_PRECIS,// BYTE nClipPrecision, 
+        DEFAULT_QUALITY,    // BYTE nQuality, 
+        FF_DONTCARE,        // BYTE nPitchAndFamily,  
         fontName))                // LPCTSTR lpszFacename
     {
     lua_pushnil (L);
@@ -2004,7 +2005,7 @@ static int glyph_available (lua_State *L)
   GetGlyphIndicesW_PROC pGetGlyphIndicesW = NULL;
 
   // get function address
-  pGetGlyphIndicesW = (GetGlyphIndicesW_PROC) GetProcAddress (hDLL, "GetGlyphIndicesW");
+  pGetGlyphIndicesW = (GetGlyphIndicesW_PROC) GetProcAddress(hDLL, "GetGlyphIndicesW");
 
   WORD indice = 0;
 
