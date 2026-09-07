@@ -1345,10 +1345,12 @@ void CMUSHclientDoc::OnFilePluginwizard()
       set<CAlias *> aliasesToDelete;
       set<CTimer *> timersToDelete;
 
+      // ---------- triggers ----------
+
       for (pos = m_TriggerMap.GetStartPosition(); pos; )
-        {
+        {                                               
         CTrigger * t;
-        m_TriggerMap.GetNextAssoc (pos, strName, t);
+        m_TriggerMap.GetNextAssoc (pos, strName, t);  
         if (t->bSelected)
           {
           triggerNames.push_back (strName);
@@ -1356,10 +1358,12 @@ void CMUSHclientDoc::OnFilePluginwizard()
           }   // end of selected trigger
         }  // end of doing all triggers
 
+      // ---------- aliases ----------
+
       for (pos = m_AliasMap.GetStartPosition(); pos; )
-        {
+        {                                               
         CAlias * a;
-        m_AliasMap.GetNextAssoc (pos, strName, a);
+        m_AliasMap.GetNextAssoc (pos, strName, a);  
         if (a->bSelected)
           {
           aliasNames.push_back (strName);
@@ -1367,10 +1371,12 @@ void CMUSHclientDoc::OnFilePluginwizard()
           }   // end of selected Alias
         }  // end of doing all aliases
 
+      // ---------- timers ----------
+
       for (pos = m_TimerMap.GetStartPosition(); pos; )
-        {
+        {                                               
         CTimer * t;
-        m_TimerMap.GetNextAssoc (pos, strName, t);
+        m_TimerMap.GetNextAssoc (pos, strName, t);  
         if (t->bSelected)
           {
           timerNames.push_back (strName);
