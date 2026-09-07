@@ -25,7 +25,6 @@ public:
   CMUSHclientDoc * m_pDoc;
   CString m_strScript;
   CString m_strPluginID;
-  __int64 m_iPluginInstanceNumber;
   bool m_bInReceive;
   bool m_bReceivePending;
   bool m_bDeleteWhenDone;

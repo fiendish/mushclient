@@ -97,8 +97,6 @@ long CMUSHclientDoc::UdpListen(LPCTSTR IP, short Port, LPCTSTR Script)
   std::unique_ptr<UDPsocket> pSocket (new UDPsocket (this));
   pSocket->m_strScript = Script;
   pSocket->m_strPluginID =  m_CurrentPlugin->m_strID;
-  pSocket->m_iPluginInstanceNumber =
-    m_CurrentPlugin->m_iPluginInstanceNumber;
 
   // The old socket must be closed before the same port can be bound again.
   CString strOldIP;

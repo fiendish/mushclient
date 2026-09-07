@@ -18,7 +18,6 @@ static char THIS_FILE[] = __FILE__;
 UDPsocket::UDPsocket(CMUSHclientDoc * pDoc)
 {
 m_pDoc = pDoc;
-m_iPluginInstanceNumber = 0;
 m_bInReceive = false;
 m_bReceivePending = false;
 m_bDeleteWhenDone = false;
@@ -86,8 +85,6 @@ void UDPsocket::ReceiveOneDatagram (void)
   buff [count] = 0;   // null terminate it
 
   // call script
-  if (m_pDoc->GetPluginInstance (m_strPluginID,
-                                 m_iPluginInstanceNumber))
-    m_pDoc->CallPlugin (m_strPluginID, m_strScript, buff);
+  m_pDoc->CallPlugin (m_strPluginID, m_strScript, buff);
 
   }
