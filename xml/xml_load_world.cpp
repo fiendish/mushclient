@@ -1486,7 +1486,7 @@ void CMUSHclientDoc::Load_World_Multi_Line_Alpha_Options_XML (CXMLelement & pare
 
 
 
-UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent,
+UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent, 
                                        const unsigned long iMask,
                                        const unsigned long iFlags)
   {
@@ -1539,10 +1539,10 @@ UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent,
   }   // end of CMUSHclientDoc::Load_Triggers_XML
 
 
-bool CMUSHclientDoc::Load_One_Trigger_XML (CXMLelement & node,
+bool CMUSHclientDoc::Load_One_Trigger_XML (CXMLelement & node, 
                                            const unsigned long iMask,
-                                           const long iVersion,
-                                           bool bUseDefault,
+                                           const long iVersion, 
+                                           bool bUseDefault, 
                                            const unsigned long iFlags,
                                            CXMLLoadChange<CTrigger> & change)
   {
@@ -1766,7 +1766,7 @@ CString strVariable;
   } // end of CMUSHclientDoc::Load_One_Trigger_XML
 
 
-UINT CMUSHclientDoc::Load_Aliases_XML (CXMLelement & parent,
+UINT CMUSHclientDoc::Load_Aliases_XML (CXMLelement & parent, 
                                        const unsigned long iMask,
                                        const unsigned long iFlags)
   {
@@ -1819,10 +1819,10 @@ CXMLLoadChangeGuard<CAlias, CAliasMap> changeGuard
   }   // end of CMUSHclientDoc::Load_Aliases_XML
 
 
-bool CMUSHclientDoc::Load_One_Alias_XML (CXMLelement & node,
+bool CMUSHclientDoc::Load_One_Alias_XML (CXMLelement & node, 
                                          const unsigned long iMask,
-                                         const long iVersion,
-                                         bool bUseDefault,
+                                         const long iVersion, 
+                                         bool bUseDefault, 
                                          const unsigned long iFlags,
                                          CXMLLoadChange<CAlias> & change)
   {
@@ -2025,7 +2025,7 @@ CString strVariable;
   } // end of CMUSHclientDoc::Load_One_Alias_XML
 
 
-UINT CMUSHclientDoc::Load_Timers_XML (CXMLelement & parent,
+UINT CMUSHclientDoc::Load_Timers_XML (CXMLelement & parent, 
                                       const unsigned long iMask,
                                        const unsigned long iFlags)
   {
@@ -2078,10 +2078,10 @@ CXMLLoadChangeGuard<CTimer, CTimerMap> changeGuard
   }   // end of CMUSHclientDoc::Load_Timers_XML
 
 
-bool CMUSHclientDoc::Load_One_Timer_XML (CXMLelement & node,
+bool CMUSHclientDoc::Load_One_Timer_XML (CXMLelement & node, 
                                          const unsigned long iMask,
-                                         const long iVersion,
-                                         bool bUseDefault,
+                                         const long iVersion, 
+                                         bool bUseDefault, 
                                          const unsigned long iFlags,
                                          CXMLLoadChange<CTimer> & change)
   {

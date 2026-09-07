@@ -600,7 +600,7 @@ assemble the full text of the original line.
         iPlugin < negativePlugins.size () &&
         m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
         iPlugin++)
-     {
+      {
       m_CurrentPlugin = GetPluginInstance (
         negativePlugins [iPlugin].m_strID,
         negativePlugins [iPlugin].m_iPluginInstanceNumber);
@@ -644,9 +644,9 @@ assemble the full text of the original line.
    // do plugins (stop if one stops trigger evaluation, or if it was stopped by the main world triggers)
    for (size_t iPlugin = 0;
         iPlugin < nonnegativePlugins.size () &&
-        m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
+         m_iStopTriggerEvaluation != eStopEvaluatingTriggersInAllPlugins;
         iPlugin++)
-     {
+      {
       m_CurrentPlugin = GetPluginInstance (
         nonnegativePlugins [iPlugin].m_strID,
         nonnegativePlugins [iPlugin].m_iPluginInstanceNumber);
@@ -934,7 +934,7 @@ assemble the full text of the original line.
 
   }
 
-// now that we have run all scripts etc., delete one-shot triggers
+// now that we have run all scripts etc., delete one-shot triggers      
 
   int iDeletedNonTemporaryCount = 0;
   typedef map<string, CTrigger *> TriggerDeletionMap;
@@ -1093,7 +1093,7 @@ POSITION pos;
     CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
     CTriggerExecutionGuard executingGuard (this, trigger_item);
 
-    trigger_item = EvaluateTrigger (strCurrentLine,
+    trigger_item = EvaluateTrigger (strCurrentLine, 
                                         strResponse,
                                         iStartCol,
                                         iEndCol,
@@ -1217,7 +1217,7 @@ POSITION pos;
 
       if (trigger_item->bOneShot)
         mapOneShotItems.push_back (
-            OneShotItem (m_CurrentPlugin,
+            OneShotItem (m_CurrentPlugin, 
                         (const char *) trigger_item->strInternalName,
                         trigger_item->nCreationNumber));
 
