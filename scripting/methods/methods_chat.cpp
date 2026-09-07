@@ -126,14 +126,7 @@ long CMUSHclientDoc::ChatCallGeneral (LPCTSTR Server, long Port, const bool zCha
 
 	if (pSocket->m_ServerAddr.sin_addr.s_addr == INADDR_NONE)
 	 {
-    try
-      {
-      pSocket->m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
-      }
-    catch (...)
-      {
-      throw;
-      }
+    pSocket->m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
 
     if (!pSocket->m_pGetHostStruct)
       {

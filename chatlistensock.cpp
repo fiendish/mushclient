@@ -42,7 +42,7 @@ void CChatListenSocket::OnAccept(int nErrorCode)
 std::unique_ptr<CChatSocket> pSocket (new CChatSocket (m_pDoc));
 int SockAddrLen = sizeof(pSocket->m_ServerAddr) ;
 
-  if (!Accept(*pSocket,
+  if (!Accept(*pSocket, 
               (SOCKADDR*) &pSocket->m_ServerAddr, 
               &SockAddrLen))
     {
