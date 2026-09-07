@@ -148,9 +148,9 @@ bool bDelete = GetKeyword (ArgumentList, "delete");
   if (m_CustomElementMap.Lookup (strName, pOldElement))
     {
     if (!bDelete)
-      MXP_error (DBG_WARNING, wrnMXP_ReplacingElement,
-                 TFormat ("Replacing previously-defined MXP element: <%s>",
-                (LPCTSTR) strName));
+      MXP_error (DBG_WARNING, wrnMXP_ReplacingElement, 
+                 TFormat ("Replacing previously-defined MXP element: <%s>", 
+                (LPCTSTR) strName)); 
     pOldElement = NULL;
     m_CustomElementMap.Lookup (strName, pOldElement);
     } // end of existing element

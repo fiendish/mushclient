@@ -129,7 +129,7 @@ pResultStyle = pStyle;
            if (SetColour (strArgument, pStyle->iForeColour)) 
              {
              QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
-                        TFormat ("Unknown colour: \"%s\"",
+                        TFormat ("Unknown colour: \"%s\"" ,
                                  (LPCTSTR) strArgument));
              return false;
              }
@@ -140,7 +140,7 @@ pResultStyle = pStyle;
            if (SetColour (strArgument, pStyle->iBackColour)) 
              {
              QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
-                        TFormat ("Unknown colour: \"%s\"",
+                        TFormat ("Unknown colour: \"%s\"" ,
                                  (LPCTSTR) strArgument));
              return false;
              }
@@ -264,7 +264,7 @@ pResultStyle = pStyle;
                 if (SetColour (strItem, pStyle->iForeColour)) 
                   {
                   QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
-                              TFormat ("Unknown colour: \"%s\"",
+                              TFormat ("Unknown colour: \"%s\"" ,
                                       (LPCTSTR) strItem));
                   return false;
                   }
@@ -280,7 +280,7 @@ pResultStyle = pStyle;
             if (SetColour (strArgument, pStyle->iBackColour)) 
               {
               QueueMXPMessage (deferredMessages, DBG_ERROR, errMXP_UnknownColour,
-                        TFormat ("Unknown colour: \"%s\"",
+                        TFormat ("Unknown colour: \"%s\"" ,
                                   (LPCTSTR) strArgument));
               return false;
               }
@@ -605,7 +605,7 @@ pResultStyle = pStyle;
     case MXP_ACTION_P:
           // experimental
           m_cLastChar = 0;
-          m_bInParagraph = true;
+          m_bInParagraph = true;      
           m_iMXPParagraphOwner = iStateOwner;
           break;  // end of MXP_ACTION_P
     
@@ -646,32 +646,32 @@ pResultStyle = pStyle;
           /*
           if (GetKeyword (ArgumentList, "default_open"))
             {
-            QueueMXPMessage (deferredMessages, DBG_INFO, "MXP default mode now OPEN.");
+            MXP_error (DBG_INFO, "MXP default mode now OPEN.");
             m_iMXP_defaultMode = eMXP_open;
             }  // end of DEFAULT_OPEN
 
           if (GetKeyword (ArgumentList, "default_secure"))
             {
-            QueueMXPMessage (deferredMessages, DBG_INFO, "MXP default mode now SECURE.");
+            MXP_error (DBG_INFO, "MXP default mode now SECURE.");
             m_iMXP_defaultMode = eMXP_secure;
             }  // end of DEFAULT_SECURE
 
           if (GetKeyword (ArgumentList, "default_locked"))
             {
-            QueueMXPMessage (deferredMessages, DBG_INFO, "MXP default mode now LOCKED.");
+            MXP_error (DBG_INFO, "MXP default mode now LOCKED.");
             m_iMXP_defaultMode = eMXP_locked;
             }  // end of DEFAULT_LOCKED
 
 
           if (GetKeyword (ArgumentList, "use_newlines"))
             {
-            QueueMXPMessage (deferredMessages, DBG_INFO, "Now interpreting newlines as normal.");
+            MXP_error (DBG_INFO, "Now interpreting newlines as normal.");
             m_bInParagraph = false;      
             }   // end of USE_NEWLINES
 
           if (GetKeyword (ArgumentList, "ignore_newlines"))
             {
-            QueueMXPMessage (deferredMessages, DBG_INFO, "Now ignoring newlines.");
+            MXP_error (DBG_INFO, "Now ignoring newlines.");
             m_bInParagraph = true;      
             }   // end of IGNORE_NEWLINES
 

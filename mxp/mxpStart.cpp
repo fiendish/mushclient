@@ -654,9 +654,9 @@ COLORREF       iBackColour = pStyle->iBackColour;
 CActionReferenceGuard openingActionGuard (pStyle->pAction);
 CAction *      pAction = openingActionGuard.Get ();
 
-CString strAction;
-CString strHint;
-CString strVariable;
+CString strAction;    
+CString strHint;      
+CString strVariable;  
 CString strTagVariable;
 
   // get old action, hint etc. so that something like:
@@ -982,10 +982,10 @@ CString strTagVariable;
 // now add another style entry to the line - this will have the
 // style adjusted for the new attributes (eg. bold)
 
-CStyle * pNewStyle = AddStyle (iFlags & STYLE_BITS,
+CStyle * pNewStyle = AddStyle (iFlags & STYLE_BITS, 
                                iForeColour, 
                                iBackColour, 
-                               0,
+                               0, 
                                strAction,
                                strHint,
                                strVariable);

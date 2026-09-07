@@ -1567,7 +1567,7 @@ public:
                           const __int64 iStateOwner,
                           COutputAppendTransaction * pOutputTransaction,
                           vector<CDeferredMXPMessage> & deferredMessages);  // args
-  void MXP_CloseAtomicTag (const int iAction,
+  void MXP_CloseAtomicTag (const int iAction, 
                            const CPreparedMXPClose & preparedClose);
   CString MXP_GetEntity (CString & strName);
   bool BuildArgumentList (CArgumentList & ArgumentList, 
