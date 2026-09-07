@@ -155,7 +155,7 @@ string PluginCallbacksNames [] = {
 
 
 // constructor
-CPlugin::CPlugin (CMUSHclientDoc * pDoc)
+CPlugin::CPlugin (CMUSHclientDoc * pDoc) 
   { 
   m_pDoc = pDoc;
   m_iPluginInstanceNumber = App.GetUniqueNumber ();

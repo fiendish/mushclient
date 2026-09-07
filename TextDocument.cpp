@@ -241,7 +241,7 @@ void KillThread (HANDLE & pThread, CEvent & eventFileChanged)
 		eventFileChanged.SetEvent();
 
     // wait for thread to go away, or 10 seconds, whichever is sooner
-	DWORD waitstatus = ::WaitForSingleObject(pThread, 10000L);
+		DWORD waitstatus = ::WaitForSingleObject(pThread, 10000L);
 
     if (waitstatus == WAIT_TIMEOUT)
       waitstatus = ::WaitForSingleObject (pThread, INFINITE);
@@ -255,7 +255,7 @@ void KillThread (HANDLE & pThread, CEvent & eventFileChanged)
     if (!CloseHandle (pThread))
       AfxThrowResourceException ();
 
-	pThread = NULL;
+		pThread = NULL;
 	  }
   } // end of KillThread
 

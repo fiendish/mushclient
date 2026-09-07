@@ -1180,7 +1180,7 @@ void CMainFrame::ProcessDeferredMessage(const CDeferredMessage & deferred)
 
 // should get a WM_USER when a host name lookup completes
 
-BOOL CMainFrame::PreTranslateMessage(MSG* pMsg)
+BOOL CMainFrame::PreTranslateMessage(MSG* pMsg) 
 {
   if (pMsg->message == WM_USER_HOST_NAME_RESOLVED)
     {
