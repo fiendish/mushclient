@@ -3355,7 +3355,7 @@ int lastline;
   {
   CValueStateGuard<BOOL> freezeGuard (m_freeze, m_freeze);
   if (m_bAtBufferEnd)
-    OnTestEnd ();
+    OnTestEnd ();   
   }
   
   Frame.FixUpTitleBar ();   // in case we need to add the mud name to the title bar

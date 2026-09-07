@@ -588,7 +588,7 @@ int i;
     delete pTrigger;
     }
 
-  DELETE_MAP (m_TriggerMap, CTrigger);
+  DELETE_MAP (m_TriggerMap, CTrigger); 
 
 // delete aliass
 
@@ -599,7 +599,7 @@ int i;
     delete pAlias;
     }
 
-  DELETE_MAP (m_AliasMap, CAlias);
+  DELETE_MAP (m_AliasMap, CAlias); 
 
 // delete lines list
 
@@ -614,7 +614,7 @@ int i;
     delete pTimer;
     }
 
-  DELETE_MAP (m_TimerMap, CTimer);
+  DELETE_MAP (m_TimerMap, CTimer); 
   
 // delete variables map
 
