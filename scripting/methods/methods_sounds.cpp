@@ -293,7 +293,7 @@ int i;
  DWORD          dwWriteBytes2 ;
  DSBUFFERDESC   bd ;   
  
-  // At this point we have succeeded in finding the data for the WAV file so
+ // At this point we have succeeded in finding the data for the WAV file so
  // we need to create a DirectSoundBuffer 
   // Set up bd structure for a static secondary buffer.       
   memset (&bd, 0, sizeof bd);
@@ -369,7 +369,9 @@ int i;
   mmioClose( mmioWave, 0 ) ;
 
   // Configure and start the replacement before changing the active slot.
+  // set requested panning
   if (FAILED (lpdsBuffer->SetPan (iPan)) ||
+      // set requested volume
       FAILED (lpdsBuffer->SetVolume (iVolume)) ||
       FAILED (lpdsBuffer->Play (0, 0, Loop ? DSBPLAY_LOOPING : 0)))
    {
@@ -380,6 +382,7 @@ int i;
   LPDIRECTSOUNDBUFFER pOldBuffer = m_pDirectSoundSecondaryBuffer [Buffer];
   m_pDirectSoundSecondaryBuffer [Buffer] = lpdsBuffer;
 
+  // buffer currently in use? release it
   if (pOldBuffer)
     {
     DWORD iStatus;
