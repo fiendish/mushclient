@@ -6668,7 +6668,7 @@ void CPrefsP16::OnChangeTimer()
 
 void CPrefsP16::OnDeleteTimer() 
 {
-  OnDeleteItem ();
+  OnDeleteItem (); 
 
 }    // end of CPrefsP16::OnDeleteTimer
 
