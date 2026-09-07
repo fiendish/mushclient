@@ -6616,7 +6616,7 @@ if (m_sPluginID.empty ())
 
   } // end of no plugin
 
-CPlugin * pPlugin = pDoc->GetPlugin (m_sPluginID.c_str ());
+CPlugin * pPlugin = pDoc->GetPlugin (m_sPluginID.c_str ()); 
 
   if (!pPlugin) 
     {
