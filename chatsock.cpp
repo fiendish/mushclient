@@ -13,6 +13,7 @@
 #include "doc.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -31,6 +32,8 @@ CChatSocket::CChatSocket(CMUSHclientDoc* pDoc)
   m_pGetHostStruct = NULL;
   ZeroMemory (&m_ServerAddr, sizeof m_ServerAddr);
   m_bDeleteMe = false;  
+  m_bInReceive = false;
+  m_bReceivePending = false;
   m_bIncoming = false;
   m_bIgnore = false;
   m_bCanSnoop = false;          
@@ -167,6 +170,86 @@ void CChatSocket::StopFileTransfer (const bool bAbort)
 
 
 void CChatSocket::OnReceive(int nErrorCode)
+  {
+  if (m_bInReceive)
+    {
+    m_bReceivePending = true;
+    return;
+    }
+
+  m_bInReceive = true;
+  CMUSHclientDoc * pDoc = m_pDoc;
+  const __int64 iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+  const long iChatID = m_iChatID;
+  const SOCKET hSocket = m_hSocket;
+  try
+    {
+    do
+      {
+      m_bReceivePending = false;
+      ReceiveOneNotification (nErrorCode);
+      } while (m_bReceivePending && !m_bDeleteMe);
+    }
+  catch (...)
+    {
+    // A modal callback can close the document and delete this chat socket.
+    // Resolve both identities before reading or restoring socket state.
+    bool bSocketLive = false;
+    for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
+      {
+      CMUSHclientDoc * pLiveDoc =
+        (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+      if (pLiveDoc == pDoc &&
+          pLiveDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+        {
+        for (POSITION chatpos = pLiveDoc->m_ChatList.GetHeadPosition ();
+             chatpos; )
+          {
+          CChatSocket * pSocket = pLiveDoc->m_ChatList.GetNext (chatpos);
+          if (pSocket == this && pSocket->m_iChatID == iChatID)
+            {
+            bSocketLive = true;
+            break;
+            }
+          }
+        break;
+        }
+      }
+
+    if (bSocketLive)
+      {
+      const bool bReceivePending = m_bReceivePending;
+      m_bInReceive = false;
+      m_bReceivePending = false;
+      if (bReceivePending && !m_bDeleteMe && m_iChatStatus != eChatClosed &&
+          hSocket != INVALID_SOCKET && m_hSocket == hSocket)
+        {
+        // A nested FD_READ returned without recv. Rearm it without consuming
+        // data or changing the event mask. Parse on a later notification.
+        char c;
+        const int nResult = CAsyncSocket::Receive (&c, 1, MSG_PEEK);
+        const int nError = nResult == SOCKET_ERROR ? GetLastError () : 0;
+        if (nError != 0 && nError != WSAEWOULDBLOCK)
+          {
+          // Keep the original exception and avoid allocation in its handler.
+          char szMessage [160];
+          snprintf (szMessage, sizeof szMessage,
+                    "Unable to rearm chat read notification (Winsock error %d).",
+                    nError);
+          ::MessageBoxA (NULL, szMessage, "MUSHclient",
+                         MB_OK | MB_ICONERROR | MB_TASKMODAL);
+          // The error dialog can delete this socket. Do not access it again.
+          }
+        }
+      }
+    throw;
+    }
+
+  m_bInReceive = false;
+  m_bReceivePending = false;
+  }
+
+void CChatSocket::ReceiveOneNotification(int nErrorCode)
 {
 
 char buff [1000];

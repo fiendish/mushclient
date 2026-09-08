@@ -125,6 +125,8 @@ public:
   int m_iChatStatus;              // status of session, see enum above
   int m_iChatConnectionType;      // type of connection, see enum above
   bool m_bDeleteMe;               // if true, should be deleted
+  bool m_bInReceive;              // true while processing a receive notification
+  bool m_bReceivePending;         // a nested notification arrived
   long m_iChatID;                 // unique chat session identifier
 
   CTime m_tWhenStarted;           // when session started
@@ -180,6 +182,7 @@ public:
 // Implementation
 
   virtual void OnReceive    (int nErrorCode);
+	void ReceiveOneNotification (int nErrorCode);
 	virtual void OnSend       (int nErrorCode);
 	virtual void OnClose      (int nErrorCode);
 	virtual void OnConnect    (int nErrorCode);
