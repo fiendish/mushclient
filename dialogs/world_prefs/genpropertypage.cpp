@@ -658,12 +658,16 @@ CString strMsg;
     return false;
     }
 
+  CString strMapOldName = *pstrObjectName;
+  strMapOldName.MakeLower ();
+  const CString strMapName = bNameChanged ? strObjectName : strMapOldName;
+
   std::unique_ptr<CObject> pReplacement (MakeNewObject ());
   CObject * pUpdatedItem = pReplacement.get ();
   SetPropertyCreationNumber (pUpdatedItem);
   UnloadDialog (&dlg, pUpdatedItem);
   CopyPropertyRuntimeState (pItem, pUpdatedItem, bChanged);
-  SetInternalName (pUpdatedItem, strObjectName);
+  SetInternalName (pUpdatedItem, strMapName);
 
   CString strDispatchMessage;
   if (m_doc->m_ScriptEngine)
@@ -673,9 +677,7 @@ CString strMsg;
                                                GetLabel (pUpdatedItem),
                                                strDispatchMessage));
 
-  CString strMapOldName = *pstrObjectName;
-  strMapOldName.MakeLower ();
-  std::unique_ptr<CString> pRowName (new CString (strObjectName));
+  std::unique_ptr<CString> pRowName (new CString (strMapName));
 
   set<CObject *> oldObjectToExclude;
   if (bNameChanged)
@@ -706,7 +708,7 @@ CString strMsg;
     {
     if (bNameChanged)
       {
-      m_ObjectMap->SetAt (strObjectName, pUpdatedItem);
+      m_ObjectMap->SetAt (strMapName, pUpdatedItem);
       try
         {
         SortPropertyObjects (m_doc, pUpdatedItem, &oldObjectToExclude);
@@ -720,7 +722,7 @@ CString strMsg;
       }
     else
       {
-      m_ObjectMap->SetAt (strMapOldName, pUpdatedItem);
+      m_ObjectMap->SetAt (strMapName, pUpdatedItem);
       try
         {
         SortPropertyObjects (m_doc, pUpdatedItem);
