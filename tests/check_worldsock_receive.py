@@ -15,12 +15,18 @@ def main():
     repo = pathlib.Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=pathlib.Path, default=repo / "worldsock.cpp")
+    parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
     source = args.source.read_text()
-    callback = source[source.index("CWorldSocket::CWorldSocket"):
+    callback = source[source.index("static bool IsLiveWorldSocket") if "static bool IsLiveWorldSocket" in source else source.index("CWorldSocket::CWorldSocket"):
                       source.index("void CWorldSocket::OnSend")]
     with tempfile.TemporaryDirectory(prefix="worldsock-receive-") as work:
-        work = pathlib.Path(work)
+        work = args.output or pathlib.Path(work)
+        work.mkdir(parents=True, exist_ok=True)
+        frame = (repo / "mainfrm.cpp").read_text()
+        first = frame.index("void CMainFrame::OnTimer(")
+        last = frame.index("void CMainFrame::OnUpdateStatuslineFreeze", first)
+        (work / "worldsock_timer.inc").write_text(frame[first:last])
         (work / "worldsock_receive.inc").write_text(callback)
         binary = work / "worldsock_receive"
         subprocess.run([
