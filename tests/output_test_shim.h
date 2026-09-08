@@ -96,7 +96,7 @@ struct CLine {bool hard_return=false;int len=0,iMemoryAllocated,m_nLineNumber,m_
  void ResizeText(int n){assert(n>=len);auto p=new char[n];memcpy(p,text,len);delete[]text;text=p;iMemoryAllocated=n;}
 };
 struct CActiveTag{long long nOpeningStyleCreationNumber=0,nOpeningLineCreationNumber=0;};
-struct COutputAppendTransaction {int created=0,wraps=0;long long Identity(){return 4242;}void RecordCreatedLine(){++created;}size_t PrepareWrap(CLine*,int){return 0;}void PublishWrap(size_t,long long){++wraps;}};
+struct COutputAppendTransaction {int created=0,wraps=0;long long Identity(){return 4242;}void TrackLine(const CLine*){}void RecordCreatedLine(){++created;}size_t PrepareWrap(CLine*,int){return 0;}void PublishWrap(size_t,long long){++wraps;}};
 struct CView {bool IsKindOf(int){return false;}};struct CMUSHView:CView {void did_jump(){}};
 struct AppType {bool m_bUpdateActivity=false;} App;
 void TMessageBox(const char*s){cerr<<s<<'\n';}

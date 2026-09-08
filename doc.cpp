@@ -1679,8 +1679,10 @@ COutputAppendTransaction::COutputAppendTransaction (
   const size_t iLength) :
   m_pDoc (pDoc),
   m_iAppendCreationNumber (App.GetUniqueNumber ()),
+  m_iFirstAffectedLineCreationNumber (m_iAppendCreationNumber),
   m_bCommitted (false)
   {
+  TrackLine (m_pDoc->m_pCurrentLine);
   Reserve (iLength);
   }
 
@@ -1701,10 +1703,19 @@ void COutputAppendTransaction::Reserve (const size_t iLength)
   m_ListCounts.reserve (m_ListCounts.size () + iLength + 2);
   }
 
+// Line identities increase with tail insertion and survive pruning and style moves.
+// Keep an identity boundary, not a list position or a pointer across callbacks.
+void COutputAppendTransaction::TrackLine (const CLine * pLine)
+  {
+  if (pLine && pLine->nCreationNumber < m_iFirstAffectedLineCreationNumber)
+    m_iFirstAffectedLineCreationNumber = pLine->nCreationNumber;
+  }
+
 void COutputAppendTransaction::MarkCurrentLineStyles ()
   {
   if (!m_pDoc->m_pCurrentLine)
     return;
+  TrackLine (m_pDoc->m_pCurrentLine);
   for (POSITION pos = m_pDoc->m_pCurrentLine->styleList.GetHeadPosition ();
        pos; )
     {
@@ -1716,6 +1727,7 @@ void COutputAppendTransaction::MarkCurrentLineStyles ()
 
 CStyle * COutputAppendTransaction::PrepareAppendStyle ()
   {
+  TrackLine (m_pDoc->m_pCurrentLine);
   CStyle * pStyle = m_pDoc->m_pCurrentLine->styleList.GetTail ();
   if (pStyle->nOutputAppendCreationNumber == m_iAppendCreationNumber &&
       pStyle->iLength == 0)
@@ -1736,6 +1748,30 @@ CStyle * COutputAppendTransaction::PrepareAppendStyle ()
 void COutputAppendTransaction::OwnStyle (CStyle * pStyle)
   {
   ASSERT (pStyle);
+  // Normal append callers own the current tail style. Retain support for callers
+  // that explicitly supply a style in an earlier line or before publication.
+  if (m_pDoc->m_pCurrentLine &&
+      !m_pDoc->m_pCurrentLine->styleList.IsEmpty () &&
+      m_pDoc->m_pCurrentLine->styleList.GetTail () == pStyle)
+    TrackLine (m_pDoc->m_pCurrentLine);
+  else
+    {
+    bool bFound = false;
+    for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition ();
+         linepos && !bFound; )
+      {
+      CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+      for (POSITION stylepos = pLine->styleList.GetTailPosition (); stylepos; )
+        if (pLine->styleList.GetPrev (stylepos) == pStyle)
+          {
+          TrackLine (pLine);
+          bFound = true;
+          break;
+          }
+      }
+    if (!bFound)
+      m_iFirstAffectedLineCreationNumber = 0; // publication location is unknown
+    }
   pStyle->nOutputAppendCreationNumber = m_iAppendCreationNumber;
   }
 
@@ -1757,11 +1793,13 @@ void COutputAppendTransaction::RecordCreatedLine ()
 CLine * COutputAppendTransaction::FindLine (
   const __int64 iLineCreationNumber) const
   {
-  for (POSITION pos = m_pDoc->m_LineList.GetHeadPosition (); pos; )
+  for (POSITION pos = m_pDoc->m_LineList.GetTailPosition (); pos; )
     {
-    CLine * pLine = m_pDoc->m_LineList.GetNext (pos);
+    CLine * pLine = m_pDoc->m_LineList.GetPrev (pos);
     if (pLine->nCreationNumber == iLineCreationNumber)
       return pLine;
+    if (pLine->nCreationNumber < iLineCreationNumber)
+      break;
     }
   return NULL;
   }
@@ -1843,6 +1881,7 @@ size_t COutputAppendTransaction::PrepareWrap (
   CLine * pPreviousLine,
   const int iSplitLength)
   {
+  TrackLine (pPreviousLine);
   CWrapMove wrap;
   wrap.iPreviousLineCreationNumber = pPreviousLine->nCreationNumber;
   wrap.iNewLineCreationNumber = 0;
@@ -2021,9 +2060,11 @@ void COutputAppendTransaction::Commit ()
       }
     }
 
-  for (POSITION linepos = m_pDoc->m_LineList.GetHeadPosition (); linepos; )
+  for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
     {
-    CLine * pLine = m_pDoc->m_LineList.GetNext (linepos);
+    CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+    if (pLine->nCreationNumber < m_iFirstAffectedLineCreationNumber)
+      break;
     for (POSITION stylepos = pLine->styleList.GetHeadPosition (); stylepos; )
       {
       CStyle * pStyle = pLine->styleList.GetNext (stylepos);
@@ -2550,6 +2591,8 @@ Unicode range              UTF-8 bytes
 
     ASSERT (m_pCurrentLine->text);
 
+    if (pTransaction)
+      pTransaction->TrackLine (m_pCurrentLine);
     CStyle * pAppendStyle = m_pCurrentLine->styleList.GetTail ();
     if (pAppendStyle->nOutputAppendCreationNumber !=
         iAppendCreationNumber)

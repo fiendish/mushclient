@@ -2994,6 +2994,7 @@ class COutputAppendTransaction
 
     __int64 Identity () const;
     void Reserve (const size_t iLength);
+    void TrackLine (const CLine * pLine);
     void MarkCurrentLineStyles ();
     CStyle * PrepareAppendStyle ();
     void OwnStyle (CStyle * pStyle);
@@ -3066,6 +3067,7 @@ class COutputAppendTransaction
 
     CMUSHclientDoc * m_pDoc;
     __int64 m_iAppendCreationNumber;
+    __int64 m_iFirstAffectedLineCreationNumber;
     vector<CCreatedLine> m_CreatedLines;
     vector<CWrapMove> m_Wraps;
     vector<CLineBreakState> m_LineBreaks;
