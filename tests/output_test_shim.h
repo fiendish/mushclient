@@ -1,3 +1,15 @@
+#define NORMAL 0
+#define HILITE 1
+#define UNDERLINE 2
+#define BLINK 4
+#define INVERSE 8
+#define CHANGED 0x10
+#define COLOURTYPE 0x300
+#define COLOUR_RGB 0x200
+#define OTHER_CUSTOM 16
+#define TRIGGER_COLOUR_CHANGE_BOTH 0
+#define TRIGGER_COLOUR_CHANGE_FOREGROUND 1
+#define TRIGGER_COLOUR_CHANGE_BACKGROUND 2
 // Focused MFC substitutes for the extracted output regression checks.
 // These substitutes do not model the Windows UI or transaction rollback.
 
@@ -77,6 +89,10 @@ struct CMUSHclientDoc {
  POSITION GetFirstViewPosition(){return nullptr;}CView*GetNextView(POSITION&){abort();}
  long long m_iOutputGeneration=0; struct {int m_nCurrentLine=0;} m_DisplayFindInfo;
  void RemoveChunk();void OnConnectionDisconnect(){++disconnects;}void PlaySoundFile(const CString&){}
+ struct CTriggerLineSnapshot {long long iCreationNumber;int iColumn,iLength;};
+ bool FindStyle(const CLine*,int,int&,CStyle*&,POSITION&)const;
+ void GetStyleRGB(CStyle* s,COLORREF& a,COLORREF& b)const{a=s->iForeColour;b=s->iBackColour;}
+ void Colour(const vector<CTriggerLineSnapshot>&,const CString&,int,int,function<void()>,int=1,bool=false,int=0);
  bool StartNewLine(bool,int,bool=true,bool * =nullptr);
  bool StartNewLine_KeepPreviousStyle(int,bool * =nullptr);
  bool AddToLine(LPCTSTR,int);bool AddToLineInternal(LPCTSTR,int,COutputAppendTransaction*);

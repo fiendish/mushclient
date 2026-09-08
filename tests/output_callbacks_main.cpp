@@ -109,7 +109,82 @@ static void appendCases() {
  }
  cout<<"Repeated callbacks, visible failures, null output, transaction ownership, UTF-8, and note controls passed\n";
 }
+#ifndef APPEND_ONLY
+static vector<CMUSHclientDoc::CTriggerLineSnapshot> snapshot(const vector<CLine*>& ls) {
+ vector<CMUSHclientDoc::CTriggerLineSnapshot> result;int column=0;
+ for(auto line:ls){result.push_back({line->nCreationNumber,column,line->len});column+=line->len;}
+ return result;
+}
+static vector<int> changed(CLine* line) {
+ vector<int> result;for(auto p=line->styleList.GetHeadPosition();p;){auto style=line->styleList.GetNext(p);
+ for(int i=0;i<style->iLength;++i)result.push_back((style->iFlags&CHANGED)!=0);}
+ return result;
+}
+static void colourCases() {
+ // Note reaches the pruning threshold while the matched line survives.
+ {
+  CMUSHclientDoc d;d.m_maxlines=200;
+  while(d.m_LineList.GetCount()<200)assert(d.StartNewLine(true,COMMENT));
+  assert(d.AddToLine("matched",0));auto matched=d.m_pCurrentLine;auto saved=snapshot({matched});
+  d.Colour(saved,"matched",1,6,[&]{assert(d.StartNewLine(true,COMMENT));assert(d.AddToLine("note",COMMENT));});
+  assert(d.m_iOutputGeneration==1);assert(changed(matched)==vector<int>({0,1,1,1,1,1,0}));
+  assert(changed(d.m_pCurrentLine)==vector<int>(4,0));checkStyles(d);
+ }
+ // Prune the first wrapped span. Keep the offsets of the second and third spans.
+ for(int removal:{0,1,2,3}) {
+  CMUSHclientDoc d;vector<CLine*> matched;
+  for(auto word:{"abcd","efgh","ijkl"}){assert(d.AddToLine(word,0));matched.push_back(d.m_pCurrentLine);assert(d.StartNewLine(false,COMMENT));}
+  auto saved=snapshot(matched);
+  d.Colour(saved,"abcdefghijkl",2,10,[&]{
+   for(int i=0;i<removal;++i)delete d.m_LineList.RemoveHead();
+   if(removal)++d.m_iOutputGeneration;
+   assert(d.AddToLine("callback",COMMENT));
+  });
+  vector<vector<int>> expected={{0,0,1,1},{1,1,1,1},{1,1,0,0}};
+  for(int i=removal;i<3;++i)assert(changed(matched[i])==expected[i]);
+  assert(changed(d.m_pCurrentLine)==vector<int>(8,0));checkStyles(d);
+ }
+ // Repeated matches, subsequent trigger calls, unchanged generation, and tail growth.
+ {
+  CMUSHclientDoc d;assert(d.AddToLine("ab ab ab",0));auto line=d.m_pCurrentLine;auto saved=snapshot({line});
+  for(int offset:{0,3,6})d.Colour(saved,"ab ab ab",offset,offset+2,[&]{if(offset==0)assert(d.AddToLine(" appended",0));});
+  assert(changed(line)==vector<int>({1,1,0,1,1,0,1,1,0,0,0,0,0,0,0,0,0}));checkStyles(d);
+ }
+ // Deleted text and changed text are not replaced by new callback text.
+ for(bool truncate:{false,true}) {
+  CMUSHclientDoc d;assert(d.AddToLine("abcdef",0));auto line=d.m_pCurrentLine;auto saved=snapshot({line});
+  d.Colour(saved,"abcdef",0,6,[&]{++d.m_iOutputGeneration;
+   if(truncate){line->len=3;line->styleList.GetTail()->iLength=3;}
+   else line->text[0]='X';});
+  assert(changed(line)==vector<int>(truncate?3:6,truncate?1:0));checkStyles(d);
+ }
+ for(int variant:{0,1,2}) {
+  CMUSHclientDoc d;assert(d.AddToLine("abcdef",0));auto line=d.m_pCurrentLine;auto saved=snapshot({line});
+  d.Colour(saved,"abcdef",1,4,[]{},SAMECOLOUR,variant==0,variant==2?HILITE:NORMAL);
+  assert(changed(line)==(variant==2?vector<int>({0,1,1,1,0,0}):vector<int>(6,0)));checkStyles(d);
+ }
+ {
+  CMUSHclientDoc d;assert(d.AddToLine("abcdef",0));auto line=d.m_pCurrentLine;
+  auto original=line->styleList.GetTail();auto range=original->nRangeCreationNumber;
+  original->nOutputAppendCreationNumber=4242;original->pAction=new CAction;
+  auto action=original->pAction;auto saved=snapshot({line});
+  d.Colour(saved,"abcdef",1,4,[]{});
+  assert(line->styleList.GetCount()==3);
+  for(auto p=line->styleList.GetHeadPosition();p;) {
+   auto style=line->styleList.GetNext(p);
+   assert(style->nRangeCreationNumber==range);
+   assert(style->nOutputAppendCreationNumber==4242);
+   assert(style->pAction==action);
+  }
+  assert(action->refs==3);checkStyles(d);
+ }
+ cout<<"Colour pruning, removed spans, repeated matches, callback output, invalidation, and style-only controls passed\n";
+}
+#endif
 int main() {
  appendCases();
- cout<<"All append regression checks passed\n";
+#ifndef APPEND_ONLY
+ colourCases();
+#endif
+ cout<<"All output regression checks passed\n";
 }

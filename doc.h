@@ -1641,10 +1641,17 @@ public:
   void SendLineToPlugin (void);
   void SetNewLineColour (const int flags);
 
+  struct CTriggerLineSnapshot
+    {
+    __int64 iCreationNumber;
+    int iColumn;  // byte offset in the original paragraph
+    int iLength;
+    };
+
   void ProcessOneTriggerSequence (CString & strCurrentLine,
                             CPaneLine & StyledLine,
                             CString & strResponse,
-                            const POSITION prevpos,
+                            const vector<CTriggerLineSnapshot> & triggerLines,
                             bool & bNoLog,
                             bool & bNoOutput,
                             bool & bChangedColour,
