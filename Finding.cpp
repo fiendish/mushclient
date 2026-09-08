@@ -63,8 +63,11 @@ bool NotFound (CFindInfo & FindInfo)
 bool FindRoutine (const CObject * pObject,       // passed back to callback routines
                   CFindInfo & FindInfo,          // details about find
                   const InitiateSearch pInitiateSearch, // how to re-initiate a find
-                  const GetNextLine pGetNextLine)
+                  const GetNextLine pGetNextLine,
+                  bool * pCancelled)
   {
+if (pCancelled)
+  *pCancelled = false;
 CFindDlg dlg (FindInfo.m_strFindStringList);
 
 
@@ -83,7 +86,11 @@ CFindDlg dlg (FindInfo.m_strFindStringList);
     dlg.m_bRegexp     = FindInfo.m_bRegexp;
 
     if (dlg.DoModal () != IDOK)
+      {
+      if (pCancelled)
+        *pCancelled = true;
       return false;
+      }
 
     FindInfo.m_bMatchCase    = dlg.m_bMatchCase;
     FindInfo.m_bForwards     = dlg.m_bForwards;
