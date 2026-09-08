@@ -29,7 +29,7 @@ CMiniWindow::CMiniWindow ()  :
           m_FlagsOnMouseDown (0),
           m_ZOrder (0),
           m_bExecutingScript (false),
-          m_bAddingHotspot (false)
+          m_pAddingHotspot (new bool (false))
   {
   pdc = new CDC;
   pdc->CreateCompatibleDC(NULL);
