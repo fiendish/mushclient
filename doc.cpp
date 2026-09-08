@@ -7113,23 +7113,23 @@ int CompareTrigger (const void * elem1, const void * elem2)
 
 void CMUSHclientDoc::BuildTriggerIndexes (
   vector<CTrigger *> & triggerArray,
-  CTriggerRevMap & triggerRevMap,
-  const set<CTrigger *> * pExclude)
+  const set<CTrigger *> * pExclude,
+  CTriggerMap * pObjectMap)
   {
+CTriggerMap & objectMap = pObjectMap ? *pObjectMap : GetTriggerMap ();
 CString strTriggerName;
 CTrigger * pTrigger;
 POSITION pos;
 
-  triggerArray.reserve (GetTriggerMap ().GetCount ());
+  triggerArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (pos = GetTriggerMap ().GetStartPosition(); pos; )
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetTriggerMap ().GetNextAssoc (pos, strTriggerName, pTrigger);
+     objectMap.GetNextAssoc (pos, strTriggerName, pTrigger);
      if (pExclude && pExclude->find (pTrigger) != pExclude->end ())
        continue;
      triggerArray.push_back (pTrigger);
-     triggerRevMap [pTrigger] = strTriggerName;
     }
 
   // sort the array
@@ -7142,15 +7142,13 @@ POSITION pos;
 
 void  CMUSHclientDoc::SortTriggers (const set<CTrigger *> * pExclude)
   {
-  CTriggerRevMap newTriggerRevMap;
   vector<CTrigger *> newTriggerArray;
-  BuildTriggerIndexes (newTriggerArray, newTriggerRevMap, pExclude);
+  BuildTriggerIndexes (newTriggerArray, pExclude);
 
-  // build the replacement indexes before changing either live index
+  // Build the sorted replacement before changing the live array.
   GetTriggerArray ().SetSize (newTriggerArray.size ());
   for (size_t i = 0; i < newTriggerArray.size (); i++)
     GetTriggerArray ().SetAt (i, newTriggerArray [i]);
-  GetTriggerRevMap ().swap (newTriggerRevMap);
 
   } // end of CMUSHclientDoc::SortTriggers
 
@@ -7179,23 +7177,23 @@ static int CompareAlias (const void * elem1, const void * elem2)
 
 void CMUSHclientDoc::BuildAliasIndexes (
   vector<CAlias *> & aliasArray,
-  CAliasRevMap & aliasRevMap,
-  const set<CAlias *> * pExclude)
+  const set<CAlias *> * pExclude,
+  CAliasMap * pObjectMap)
   {
+CAliasMap & objectMap = pObjectMap ? *pObjectMap : GetAliasMap ();
 CString strAliasName;
 CAlias * pAlias;
 POSITION pos;
 
-  aliasArray.reserve (GetAliasMap ().GetCount ());
+  aliasArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (pos = GetAliasMap ().GetStartPosition(); pos; )
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
+     objectMap.GetNextAssoc (pos, strAliasName, pAlias);
      if (pExclude && pExclude->find (pAlias) != pExclude->end ())
        continue;
      aliasArray.push_back (pAlias);
-     aliasRevMap [pAlias] = strAliasName;
     }
 
   // sort the array
@@ -7208,15 +7206,13 @@ POSITION pos;
 
 void  CMUSHclientDoc::SortAliases (const set<CAlias *> * pExclude)
   {
-  CAliasRevMap newAliasRevMap;
   vector<CAlias *> newAliasArray;
-  BuildAliasIndexes (newAliasArray, newAliasRevMap, pExclude);
+  BuildAliasIndexes (newAliasArray, pExclude);
 
-  // build the replacement indexes before changing either live index
+  // Build the sorted replacement before changing the live array.
   GetAliasArray ().SetSize (newAliasArray.size ());
   for (size_t i = 0; i < newAliasArray.size (); i++)
     GetAliasArray ().SetAt (i, newAliasArray [i]);
-  GetAliasRevMap ().swap (newAliasRevMap);
 
   } // end of CMUSHclientDoc::SortAliases
 
