@@ -63,7 +63,7 @@ class CScopedMXPAction
 bool CMUSHclientDoc::MXP_OpenAtomicTag (const CString strTag,
                                         int iAction, 
                                         CStyle * pStyle,
-                                        CStyle * & pResultStyle,
+                                        __int64 & iResultStyleCreationNumber,
                                         CString & strAction,    // new action
                                         CString & strHint,      // new hint
                                         CString & strVariable,   // new variable
@@ -84,7 +84,8 @@ COLORREF       iBackColour = pStyle->iBackColour;
 const __int64 iOpeningActiveTagCreationNumber =
   m_ActiveTagList.IsEmpty () ? 0 :
     m_ActiveTagList.GetTail ()->nCreationNumber;
-pResultStyle = pStyle;
+// Save the identity before an action can run a packet or output callback.
+iResultStyleCreationNumber = pStyle->nCreationNumber;
 
 // find current foreground and background RGB values
   GetStyleRGB (pStyle, colour1, colour2);
@@ -630,10 +631,11 @@ pResultStyle = pStyle;
           if (bCreatedLine)
             {
             SetNewLineColour (0);
-            pResultStyle = m_pCurrentLine->styleList.GetTail ();
+            iResultStyleCreationNumber =
+              m_pCurrentLine->styleList.GetTail ()->nCreationNumber;
             }
           else
-            pResultStyle = NULL;
+            iResultStyleCreationNumber = 0;
           }
           break;  // end of MXP_ACTION_BR
 
@@ -719,7 +721,7 @@ pResultStyle = pStyle;
           // Do not overwrite a continuation line supplied by a callback.
           if (!bOwnHorizontalLine)
             {
-            pResultStyle = NULL;
+            iResultStyleCreationNumber = 0;
             break;
             }
           pOutputTransaction->SetLineFlags (m_pCurrentLine, HORIZ_RULE);
@@ -728,8 +730,8 @@ pResultStyle = pStyle;
           if (!pOutputTransaction->StartNewLine (
                 true, 0, true, &bCreatedLine)) // now finish this line
             return false;
-          pResultStyle = bCreatedLine ?
-            m_pCurrentLine->styleList.GetTail () : NULL;
+          iResultStyleCreationNumber = bCreatedLine ?
+            m_pCurrentLine->styleList.GetTail ()->nCreationNumber : 0;
           }
           break;  // end of MXP_ACTION_HR
 
@@ -762,7 +764,7 @@ pResultStyle = pStyle;
               return false;
             if (!bCreatedLine)
               {
-              pResultStyle = NULL;
+              iResultStyleCreationNumber = 0;
               break;
               }
             }
@@ -774,7 +776,8 @@ pResultStyle = pStyle;
             strListItem.Format (" %i. ", iOpeningListCount + 1);
           pOutputTransaction->Reserve (strListItem.GetLength () + 1);
           pOutputTransaction->MarkCurrentLineStyles ();
-          pResultStyle = pOutputTransaction->PrepareAppendStyle ();
+          iResultStyleCreationNumber =
+            pOutputTransaction->PrepareAppendStyle ()->nCreationNumber;
           if (!AddToLineInternal (strListItem, 0, pOutputTransaction))
             return false;
           if (bOrderedList)
@@ -790,9 +793,10 @@ pResultStyle = pStyle;
               m_ActiveTagList.GetTail ()->nCreationNumber;
           if (iCurrentActiveTagCreationNumber !=
               iOpeningActiveTagCreationNumber)
-            pResultStyle = NULL;
+            iResultStyleCreationNumber = 0;
           else
-            pResultStyle = m_pCurrentLine->styleList.GetTail ();
+            iResultStyleCreationNumber =
+              m_pCurrentLine->styleList.GetTail ()->nCreationNumber;
           }
           break;  // end of MXP_ACTION_LI
 
@@ -906,12 +910,12 @@ pResultStyle = pStyle;
             if (iCurrentActiveTagCreationNumber !=
                 iOpeningActiveTagCreationNumber)
               {
-              pResultStyle = NULL;
+              iResultStyleCreationNumber = 0;
               break;
               }
 
             // go back to old style (ie. lose the underlining)
-            pResultStyle = AddStyle (iFlags,
+            CStyle * pResultStyle = AddStyle (iFlags,
                                      iForeColour,
                                      iBackColour,
                                      0,
@@ -919,6 +923,7 @@ pResultStyle = pStyle;
                                      strOldHint,
                                      strOldVariable);
             pOutputTransaction->OwnStyle (pResultStyle);
+            iResultStyleCreationNumber = pResultStyle->nCreationNumber;
             strAction = strOldAction;
             strHint = strOldHint;
             strVariable = strOldVariable;

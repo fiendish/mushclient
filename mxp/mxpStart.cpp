@@ -488,6 +488,9 @@ class CMXPStartTransaction
              (!m_iMarkerCreationNumber || HasStyle (m_iMarkerCreationNumber));
       }
 
+    CStyle * ResolveStyle (const __int64 iCreationNumber) const
+      { return FindStyle (iCreationNumber); }
+
     void Commit ()
       {
       if (m_pOutputTransaction)
@@ -514,12 +517,17 @@ class CMXPStartTransaction
 
     CStyle * FindStyle (const __int64 iCreationNumber) const
       {
-      for (POSITION linepos = m_pDoc->m_LineList.GetHeadPosition (); linepos; )
+      if (!iCreationNumber)
+        return NULL;
+
+      // Opening markers and action results are normally at the output tail.
+      // Still search all lines when rollback needs an older style.
+      for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
         {
-        CLine * pLine = m_pDoc->m_LineList.GetNext (linepos);
-        for (POSITION stylepos = pLine->styleList.GetHeadPosition (); stylepos; )
+        CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+        for (POSITION stylepos = pLine->styleList.GetTailPosition (); stylepos; )
           {
-          CStyle * pStyle = pLine->styleList.GetNext (stylepos);
+          CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
           if (pStyle->nCreationNumber == iCreationNumber)
             return pStyle;
           }
@@ -1010,7 +1018,7 @@ transaction.SetStyle (pNewStyle);
       return;
       }
 
-    CStyle * pAtomicResultStyle = pNewStyle;
+    __int64 iAtomicResultStyleCreationNumber = pNewStyle->nCreationNumber;
     COutputAppendTransaction * pOutputTransaction =
       (pAtomicElement->iAction == MXP_ACTION_BR ||
        pAtomicElement->iAction == MXP_ACTION_HR ||
@@ -1021,7 +1029,7 @@ transaction.SetStyle (pNewStyle);
     if (!MXP_OpenAtomicTag (strName,
                             pAtomicElement->iAction,
                             pNewStyle,
-                            pAtomicResultStyle,
+                            iAtomicResultStyleCreationNumber,
                             strAction,
                             strHint,
                             strVariable,
@@ -1054,7 +1062,8 @@ transaction.SetStyle (pNewStyle);
 
     // Finalize only the style that the atomic action published. A callback can
     // create a newer nested tag, whose tail style must stay unchanged.
-    pNewStyle = pAtomicResultStyle;
+    // If it deleted the result, keep its valid output boundary unchanged too.
+    pNewStyle = transaction.ResolveStyle (iAtomicResultStyleCreationNumber);
     if (pNewStyle)
       {
       RememberStyle (pNewStyle);
@@ -1111,7 +1120,7 @@ transaction.SetStyle (pNewStyle);
       ReportDeferredMXPMessages (this, deferredMessages);
       return;
       }
-    CStyle * pAtomicResultStyle = pNewStyle;
+    __int64 iAtomicResultStyleCreationNumber = pNewStyle->nCreationNumber;
     COutputAppendTransaction * pOutputTransaction =
       (pElementItem->pAtomicElement->iAction == MXP_ACTION_BR ||
        pElementItem->pAtomicElement->iAction == MXP_ACTION_HR ||
@@ -1122,7 +1131,7 @@ transaction.SetStyle (pNewStyle);
     if (!MXP_OpenAtomicTag (pElementItem->pAtomicElement->strName,
                             pElementItem->pAtomicElement->iAction,
                             pNewStyle,
-                            pAtomicResultStyle,
+                            iAtomicResultStyleCreationNumber,
                             strAction,
                             strHint,
                             strVariable,
@@ -1154,7 +1163,7 @@ transaction.SetStyle (pNewStyle);
         pElementItem->pAtomicElement->iAction == MXP_ACTION_VAR)
       pPublishedTag->strVariable = strVariable;
 
-    pNewStyle = pAtomicResultStyle;
+    pNewStyle = transaction.ResolveStyle (iAtomicResultStyleCreationNumber);
     if (!pNewStyle)
       {
       COutputAppendTransaction * pBoundaryTransaction =

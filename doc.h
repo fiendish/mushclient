@@ -1558,7 +1558,7 @@ public:
   bool MXP_OpenAtomicTag (const CString strTag,   // name
                           int iAction,            // action code
                           CStyle * pStyle,        // style it should modify
-                          CStyle * & pResultStyle, // exact style owned by this action
+                          __int64 & iResultStyleCreationNumber, // exact style identity
                           CString & strAction,    // new action
                           CString & strHint,      // new hint
                           CString & strVariable,  // new variable
