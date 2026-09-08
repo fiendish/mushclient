@@ -13,6 +13,7 @@
 #include "doc.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -25,35 +26,166 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 IMPLEMENT_DYNAMIC(CWorldSocket, CAsyncSocket)
 
+// Compare identities before accessing an object saved across a callback.
+static bool IsLiveWorldSocket (const CMUSHclientDoc * pDoc,
+                                const __int64 iDocumentNumber,
+                                const CWorldSocket * pSocket,
+                                const __int64 iSocketNumber)
+  {
+  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+    {
+    CMUSHclientDoc * pLiveDoc =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pLiveDoc == pDoc &&
+        pLiveDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+      return pLiveDoc->m_pSocket == pSocket &&
+             pSocket->m_iSocketNumber == iSocketNumber;
+    }
+  return false;
+  }
+
 CWorldSocket::CWorldSocket(CMUSHclientDoc* pDoc)
+  : m_iSocketNumber (App.GetUniqueNumber ())
 {
-	m_pDoc = pDoc;
+  m_pDoc = pDoc;
+  m_bInReceive = false;
+  m_bReceivePending = false;
+  m_bBufferedReadPending = false;
+  m_iBufferedReadDocumentNumber = 0;
+  m_hBufferedReadSocket = INVALID_SOCKET;
+  m_pBufferedReadSSL = NULL;
 }
+
+// A transport FD_READ cannot report plaintext already buffered by OpenSSL.
+// Use a later timer entry, after the original receive exception has unwound.
+void CWorldSocket::CheckBufferedReads (void)
+  {
+  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    CWorldSocket * pSocket = pDoc->m_pSocket;
+    if (!pSocket || !pSocket->m_bBufferedReadPending || pSocket->m_bInReceive)
+      continue;
+
+    pSocket->m_bBufferedReadPending = false;
+    if (pSocket->m_pDoc != pDoc ||
+        pDoc->m_iUniqueDocumentNumber != pSocket->m_iBufferedReadDocumentNumber ||
+        pSocket->m_hSocket == INVALID_SOCKET ||
+        pSocket->m_hSocket != pSocket->m_hBufferedReadSocket ||
+        !pDoc->m_bSSL_Connected || !pDoc->m_pSSL ||
+        pDoc->m_pSSL != pSocket->m_pBufferedReadSSL ||
+        SSL_pending (pDoc->m_pSSL) <= 0)
+      continue;
+
+    pSocket->OnReceive (0);
+    // Receive callbacks can delete any world, including the next list entry.
+    // Do not use the saved position, document or socket after this call.
+    return;
+    }
+  }
 
 void CWorldSocket::OnReceive(int nErrorCode)
 {
-  // save m_pDoc locally — if the handshake fails, 'this' (the socket) gets
-  // deleted inside ReceiveMsg, so we must not touch 'this' afterwards
-  CMUSHclientDoc * pDoc = m_pDoc;
-
-  pDoc->ReceiveMsg();
-
-  // if the socket was destroyed (e.g. SSL handshake failure), don't touch anything
-  if (pDoc->m_pSocket == NULL)
-    return;
-
-  // SSL may have buffered more decrypted data than one SSL_read consumed.
-  // Since we won't get another FD_READ for already-buffered data, drain it now.
-  if (pDoc->m_pSSL && pDoc->m_bSSL_Connected)
+  if (m_bInReceive)
     {
-    while (SSL_pending (pDoc->m_pSSL) > 0)
-      {
-      pDoc->ReceiveMsg();
-      if (pDoc->m_pSocket == NULL)
-        return;
-      }
+    m_bReceivePending = true;
+    return;
     }
 
+  m_bInReceive = true;
+  m_bBufferedReadPending = false;
+
+  CMUSHclientDoc * pDoc = m_pDoc;
+  const __int64 iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+  const __int64 iSocketNumber = m_iSocketNumber;
+  const SOCKET hSocket = m_hSocket;
+  struct ssl_st * pSSL = pDoc->m_pSSL;
+
+  try
+    {
+    do
+      {
+      m_bReceivePending = false;
+      pDoc->ReceiveMsg();
+
+      if (!IsLiveWorldSocket (pDoc, iDocumentNumber, this, iSocketNumber))
+        return;
+      if (m_hSocket != hSocket || (pSSL && pDoc->m_pSSL != pSSL))
+        {
+        m_bInReceive = false;
+        m_bReceivePending = false;
+        return;
+        }
+
+      // A proxy response can start TLS on this socket during ReceiveMsg.
+      if (!pSSL)
+        pSSL = pDoc->m_pSSL;
+
+      // SSL may have buffered more decrypted data than one SSL_read consumed.
+      // Since we will not get FD_READ for buffered data, drain it now.
+      if (pDoc->m_pSSL && pDoc->m_bSSL_Connected)
+        {
+        while (SSL_pending (pDoc->m_pSSL) > 0)
+          {
+          pDoc->ReceiveMsg();
+          if (!IsLiveWorldSocket (pDoc, iDocumentNumber, this, iSocketNumber))
+            return;
+          if (m_hSocket != hSocket || (pSSL && pDoc->m_pSSL != pSSL))
+            {
+            m_bInReceive = false;
+            m_bReceivePending = false;
+            return;
+            }
+          if (!pDoc->m_pSSL || !pDoc->m_bSSL_Connected)
+            break;
+          }
+        }
+      } while (m_bReceivePending);
+    }
+  catch (...)
+    {
+    if (IsLiveWorldSocket (pDoc, iDocumentNumber, this, iSocketNumber))
+      {
+      m_bInReceive = false;
+      if (m_bReceivePending && hSocket != INVALID_SOCKET &&
+          m_hSocket == hSocket)
+        {
+        // Keep plain FD_READ recovery. This consumes no bytes and changes no
+        // event mask. A later notification can read remaining transport data.
+        char c;
+        const int nResult = CAsyncSocket::Receive (&c, 1, MSG_PEEK);
+        const int nError = nResult == SOCKET_ERROR ? GetLastError () : 0;
+        m_bReceivePending = false;
+        if (nError != 0 && nError != WSAEWOULDBLOCK)
+          {
+          char szMessage [160];
+          snprintf (szMessage, sizeof szMessage, "Unable to rearm socket read notification (Winsock error %d).",
+                    nError);
+          ::MessageBoxA (NULL, szMessage, "MUSHclient", MB_OK | MB_ICONERROR | MB_TASKMODAL);
+          }
+        }
+      else
+        m_bReceivePending = false;
+      }
+
+    // Error reporting can run callbacks, destroy worlds or reconnect. Check
+    // again and publish the retry only immediately before rethrowing.
+    if (IsLiveWorldSocket (pDoc, iDocumentNumber, this, iSocketNumber) &&
+        m_hSocket == hSocket && hSocket != INVALID_SOCKET &&
+        pSSL && pDoc->m_pSSL == pSSL && pDoc->m_bSSL_Connected &&
+        SSL_pending (pSSL) > 0)
+      {
+      m_iBufferedReadDocumentNumber = iDocumentNumber;
+      m_hBufferedReadSocket = hSocket;
+      m_pBufferedReadSSL = pSSL;
+      m_bBufferedReadPending = true;
+      }
+    throw;
+    }
+
+  m_bInReceive = false;
+  m_bReceivePending = false;
   CAsyncSocket::OnReceive(nErrorCode);
 }
 
