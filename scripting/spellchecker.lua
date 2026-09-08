@@ -382,9 +382,11 @@ local function init ()
       dlg:setstep (1)
     end -- if SHOW_PROGRESS_BAR
      
-    dbcheck (db:execute "BEGIN TRANSACTION")
-
+    local transaction_started = false
     local ok, result = pcall (function ()
+      dbcheck (db:execute "BEGIN TRANSACTION")
+      transaction_started = true
+
       for k, v in ipairs (files) do
         read_dict (dlg, v)
       end -- reading each file
@@ -397,10 +399,12 @@ local function init ()
     end -- if SHOW_PROGRESS_BAR
 
     if not ok then
-      local rollback = db:execute "ROLLBACK"
-      if not db_success (rollback) then
-        result = tostring (result) .. "\nRollback failed: " .. db:errmsg ()
-      end -- rollback failed
+      if transaction_started then
+        local rollback = db:execute "ROLLBACK"
+        if not db_success (rollback) then
+          result = tostring (result) .. "\nRollback failed: " .. db:errmsg ()
+        end -- rollback failed
+      end -- transaction started
       error (result, 0)
     end -- transaction failed
     
