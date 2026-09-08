@@ -2009,7 +2009,6 @@ bool bTrim;
       }
 
     v->strContents = strNewContents;
-    CheckUsed (node);   // check we used all attributes
 
     } // end of try
 
@@ -2018,9 +2017,14 @@ bool bTrim;
     throw;
     }
 
+  // A warning callback can replace or delete the previous variable.
+  oldVariable = NULL;
+  GetVariableMap ().Lookup (strVariableName, oldVariable);
   GetVariableMap ().SetAt (strVariableName, v);
   newVariable.release ();
   delete oldVariable;
+
+  CheckUsed (node);   // warn after publishing, as for other loaded values
 
   } // end of CMUSHclientDoc::Load_One_Variable_XML
 
