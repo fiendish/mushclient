@@ -92,7 +92,7 @@ Copy from that page: zLib licence.txt
 
 LuaCOM library (COM interface for Lua)
 
-  https://github.com/davidm/luacom/blob/master/COPYRIGHT
+  https://github.com/fiendish/luacom/blob/master/COPYRIGHT
 
 Copy from that page: LuaCOM licence.txt
 
