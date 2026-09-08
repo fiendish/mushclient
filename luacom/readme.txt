@@ -1,5 +1,5 @@
 LuaCOM source: https://github.com/fiendish/luacom
-Revision: 96f9e5bfacd8aec6c5e98d85e55854188eba7412
+Revision: af855b4f03f45185e44629c28fee34edf536c08e
 
 Copy the files from src/library and include/luacom.h into this directory.
 Copy COPYRIGHT to ../licences/LuaCOM licence.txt.
@@ -15,3 +15,5 @@ Local changes in luacom.cpp:
 
 3. In luacom_StartMessageLoop, reject the call when the mushclient_embedded
    registry flag is set. MUSHclient uses its own message loop.
+
+Whitespace-only cleanup is also retained in LuaCompat.cpp and luacom5.lua.
