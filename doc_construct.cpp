@@ -44,14 +44,6 @@ int i;
   m_pRetiredAliases = NULL;
   m_pRetiredTriggers = NULL;
   m_pRetiredTimers = NULL;
-  m_pSetLoadAliasMap = NULL;
-  m_pSetLoadAliasArray = NULL;
-  m_pSetLoadAliasRevMap = NULL;
-  m_pSetLoadTriggerMap = NULL;
-  m_pSetLoadTriggerArray = NULL;
-  m_pSetLoadTriggerRevMap = NULL;
-  m_pSetLoadTimerMap = NULL;
-  m_pSetLoadTimerRevMap = NULL;
 
   SetDefaults (false);        // set up numeric/boolean defaults
   SetAlphaDefaults (false);   // set up alpha defaults

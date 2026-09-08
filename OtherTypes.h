@@ -461,8 +461,6 @@ typedef CTypedPtrMap <CMapStringToPtr, CString, CAlias*> CAliasMap;
 typedef CTypedPtrArray <CPtrArray, CAlias*> CAliasArray;
 // list for alias evaluation
 typedef CTypedPtrList <CPtrList, CAlias*> CAliasList;
-// map for lookup name from pointer
-typedef map <CAlias*, string> CAliasRevMap;
 
 /////////////////////////////////////////////////////////////////////////////
 //  CTrigger
@@ -602,8 +600,6 @@ typedef CTypedPtrMap <CMapStringToPtr, CString, CTrigger*> CTriggerMap;
 typedef CTypedPtrArray <CPtrArray, CTrigger*> CTriggerArray;
 // list for trigger evaluation
 typedef CTypedPtrList <CPtrList, CTrigger*> CTriggerList;
-// map for lookup name from pointer
-typedef map <CTrigger*, string> CTriggerRevMap;
 
 /////////////////////////////////////////////////////////////////////////////
 //  CTimer
@@ -725,8 +721,6 @@ class CTimer : public CObject
 
 typedef CTypedPtrMap <CMapStringToPtr, CString, CTimer*> CTimerMap;
 
-// map for lookup name from pointer
-typedef map <CTimer*, string> CTimerRevMap;
 
 
 /////////////////////////////////////////////////////////////////////////////
