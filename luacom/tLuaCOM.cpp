@@ -88,6 +88,8 @@ tLuaCOM::tLuaCOM(lua_State* L,
   clsid                   = coclass;
   lock_count              = 0;
   objName                 = NULL;
+  last_connection_interface = IID_NULL;
+  last_connection_cookie  = 0;
 
   pdisp.Attach(pdisp_arg);
   pdisp->AddRef(); 
@@ -622,13 +624,34 @@ DWORD tLuaCOM::addConnection(tLuaCOM *server)
     checkComObject();
   }
   connections.splice(connections.end(), pending);
+  last_connection_interface = guid;
+  last_connection_cookie = connection_point_cookie;
 
   return connection_point_cookie;
 }
 
 void tLuaCOM::releaseConnection()
 {
-  CHK_COM_CODE(releaseConnections());
+  // The legacy overload releases only the last connection made. Keep its
+  // identity after removal so repeated calls cannot release older connections.
+  ConnectionList pending;
+  for(ConnectionList::iterator it = connections.begin();
+      it != connections.end(); ++it)
+  {
+    if(it->interface_id == last_connection_interface &&
+       it->cookie == last_connection_cookie)
+    {
+      pending.splice(pending.end(), connections, it);
+      break;
+    }
+  }
+  if(pending.empty())
+    return;
+
+  HRESULT hr = pending.front().point->Unadvise(pending.front().cookie);
+  if(FAILED(hr))
+    connections.splice(connections.end(), pending);
+  CHK_COM_CODE(hr);
 }
 
 void tLuaCOM::releaseConnection(tLuaCOM* server, DWORD cookie)
