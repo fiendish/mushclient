@@ -4,6 +4,7 @@
 #include "..\..\doc.h"
 #include "genpropertypage.h"
 #include "..\EditMultiLine.h"
+#include <functional>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -128,15 +129,6 @@ static void SortPropertyObjects (CMUSHclientDoc * pDoc, CObject * pItem,
            it != pExclude->end (); it++)
         excluded.insert ((CTrigger *) *it);
     pDoc->SortTriggers (pExclude ? &excluded : NULL);
-    }
-  else if (pItem->IsKindOf (RUNTIME_CLASS (CTimer)))
-    {
-    set<CTimer *> excluded;
-    if (pExclude)
-      for (set<CObject *>::const_iterator it = pExclude->begin ();
-           it != pExclude->end (); it++)
-        excluded.insert ((CTimer *) *it);
-    pDoc->SortTimers (pExclude ? &excluded : NULL);
     }
   }
 
@@ -658,12 +650,16 @@ CString strMsg;
     return false;
     }
 
+  CString strMapOldName = *pstrObjectName;
+  strMapOldName.MakeLower ();
+  const CString strMapName = bNameChanged ? strObjectName : strMapOldName;
+
   std::unique_ptr<CObject> pReplacement (MakeNewObject ());
   CObject * pUpdatedItem = pReplacement.get ();
   SetPropertyCreationNumber (pUpdatedItem);
   UnloadDialog (&dlg, pUpdatedItem);
   CopyPropertyRuntimeState (pItem, pUpdatedItem, bChanged);
-  SetInternalName (pUpdatedItem, strObjectName);
+  SetInternalName (pUpdatedItem, strMapName);
 
   CString strDispatchMessage;
   if (m_doc->m_ScriptEngine)
@@ -673,9 +669,7 @@ CString strMsg;
                                                GetLabel (pUpdatedItem),
                                                strDispatchMessage));
 
-  CString strMapOldName = *pstrObjectName;
-  strMapOldName.MakeLower ();
-  std::unique_ptr<CString> pRowName (new CString (strObjectName));
+  std::unique_ptr<CString> pRowName (new CString (strMapName));
 
   set<CObject *> oldObjectToExclude;
   if (bNameChanged)
@@ -706,7 +700,7 @@ CString strMsg;
     {
     if (bNameChanged)
       {
-      m_ObjectMap->SetAt (strObjectName, pUpdatedItem);
+      m_ObjectMap->SetAt (strMapName, pUpdatedItem);
       try
         {
         SortPropertyObjects (m_doc, pUpdatedItem, &oldObjectToExclude);
@@ -720,7 +714,7 @@ CString strMsg;
       }
     else
       {
-      m_ObjectMap->SetAt (strMapOldName, pUpdatedItem);
+      m_ObjectMap->SetAt (strMapName, pUpdatedItem);
       try
         {
         SortPropertyObjects (m_doc, pUpdatedItem);
@@ -1396,6 +1390,7 @@ void CGenPropertyPage::LoadList (void)
   oldListNames.reserve (m_ctlList->GetItemCount ());
   for (int nItem = 0; nItem < m_ctlList->GetItemCount (); nItem++)
     oldListNames.push_back ((CString *) m_ctlList->GetItemData (nItem));
+  sort (oldListNames.begin (), oldListNames.end (), std::less<CString *> ());
 
   for (HTREEITEM hGroup = m_cTreeCtrl.GetRootItem ();
        hGroup;
@@ -1470,11 +1465,13 @@ void CGenPropertyPage::LoadList (void)
      }
    catch (...)
      {
+     // Sorting the reserved pointer vector does not allocate during rollback.
+     sort (newListNames.begin (), newListNames.end (), std::less<CString *> ());
      for (int nItem = m_ctlList->GetItemCount () - 1; nItem >= 0; nItem--)
        {
        CString * pName = (CString *) m_ctlList->GetItemData (nItem);
-       if (find (newListNames.begin (), newListNames.end (), pName) ==
-           newListNames.end ())
+       if (!binary_search (newListNames.begin (), newListNames.end (),
+                           pName, std::less<CString *> ()))
          continue;
        if (m_ctlList->DeleteItem (nItem))
          delete pName;
@@ -1498,8 +1495,8 @@ void CGenPropertyPage::LoadList (void)
   for (int nItem = m_ctlList->GetItemCount () - 1; nItem >= 0; nItem--)
     {
     CString * pName = (CString *) m_ctlList->GetItemData (nItem);
-    if (find (oldListNames.begin (), oldListNames.end (), pName) ==
-        oldListNames.end ())
+    if (!binary_search (oldListNames.begin (), oldListNames.end (),
+                        pName, std::less<CString *> ()))
       continue;
     if (!m_ctlList->DeleteItem (nItem))
       AfxThrowResourceException ();
