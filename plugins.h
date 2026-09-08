@@ -92,12 +92,9 @@ class CPlugin :public CObject
 
   CAliasMap     m_AliasMap;     // aliases     
   CAliasArray   m_AliasArray;   // array of aliases for sequencing
-  CAliasRevMap  m_AliasRevMap;   // for getting name back from pointer
   CTriggerMap   m_TriggerMap;   // triggers    
   CTriggerArray m_TriggerArray; // array of triggers for sequencing
-  CTriggerRevMap m_TriggerRevMap; // for getting name back from pointer
   CTimerMap     m_TimerMap;     // timers      
-  CTimerRevMap  m_TimerRevMap;   // for getting name back from pointer
   CVariableMap  m_VariableMap;  // variables   
   tStringMapOfMaps m_Arrays;    // map of arrays (for scripting)
 
