@@ -356,9 +356,10 @@ short CMUSHclientDoc::GetSpeedWalkDelay()
 
 void CMUSHclientDoc::SetSpeedWalkDelay(short nNewValue) 
 {
+  // Store the rate before a synchronous flush can change it in a callback.
+  m_iSpeedWalkDelay = nNewValue;
   if (m_pTimerWnd)
     m_pTimerWnd->ChangeTimerRate (nNewValue);
-  m_iSpeedWalkDelay = nNewValue;
 }   // end of CMUSHclientDoc::SetSpeedWalkDelay
 
 
