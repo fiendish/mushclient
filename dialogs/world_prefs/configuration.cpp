@@ -2429,32 +2429,34 @@ int CMUSHclientDoc::RecompileRegularExpressions ()
     CTrigger * pTrigger;
     GetTriggerMap ().GetNextAssoc (pos, strName, pTrigger);
 
-    if (pTrigger->regexp)
-      {
-      delete pTrigger->regexp;    // get rid of old one
-      if (pTrigger->bRegexp)
-        strRegexp = pTrigger->trigger;
-      else
-        strRegexp = ConvertToRegularExpression (pTrigger->trigger);
-      }
+    if (pTrigger->bRegexp)
+      strRegexp = pTrigger->trigger;
+    else
+      strRegexp = ConvertToRegularExpression (pTrigger->trigger);
 
       // compile regular expression
+      std::unique_ptr<t_regexp> newRegexp;
       try 
         {
-        pTrigger->regexp = regcomp (strRegexp, (pTrigger->ignore_case ? PCRE_CASELESS : 0) |
-                                               (pTrigger->bMultiLine  ? PCRE_MULTILINE : 0) |
-                                               (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                               );
+        newRegexp.reset (regcomp (strRegexp, (pTrigger->ignore_case ? PCRE_CASELESS : 0) |
+                                             (pTrigger->bMultiLine  ? PCRE_MULTILINE : 0) |
+                                             (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                             ));
         }   // end of try
       catch(CException* e)
         {
+        delete pTrigger->regexp;
         pTrigger->regexp = NULL;
         e->Delete ();
         iTriggerErrors++;
         ColourNote ("red", "", 
                      TFormat ("In %s, could not recompile trigger (%s) matching on: %s.",
                               (LPCTSTR) sPluginName, (LPCTSTR) pTrigger->strInternalName, (LPCTSTR) strRegexp));
+        continue;
         } // end of catch
+
+      delete pTrigger->regexp;
+      pTrigger->regexp = newRegexp.release ();
     }  // end of for each trigger
 
 #if ALIASES_USE_UTF8
@@ -2464,31 +2466,33 @@ int CMUSHclientDoc::RecompileRegularExpressions ()
     CAlias * pAlias;
     GetAliasMap ().GetNextAssoc (pos, strName, pAlias);
 
-    if (pAlias->regexp)
-      {
-      delete pAlias->regexp;    // get rid of old one
-      if (pAlias->bRegexp)
-        strRegexp = pAlias->name;
-      else
-        strRegexp = ConvertToRegularExpression (pAlias->name);
-      }
+    if (pAlias->bRegexp)
+      strRegexp = pAlias->name;
+    else
+      strRegexp = ConvertToRegularExpression (pAlias->name);
 
       // compile regular expression
+      std::unique_ptr<t_regexp> newRegexp;
       try 
         {
-        pAlias->regexp = regcomp (strRegexp, (pAlias->bIgnoreCase ? PCRE_CASELESS : 0) |
-                                               (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                               );
+        newRegexp.reset (regcomp (strRegexp, (pAlias->bIgnoreCase ? PCRE_CASELESS : 0) |
+                                             (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                             ));
         }   // end of try
       catch(CException* e)
         {
+        delete pAlias->regexp;
         pAlias->regexp = NULL;
         e->Delete ();
         iAliasErrors++;
         ColourNote ("red", "", 
                      TFormat ("In %s, could not recompile alias  (%s) matching on: %s.",
                               (LPCTSTR) sPluginName, (LPCTSTR) pAlias->strInternalName, (LPCTSTR) strRegexp));
+        continue;
         } // end of catch
+
+      delete pAlias->regexp;
+      pAlias->regexp = newRegexp.release ();
     }  // end of for each alias
 
 #endif // ALIASES_USE_UTF8
