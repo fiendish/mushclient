@@ -100,6 +100,8 @@ protected:
   };
   typedef std::list<Connection> ConnectionList;
   ConnectionList connections;
+  IID last_connection_interface;
+  DWORD last_connection_cookie;
 
   tLuaCOM(
     lua_State* L,
