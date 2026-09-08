@@ -223,7 +223,7 @@ strVariable = "mxp_";
       if (bStart)
         {
         iLen += pStyle2->iLength; // count length
-        if (!preparedClose.iFirstContentLineCreationNumber)
+        if (contentStyleRangeNumbers.empty ())
           preparedClose.iFirstContentLineCreationNumber = pLine2->nCreationNumber;
         contentStyleRangeNumbers.insert (pStyle2->nRangeCreationNumber);
         }

@@ -66,6 +66,12 @@ for(int n:{1000,10000,100000}){
  cout<<"history="<<n<<" line_visits="<<w.m_LineList.visits<<" style_visits="<<w.styleVisits()<<'\n';
 }
 assert(actionsAlive==0);
+{
+ World w;auto*first=w.line(0);auto*a=w.style(first,5);auto*next=w.line(10);auto*b=w.style(next,6);
+ CPreparedMXPClose p;p.strText="zero";capture(p,first,a);capture(p,next,b);
+ assert(p.iFirstContentLineCreationNumber==0);w.close(p);assert(a->pAction&&b->pAction);
+}
+assert(actionsAlive==0);
 for(bool prune:{false,true}){
  World w;auto*history=w.line(10);auto*unrelated=w.style(history,90);
  auto*first=w.line(20);auto*a=w.style(first,100);
@@ -117,7 +123,7 @@ def main():
  source=(subprocess.check_output(['git','show',a.baseline_ref+':mxp/mxpCloseAtomic.cpp'],cwd=ROOT,text=True) if a.baseline_ref else (ROOT/'mxp/mxpCloseAtomic.cpp').read_text())
  prepare=(ROOT/'mxp/mxpClose.cpp').read_text();header=(ROOT/'OtherTypes.h').read_text()
  assert 'iFirstContentLineCreationNumber (0)' in header and 'preparedClose = CPreparedMXPClose ();' in prepare
- start=prepare.index('        if (!preparedClose.iFirstContentLineCreationNumber)')
+ start=prepare.index('        if (contentStyleRangeNumbers.empty ())')
  end=prepare.index('contentStyleRangeNumbers.insert (pStyle2->nRangeCreationNumber);',start)+len('contentStyleRangeNumbers.insert (pStyle2->nRangeCreationNumber);')
  capture=prepare[start:end]
  start=source.index('    case MXP_ACTION_HYPERLINK:')+len('    case MXP_ACTION_HYPERLINK:');end=source.index('      break;  // end of MXP_ACTION_SEND',start)
