@@ -3390,8 +3390,7 @@ std::unique_ptr<CFont> newFonts [NUMITEMS (m_font)];
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,    // was  FF_DONTCARE
             lpszFacename)) // LPCTSTR lpszFacename );
        {
-       TMessageBox ("Unable to create screen font");
-       return;
+       AfxThrowResourceException ();
        }
 
     }   // end of allocating 16 fonts
