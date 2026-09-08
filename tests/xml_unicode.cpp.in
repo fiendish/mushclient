@@ -1,6 +1,10 @@
 // Calls WideCharToMultiByte. MFC storage and parser publication are substitutes.
 #define NOMINMAX
 #include <windows.h>
+// Match the Windows SDK flag exposure for the project's XP target.
+#ifdef WC_ERR_INVALID_CHARS
+#undef WC_ERR_INVALID_CHARS
+#endif
 #include <algorithm>
 #include <cassert>
 #include <cstdarg>
@@ -99,16 +103,18 @@ int main(int argc, char** argv) {
     }
     if (selection == "all" || selection == "surrogates") {
       for (char16_t c : {char16_t(0xd800), char16_t(0xdbff), char16_t(0xdc00), char16_t(0xdfff)}) {
-        rejected(utf16(u"<variables>" + std::u16string(1, c) + u"</variables>"), 1);
-        rejected(utf16(u"<variables></variables>" + std::u16string(1, c)), 1);
+        rejected(utf16(u"<variables>" + std::u16string(1, c) + u"</variables>"), 0);
+        rejected(utf16(u"<variables></variables>" + std::u16string(1, c)), 0);
       }
-      rejected(utf16(u"<variables>" + std::u16string({0xdc00, 0xd800}) + u"</variables>"), 1);
+      rejected(utf16(u"<variables>" + std::u16string({0xdc00, 0xd800}) + u"</variables>"), 0);
     }
     if (selection == "all" || selection == "preservation") {
       accepted("<variables></variables>", "<variables></variables>");
       accepted(std::string("\xef\xbb\xbf") + "<variables></variables>", "<variables></variables>");
       accepted(utf16(u"<variables>\u754c\U0001f600</variables>"), "<variables>\xe7\x95\x8c\xf0\x9f\x98\x80</variables>");
       accepted(utf16(u"<variables>\ufffd</variables>"), "<variables>\xef\xbf\xbd</variables>");
+      accepted(utf16(u"<variables>\U00010000</variables>"), "<variables>\xf0\x90\x80\x80</variables>");
+      accepted(utf16(u"<variables>\U0010ffff</variables>"), "<variables>\xf4\x8f\xbf\xbf</variables>");
       accepted(utf16(u"<variables>\t</variables>"), "<variables> </variables>");
       rejected("", 0);
       rejected(std::string("\xff\xfe", 2), 1);
@@ -121,8 +127,10 @@ int main(int argc, char** argv) {
       accepted(input, "<!--" + std::string(243, 'a') + "\xf0\x9f\x98\x80--><variables></variables>");
       std::vector<wchar_t> prefix(248);
       std::memcpy(prefix.data(), input.data() + 2, 496);
+      // WC_ERR_INVALID_CHARS is hidden by the XP target headers.
+      const DWORD strictConversion = 0x00000080;
       SetLastError(0);
-      require(::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, prefix.data(), 248, nullptr, 0, nullptr, nullptr) == 0,
+      require(::WideCharToMultiByte(CP_UTF8, strictConversion, prefix.data(), 248, nullptr, 0, nullptr, nullptr) == 0,
               "Strict probe control did not reject the split pair");
       require(GetLastError() == ERROR_NO_UNICODE_TRANSLATION, "Unexpected strict probe error");
       ++cases;

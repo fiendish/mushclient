@@ -26,7 +26,7 @@ def run(args, output):
     cpp.write_text(template.replace('// PRODUCTION_PROBE', probe).replace('// PRODUCTION_BUILD', build))
     binary = output / 'xml_unicode.exe'
     subprocess.run([args.compiler, '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                    '-O1', '-static', str(cpp), '-o', str(binary)], check=True)
+                    '-O1', '-static', '-D_WIN32_WINNT=0x0501', '-DWINVER=0x0501', str(cpp), '-o', str(binary)], check=True)
     command = ([args.runner] if args.runner else []) + [str(binary), args.case]
     subprocess.run(command, check=True)
 
