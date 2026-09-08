@@ -111,11 +111,18 @@ static int Lprogress_new(lua_State *L)
   luaL_getmetatable(L, progress_dlg_handle);
   lua_setmetatable(L, -2);
 
+  {
   std::unique_ptr<CProgressDlg> pProgressDlg (new CProgressDlg ());
-  if (!pProgressDlg->Create ())
-    AfxThrowResourceException ();
-  pProgressDlg->SetWindowText (sTitle);
-  *ud = pProgressDlg.release ();    // store pointer to this dialog in the userdata
+  if (pProgressDlg->Create ())
+    {
+    pProgressDlg->SetWindowText (sTitle);
+    *ud = pProgressDlg.release ();    // store pointer to this dialog in the userdata
+    }
+  }
+
+  // Lua errors can use longjmp, so release native resources before raising one.
+  if (!*ud)
+    return luaL_error (L, "Unable to create progress dialog");
   return 1;
   }  // end of Lprogress_new
 
