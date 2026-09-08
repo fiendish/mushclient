@@ -1,0 +1,135 @@
+// Calls WideCharToMultiByte. MFC storage and parser publication are substitutes.
+#define NOMINMAX
+#include <windows.h>
+#include <algorithm>
+#include <cassert>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <cctype>
+
+class CString {
+  std::string value;
+public:
+  CString() = default;
+  CString(const char* p) : value(p) {}
+  CString(const std::string& p) : value(p) {}
+  char* GetBuffer(size_t count) { value.resize(count + 1, '\0'); return value.data(); }
+  void ReleaseBuffer(size_t count) { assert(count < value.size()); value.resize(count); }
+  operator const char*() const { return value.c_str(); }
+  char operator[](size_t i) const { assert(i <= value.size()); return value[i]; }
+  CString Mid(size_t i) const { return value.substr(i); }
+  void Replace(char old, char next) { std::replace(value.begin(), value.end(), old, next); }
+};
+class CFile {
+  std::string bytes;
+public:
+  size_t pos = 0;
+  explicit CFile(const std::string& data) : bytes(data) {}
+  UINT GetLength() const { return static_cast<UINT>(bytes.size()); }
+  const char* GetFilePath() const { return "test.xml"; }
+  UINT Read(char* dest, UINT count) {
+    count = std::min(count, static_cast<UINT>(bytes.size() - pos));
+    std::memcpy(dest, bytes.data() + pos, count); pos += count; return count;
+  }
+  void SeekToBegin() { pos = 0; }
+};
+struct CArchive { CFile* file; CFile* GetFile() { return file; } };
+[[noreturn]] void ThrowErrorException(const char* message, ...) {
+  char buffer[256]; va_list args; va_start(args, message);
+  std::vsnprintf(buffer, sizeof buffer, message, args); va_end(args);
+  throw std::runtime_error(buffer);
+}
+static unsigned conversionCalls = 0;
+int CountedConversion(UINT cp, DWORD flags, LPCWSTR text, int units,
+                      LPSTR out, int size, LPCSTR fallback, LPBOOL used) {
+  ++conversionCalls;
+  return ::WideCharToMultiByte(cp, flags, text, units, out, size, fallback, used);
+}
+#define WideCharToMultiByte CountedConversion
+#define NUMITEMS(a) (static_cast<int>(sizeof(a) / sizeof((a)[0])))
+#define MAX_XML_DOCUMENT_SIZE 20000000
+UINT iLineLastItemFound = 0;
+struct CXMLparser {
+  UINT m_xmlLength = 0;
+  CString m_strxmlBuffer;
+  const char* m_xmlBuff = nullptr;
+  int m_xmlRoot = 0;
+  unsigned published = 0;
+  std::string text;
+  void BuildStructure(CFile* file);
+  void ProcessNode(int&) { ++published; text = m_xmlBuff; }
+};
+void SeeIfBase64(CString& text) { assert(std::strchr(text, '<')); }
+// PRODUCTION_PROBE
+// PRODUCTION_BUILD
+
+static unsigned cases = 0;
+void require(bool value, const char* message) {
+  if (!value) throw std::runtime_error(message);
+}
+std::string utf16(const std::u16string& value) {
+  std::string result("\xff\xfe", 2);
+  for (char16_t c : value) { result += static_cast<char>(c & 255); result += static_cast<char>(c >> 8); }
+  return result;
+}
+void accepted(const std::string& bytes, const std::string& expected) {
+  CFile file(bytes); CXMLparser parser; parser.BuildStructure(&file);
+  require(parser.published == 1 && parser.text == expected, "Valid input changed"); ++cases;
+}
+void rejected(const std::string& bytes, unsigned expectedCalls) {
+  CFile file(bytes); CXMLparser parser; conversionCalls = 0; bool failed = false;
+  try { parser.BuildStructure(&file); }
+  catch (const std::runtime_error&) { failed = true; }
+  require(failed, "Malformed UTF-16 reached parsing");
+  require(parser.published == 0, "Malformed input was published");
+  require(conversionCalls == expectedCalls, "Unexpected conversion work before rejection"); ++cases;
+}
+int main(int argc, char** argv) {
+  try {
+    const std::string selection = argc > 1 ? argv[1] : "all";
+    if (selection == "all" || selection == "odd") {
+      // Every possible trailing byte must be rejected, including zero.
+      for (int c = 0; c != 256; ++c)
+        rejected(utf16(u"<variables></variables>") + static_cast<char>(c), 0);
+      rejected(std::string("\xff\xfe<", 3), 0);
+    }
+    if (selection == "all" || selection == "surrogates") {
+      for (char16_t c : {char16_t(0xd800), char16_t(0xdbff), char16_t(0xdc00), char16_t(0xdfff)}) {
+        rejected(utf16(u"<variables>" + std::u16string(1, c) + u"</variables>"), 1);
+        rejected(utf16(u"<variables></variables>" + std::u16string(1, c)), 1);
+      }
+      rejected(utf16(u"<variables>" + std::u16string({0xdc00, 0xd800}) + u"</variables>"), 1);
+    }
+    if (selection == "all" || selection == "preservation") {
+      accepted("<variables></variables>", "<variables></variables>");
+      accepted(std::string("\xef\xbb\xbf") + "<variables></variables>", "<variables></variables>");
+      accepted(utf16(u"<variables>\u754c\U0001f600</variables>"), "<variables>\xe7\x95\x8c\xf0\x9f\x98\x80</variables>");
+      accepted(utf16(u"<variables>\ufffd</variables>"), "<variables>\xef\xbf\xbd</variables>");
+      accepted(utf16(u"<variables>\t</variables>"), "<variables> </variables>");
+      rejected("", 0);
+      rejected(std::string("\xff\xfe", 2), 1);
+      // A valid pair starts at byte 496, across the 498-byte probe boundary.
+      const auto input = utf16(u"<!--" + std::u16string(243, u'a') + u"\U0001f600--><variables></variables>");
+      require(static_cast<unsigned char>(input[496]) == 0x3d && static_cast<unsigned char>(input[498]) == 0x00, "Boundary fixture changed");
+      CFile file(input); CArchive archive{&file};
+      require(IsArchiveXML(archive), "A split surrogate pair hid valid XML");
+      require(file.pos == 0, "XML probe did not restore the archive");
+      accepted(input, "<!--" + std::string(243, 'a') + "\xf0\x9f\x98\x80--><variables></variables>");
+      std::vector<wchar_t> prefix(248);
+      std::memcpy(prefix.data(), input.data() + 2, 496);
+      SetLastError(0);
+      require(::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, prefix.data(), 248, nullptr, 0, nullptr, nullptr) == 0,
+              "Strict probe control did not reject the split pair");
+      require(GetLastError() == ERROR_NO_UNICODE_TRANSLATION, "Unexpected strict probe error");
+      ++cases;
+    }
+    std::printf("PASS %s: %u cases\n", selection.c_str(), cases);
+    return 0;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "FAIL: %s\n", error.what()); return 1;
+  }
+}

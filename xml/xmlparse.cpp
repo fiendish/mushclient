@@ -189,19 +189,22 @@ void CXMLparser::BuildStructure (CFile * file)
   if ((unsigned char) m_strxmlBuffer [0] == 0xFF &&
       (unsigned char) m_strxmlBuffer [1] == 0xFE)
     {
+    if ((m_xmlLength - 2) % 2 != 0)
+      ThrowErrorException ("Unicode XML file ends with an incomplete character");
+
     CString buf2;
     const char * q =  m_strxmlBuffer;
     q += 2; // skip indicator bytes
     // find required buffer length
-    int length = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q, (m_xmlLength - 2) / 2, 
-                    NULL, 0, NULL, NULL);
+    int length = WideCharToMultiByte (CP_UTF8, WC_ERR_INVALID_CHARS, (LPCWSTR) q,
+                                       (m_xmlLength - 2) / 2, NULL, 0, NULL, NULL);
     if (length <= 0)
       ThrowErrorException ("Could not convert Unicode XML file");
 
     // make a new string with enough length to hold it
     char * p = buf2.GetBuffer (length);
     // convert it
-    int iConverted = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q,
+    int iConverted = WideCharToMultiByte (CP_UTF8, WC_ERR_INVALID_CHARS, (LPCWSTR) q,
                                           (m_xmlLength - 2) / 2,
                                           p, length, NULL, NULL);
     if (iConverted != length)
