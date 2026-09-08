@@ -103,8 +103,8 @@ bool IsArchiveXML (CArchive& ar)
 
   // auto-detect XML files
 
-  char buf [500],     // should be even number of bytes in case Unicode
-       buf2 [500];
+  char buf [500];     // should be even number of bytes in case Unicode
+  CString strProbe;
 
   memset (buf, 0, sizeof (buf));
   ar.GetFile ()->Read (buf, sizeof (buf) - 2);   // allow for Unicode 00 00
@@ -113,20 +113,35 @@ bool IsArchiveXML (CArchive& ar)
   // look for Unicode (FF FE)
   if ((unsigned char) buf [0] == 0xFF &&
       (unsigned char) buf [1] == 0xFE)
-    WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) &buf [2], -1, buf2, sizeof buf2, NULL, NULL);
+    {
+    int iLength = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) &buf [2], -1,
+                                       NULL, 0, NULL, NULL);
+    if (iLength <= 0)
+      return false;
+
+    char * pBuffer = strProbe.GetBuffer (iLength);
+    int iConverted = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) &buf [2], -1,
+                                          pBuffer, iLength, NULL, NULL);
+    if (iConverted != iLength)
+      {
+      strProbe.ReleaseBuffer (0);
+      return false;
+      }
+    strProbe.ReleaseBuffer (iLength - 1);
+    }
   else
     // look for UTF-8 indicator bytes (EF BB BF)
     if ((unsigned char) buf [0] == 0xEF &&
         (unsigned char) buf [1] == 0xBB &&
         (unsigned char) buf [2] == 0xBF)
-      strcpy (buf2, &buf [3]);   // skip them
+      strProbe = &buf [3];   // skip them
   else 
-    strcpy (buf2, buf);
+    strProbe = buf;
 
-  char * p = buf2;
+  const char * p = strProbe;
 
   // skip leading whitespace
-  while (isspace (*p))
+  while (isspace ((unsigned char) *p))
     p++;
 
   // can't see them squeezing much into less than 15 chars
