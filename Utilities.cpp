@@ -195,6 +195,11 @@ int i;
     // look for escape sequences ...
     if (c == '\\')
       {
+      if (p [1] == 0)
+        {
+        *pNew++ = c;
+        break;
+        }
       c = *(++p);
       switch (c)
         {
