@@ -27,6 +27,8 @@ CCmdHistory::CCmdHistory(CWnd* pParent /*=NULL*/)
   m_pDoc = NULL;
   m_iDocumentNumber = 0;
   m_hSendView = NULL;
+  m_iHistoryDiscarded = 0;
+  m_nSnapshotLines = 0;
 }
 
 
@@ -68,9 +70,13 @@ int count = 0;
    pList->SetRedraw (FALSE);
    pList->ResetContent ();
    m_msgListSnapshot.RemoveAll ();
+   m_HistoryLineNumbers.clear ();
+   m_iHistoryDiscarded = m_sendview->m_iHistoryDiscarded;
+   m_nSnapshotLines = m_msgList->GetCount ();
 
   CString str;
   POSITION pos = m_msgList->GetHeadPosition ();
+  long iLine = 0;
 
   while (pos)
     {
@@ -89,11 +95,24 @@ int count = 0;
     nItem = pList->AddString(strDisplay);  // add to list (truncate to 500 chars)
     if (nItem != LB_ERR  && nItem != LB_ERRSPACE)
       {
+      m_HistoryLineNumbers.push_back (iLine);
       POSITION itemPos = m_msgListSnapshot.AddTail (str);
       pList->SetItemData (nItem, (DWORD) itemPos);
       count++;
       }
+    ++iLine;
     }
+
+   // Resume from the saved line, including when a list-box row was not added.
+   vector<long>::const_iterator resume = std::lower_bound (
+       m_HistoryLineNumbers.begin (), m_HistoryLineNumbers.end (),
+       m_pHistoryFindInfo->m_nCurrentLine);
+   m_HistoryFindInfo.m_nCurrentLine =
+       static_cast<long> (resume - m_HistoryLineNumbers.begin ());
+   if (m_HistoryFindInfo.m_bForwards &&
+       (resume == m_HistoryLineNumbers.end () ||
+        *resume != m_pHistoryFindInfo->m_nCurrentLine))
+     --m_HistoryFindInfo.m_nCurrentLine;
 
    pList->SetCurSel(count - 1);
    pList->SetRedraw (TRUE);
@@ -213,9 +232,6 @@ if (!IsContextLive ())
 m_HistoryFindInfo.m_bAgain = bAgain &&
     !m_HistoryFindInfo.m_strFindStringList.IsEmpty ();
 m_HistoryFindInfo.m_nTotalLines = m_msgListSnapshot.GetCount ();
-int selection = pList->GetCurSel ();
-if (selection != LB_ERR)
-  m_HistoryFindInfo.m_nCurrentLine = selection;
 
 // Find Next can use saved settings before this dialog has compiled the pattern.
 if (bAgain && m_HistoryFindInfo.m_bRegexp &&
@@ -224,10 +240,12 @@ if (bAgain && m_HistoryFindInfo.m_bRegexp &&
       (m_HistoryFindInfo.m_bMatchCase ? 0 : PCRE_CASELESS) |
       (m_HistoryFindInfo.m_bUTF8 ? PCRE_UTF8 : 0));
 
+bool bCancelled = false;
 bool found = FindRoutine (&m_msgListSnapshot,    // passed back to callback routines
                           m_HistoryFindInfo,     // finding structure
                           InitiateSearch,        // how to re-initiate a find
-                          GetNextLine);          // get the next line
+                          GetNextLine,           // get the next line
+                          &bCancelled);
 
 // FindRoutine can process messages that close the world or destroy the send view.
 if (!IsContextLive ())
@@ -238,6 +256,22 @@ if (!IsContextLive ())
 
 m_HistoryFindInfo.m_pFindPosition = NULL;
 CopyFindSettings (*m_pHistoryFindInfo, m_HistoryFindInfo);
+
+// Map the snapshot result back to history after any eviction or clear.
+if (!bCancelled)
+  {
+  long iLine = m_HistoryFindInfo.m_nCurrentLine;
+  if (iLine >= static_cast<long> (m_HistoryLineNumbers.size ()))
+    iLine = m_nSnapshotLines;
+  else if (iLine >= 0)
+    iLine = m_HistoryLineNumbers [iLine];
+  const unsigned __int64 iDiscarded =
+      m_sendview->m_iHistoryDiscarded - m_iHistoryDiscarded;
+  if (iDiscarded)
+    iLine = iLine <= 0 || iDiscarded >= static_cast<unsigned __int64> (iLine)
+        ? 0 : iLine - static_cast<long> (iDiscarded);
+  m_pHistoryFindInfo->m_nCurrentLine = iLine;
+  }
 
 // Get the control again after the nested message loops.
 pList = (CListBox*) GetDlgItem (IDC_COMMANDS);
