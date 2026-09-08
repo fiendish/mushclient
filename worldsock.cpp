@@ -13,6 +13,7 @@
 #include "doc.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -45,6 +46,7 @@ void CWorldSocket::OnReceive(int nErrorCode)
   // save m_pDoc locally — if the handshake fails, 'this' (the socket) gets
   // deleted inside ReceiveMsg, so we must not touch 'this' afterwards
   CMUSHclientDoc * pDoc = m_pDoc;
+  const SOCKET hSocket = m_hSocket;
 
   try
     {
@@ -87,7 +89,28 @@ void CWorldSocket::OnReceive(int nErrorCode)
     if (bSocketLive)
       {
       m_bInReceive = false;
-      m_bReceivePending = false;
+      if (m_bReceivePending && hSocket != INVALID_SOCKET &&
+          m_hSocket == hSocket)
+        {
+        // A nested FD_READ returned without calling recv. MSG_PEEK rearms
+        // FD_READ without consuming data or changing the event mask. Let the
+        // later notification call ReceiveMsg after this exception unwinds.
+        char c;
+        const int nResult = CAsyncSocket::Receive (&c, 1, MSG_PEEK);
+        const int nError = nResult == SOCKET_ERROR ? GetLastError () : 0;
+        m_bReceivePending = false;
+        if (nError != 0 && nError != WSAEWOULDBLOCK)
+          {
+          // Do not allocate a CString or replace the exception being handled.
+          // Winsock rearms FD_READ even when recv fails. Report that failure.
+          char szMessage [160];
+          snprintf (szMessage, sizeof szMessage, "Unable to rearm socket read notification (Winsock error %d).",
+                   nError);
+          ::MessageBoxA (NULL, szMessage, "MUSHclient", MB_OK | MB_ICONERROR | MB_TASKMODAL);
+          }
+        }
+      else
+        m_bReceivePending = false;
       }
     throw;
     }
