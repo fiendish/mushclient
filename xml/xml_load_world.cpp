@@ -1548,7 +1548,6 @@ bool CMUSHclientDoc::Load_One_Trigger_XML (CXMLelement & node,
   {
 std::unique_ptr<CTrigger> newTrigger (new CTrigger);
 CTrigger * t = newTrigger.get ();
-CTrigger * oldTrigger = NULL;
 CString strTriggerName;
 CString strVariable;
 
@@ -1680,9 +1679,7 @@ CString strVariable;
     CTrigger * trigger_check;
     if (GetTriggerMap ().Lookup (strTriggerName, trigger_check))
       {
-      if (iMask & XML_OVERWRITE)
-        oldTrigger = trigger_check;
-      else
+      if (!(iMask & XML_OVERWRITE))
         ThrowErrorException ("Duplicate trigger label \"%s\" ", 
                              strTriggerName);
       }   // end of duplicate
@@ -1754,6 +1751,13 @@ CString strVariable;
   t->nCreationNumber  = App.GetUniqueNumber ();
   t->strInternalName  = strTriggerName;    // for deleting one-shot triggers
   CheckUsed (node);   // check we used all attributes
+  // Warning callbacks can delete or replace the current entry.
+  // Capture the entry only after all warnings have returned.
+  CTrigger * oldTrigger = NULL;
+  if (GetTriggerMap ().Lookup (strTriggerName, oldTrigger) &&
+      !(iMask & XML_OVERWRITE))
+    ThrowErrorException ("Duplicate trigger label \"%s\" ",
+                         strTriggerName);
   change.strName = strTriggerName;
   change.pOld = oldTrigger;
   change.pNew = t;
@@ -1828,7 +1832,6 @@ bool CMUSHclientDoc::Load_One_Alias_XML (CXMLelement & node,
   {
 std::unique_ptr<CAlias> newAlias (new CAlias);
 CAlias * a = newAlias.get ();
-CAlias * oldAlias = NULL;
 CString strAliasName;
 CString strVariable;
 
@@ -1938,9 +1941,7 @@ CString strVariable;
     CAlias * alias_check;
     if (GetAliasMap ().Lookup (strAliasName, alias_check))
       {
-      if (iMask & XML_OVERWRITE)
-        oldAlias = alias_check;
-      else
+      if (!(iMask & XML_OVERWRITE))
         ThrowErrorException ("Duplicate alias label \"%s\" ", 
                              strAliasName);
       } // end of duplicate
@@ -2013,6 +2014,13 @@ CString strVariable;
   a->nCreationNumber  = App.GetUniqueNumber ();
   a->strInternalName  = strAliasName;    // for deleting one-shot aliases
   CheckUsed (node);   // check we used all attributes
+  // Warning callbacks can delete or replace the current entry.
+  // Capture the entry only after all warnings have returned.
+  CAlias * oldAlias = NULL;
+  if (GetAliasMap ().Lookup (strAliasName, oldAlias) &&
+      !(iMask & XML_OVERWRITE))
+    ThrowErrorException ("Duplicate alias label \"%s\" ",
+                         strAliasName);
   change.strName = strAliasName;
   change.pOld = oldAlias;
   change.pNew = a;
@@ -2087,7 +2095,6 @@ bool CMUSHclientDoc::Load_One_Timer_XML (CXMLelement & node,
   {
 std::unique_ptr<CTimer> newTimer (new CTimer);
 CTimer * t = newTimer.get ();
-CTimer * oldTimer = NULL;
 CString strTimerName,
         strVariable;
 
@@ -2205,9 +2212,7 @@ CString strTimerName,
     CTimer * timer_check;
     if (GetTimerMap ().Lookup (strTimerName, timer_check))
       {
-      if (iMask & XML_OVERWRITE)
-        oldTimer = timer_check;
-      else
+      if (!(iMask & XML_OVERWRITE))
         ThrowErrorException ("Duplicate timer label \"%s\" ", 
                              strTimerName);
       } // end of duplciate
@@ -2246,6 +2251,13 @@ CString strTimerName,
   t->nCreationNumber  = App.GetUniqueNumber ();
   ResetOneTimer (t);    // make sure it is reset
   CheckUsed (node);   // check we used all attributes
+  // Warning callbacks can delete or replace the current entry.
+  // Capture the entry only after all warnings have returned.
+  CTimer * oldTimer = NULL;
+  if (GetTimerMap ().Lookup (strTimerName, oldTimer) &&
+      !(iMask & XML_OVERWRITE))
+    ThrowErrorException ("Duplicate timer label \"%s\" ",
+                         strTimerName);
   change.strName = strTimerName;
   change.pOld = oldTimer;
   change.pNew = t;
