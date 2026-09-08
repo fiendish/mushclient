@@ -342,6 +342,8 @@ long CMUSHclientDoc::DiscardQueue()
 long iCount = m_QueuedCommandsList.GetCount ();
      
   m_QueuedCommandsList.RemoveAll ();	
+  if (m_pTimerWnd)
+    m_pTimerWnd->m_nCommandsToDrain = 0;
   ShowQueuedCommands ();    // update status line
 
 	return iCount;
@@ -363,6 +365,8 @@ void CMUSHclientDoc::SetSpeedWalkDelay(short nNewValue)
 void CMUSHclientDoc::OnInputDiscardqueuedcommands() 
 {
   m_QueuedCommandsList.RemoveAll ();	
+  if (m_pTimerWnd)
+    m_pTimerWnd->m_nCommandsToDrain = 0;
   ShowQueuedCommands ();    // update status line
 	
 }  // end of CMUSHclientDoc::OnInputDiscardqueuedcommands

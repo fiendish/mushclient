@@ -20,6 +20,7 @@ CTimerWnd::CTimerWnd(CMUSHclientDoc * pDoc)
   m_iTimer = 0;
   m_bProcessingQueue = false;
   m_bDrainQueue = false;
+  m_nCommandsToDrain = 0;
 }
 
 CTimerWnd::~CTimerWnd()
@@ -51,28 +52,37 @@ void CTimerWnd::OnTimer(UINT nIDEvent)
 
 void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
 {
-  if (m_bProcessingQueue)
+  if (!bStopAfterDelayedCommand)
     {
-    if (!bStopAfterDelayedCommand)
-      m_bDrainQueue = true;
-    return;
+    m_bDrainQueue = true;
+    m_nCommandsToDrain = m_pDoc->m_QueuedCommandsList.GetCount ();
     }
+
+  if (m_bProcessingQueue)
+    return;
 
   // no queued commands - don't update status line
   if (m_pDoc->m_QueuedCommandsList.IsEmpty ())
     {
     m_bDrainQueue = false;
+    m_nCommandsToDrain = 0;
     return;
     }
 
   m_bProcessingQueue = true;
-  bool bStopAfterDelay = bStopAfterDelayedCommand;
+  bool bSentDelayedCommand = false;
 
   try
     {
     while (!m_pDoc->m_QueuedCommandsList.IsEmpty ())
       {
+      // A restored rate applies after the commands covered by the flush.
+      if (!m_bDrainQueue && bSentDelayedCommand && m_nCommandsToDrain == 0)
+        break;
+
       CString strCommand = m_pDoc->m_QueuedCommandsList.RemoveHead ();
+      if (m_nCommandsToDrain > 0)
+        --m_nCommandsToDrain;
 
       unsigned char cQueueFlags = (unsigned char) strCommand [0];
       bool bSuppressPluginSend =
@@ -86,6 +96,10 @@ void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
                   cMessageType == IMMEDIATE_WITH_ECHO ||
                   cMessageType == IMMEDIATE_WITHOUT_ECHO;
 
+      if (toupper ((unsigned char) cMessageType) == QUEUE_WITH_ECHO ||
+          toupper ((unsigned char) cMessageType) == QUEUE_WITHOUT_ECHO)
+        bSentDelayedCommand = true;
+
       if (bSuppressPluginSend)
         {
         CBoolStateGuard processingGuard
@@ -95,24 +109,13 @@ void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
       else
         m_pDoc->DoSendMsg (strCommand.Mid (1), bEcho, bLog);
 
-      if (m_bDrainQueue)
-        {
-        bStopAfterDelay = false;
-        m_bDrainQueue = false;
-        }
-
-      if (bStopAfterDelay &&
-          (toupper ((unsigned char) cMessageType) == QUEUE_WITH_ECHO ||
-           toupper ((unsigned char) cMessageType) == QUEUE_WITHOUT_ECHO))
-        break;    // if we need to wait, don't keep pulling them out
       }
     }
   catch (...)
     {
-    bool bDrainQueue = m_bDrainQueue || !bStopAfterDelayedCommand;
     m_bProcessingQueue = false;
-    m_bDrainQueue = bDrainQueue;
-    if (bDrainQueue && !m_pDoc->m_QueuedCommandsList.IsEmpty () && !m_iTimer)
+    if ((m_bDrainQueue || m_nCommandsToDrain > 0) &&
+        !m_pDoc->m_QueuedCommandsList.IsEmpty () && !m_iTimer)
       m_iTimer = SetTimer (COMMAND_QUEUE_TIMER_ID,
                            MAX ((int) m_pDoc->m_iSpeedWalkDelay, 1), NULL);
     throw;
@@ -120,6 +123,7 @@ void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
 
   m_bProcessingQueue = false;
   m_bDrainQueue = false;
+  m_nCommandsToDrain = 0;
   m_pDoc->ShowQueuedCommands ();    // update status line
 }
 
@@ -152,7 +156,10 @@ void CTimerWnd::ChangeTimerRate (const int iRate)
 
   // if zero, no timer wanted
   if (iNewRate)
-    m_iTimer = SetTimer(COMMAND_QUEUE_TIMER_ID, iNewRate, NULL); 
+    {
+    m_bDrainQueue = false;
+    m_iTimer = SetTimer(COMMAND_QUEUE_TIMER_ID, iNewRate, NULL);
+    }
   else
     DrainQueue (false);
 

@@ -25,6 +25,7 @@ public:
   int m_iTimer;
   bool m_bProcessingQueue;
   bool m_bDrainQueue;
+  INT_PTR m_nCommandsToDrain;
 
 // Operations
 public:
