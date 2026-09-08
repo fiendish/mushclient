@@ -5015,7 +5015,13 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
   class CRecallStatusGuard
     {
     public:
-      ~CRecallStatusGuard () { Frame.SetStatusNormal (); }
+      // Prepare the translated text before cleanup can run.
+      CRecallStatusGuard () : m_strNormalStatus (Translate ("Ready")) {}
+      ~CRecallStatusGuard () { Restore (); }
+      void Restore () const { Frame.SetStatusMessageNow (m_strNormalStatus); }
+
+    private:
+      const CString m_strNormalStatus;
     } statusGuard;
 
   Frame.SetStatusMessageNow (strStatus);
@@ -5165,7 +5171,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
     }
 
 
-  Frame.SetStatusNormal (); 
+  statusGuard.Restore ();
 
   pProgressDlg.reset ();
 
