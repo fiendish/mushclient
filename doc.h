@@ -264,6 +264,8 @@ enum {
 #define IMMEDIATE_WITH_ECHO_NOLOG     'i'
 #define IMMEDIATE_WITHOUT_ECHO_NOLOG  'w'
 
+#define QUEUE_SUPPRESS_PLUGIN_SEND     0x80
+
 
 // reload script file options
 enum {

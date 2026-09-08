@@ -18,6 +18,9 @@ CTimerWnd::CTimerWnd(CMUSHclientDoc * pDoc)
 {
   m_pDoc = pDoc;
   m_iTimer = 0;
+  m_bProcessingQueue = false;
+  m_bDrainQueue = false;
+  m_nCommandsToDrain = 0;
 }
 
 CTimerWnd::~CTimerWnd()
@@ -38,25 +41,89 @@ END_MESSAGE_MAP()
 
 void CTimerWnd::OnTimer(UINT nIDEvent) 
 {
-  // no queued commands - don't update status line
-  if (m_pDoc->m_QueuedCommandsList.IsEmpty ())
+  DrainQueue (true);
+
+  if (m_iTimer && m_pDoc->m_iSpeedWalkDelay == 0)
+    {
+    KillTimer (m_iTimer);
+    m_iTimer = 0;
+    }
+}
+
+void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
+{
+  if (!bStopAfterDelayedCommand)
+    {
+    m_bDrainQueue = true;
+    m_nCommandsToDrain = m_pDoc->m_QueuedCommandsList.GetCount ();
+    }
+
+  if (m_bProcessingQueue)
     return;
 
-  while (!m_pDoc->m_QueuedCommandsList.IsEmpty ())
+  // no queued commands - don't update status line
+  if (m_pDoc->m_QueuedCommandsList.IsEmpty ())
     {
-    CString strCommand = m_pDoc->m_QueuedCommandsList.RemoveHead ();
-
-    char cMessageType = strCommand [0];
-  
-    m_pDoc->DoSendMsg (strCommand.Mid (1), 
-                       toupper (cMessageType) == QUEUE_WITH_ECHO ||
-                       toupper (cMessageType) == IMMEDIATE_WITH_ECHO,
-                       cMessageType >= 'A');      // log flag
-
-    if (toupper (cMessageType) == QUEUE_WITH_ECHO ||
-        toupper (cMessageType) == QUEUE_WITHOUT_ECHO)
-        break;    // if we need to wait, don't keep pulling them out
+    m_bDrainQueue = false;
+    m_nCommandsToDrain = 0;
+    return;
     }
+
+  m_bProcessingQueue = true;
+  bool bSentDelayedCommand = false;
+
+  try
+    {
+    while (!m_pDoc->m_QueuedCommandsList.IsEmpty ())
+      {
+      // A restored rate applies after the commands covered by the flush.
+      if (!m_bDrainQueue && bSentDelayedCommand && m_nCommandsToDrain == 0)
+        break;
+
+      CString strCommand = m_pDoc->m_QueuedCommandsList.RemoveHead ();
+      if (m_nCommandsToDrain > 0)
+        --m_nCommandsToDrain;
+
+      unsigned char cQueueFlags = (unsigned char) strCommand [0];
+      bool bSuppressPluginSend =
+        (cQueueFlags & QUEUE_SUPPRESS_PLUGIN_SEND) != 0;
+      char cMessageType =
+        (char) (cQueueFlags & ~QUEUE_SUPPRESS_PLUGIN_SEND);
+      bool bEcho = toupper ((unsigned char) cMessageType) == QUEUE_WITH_ECHO ||
+                   toupper ((unsigned char) cMessageType) == IMMEDIATE_WITH_ECHO;
+      bool bLog = cMessageType == QUEUE_WITH_ECHO ||
+                  cMessageType == QUEUE_WITHOUT_ECHO ||
+                  cMessageType == IMMEDIATE_WITH_ECHO ||
+                  cMessageType == IMMEDIATE_WITHOUT_ECHO;
+
+      if (toupper ((unsigned char) cMessageType) == QUEUE_WITH_ECHO ||
+          toupper ((unsigned char) cMessageType) == QUEUE_WITHOUT_ECHO)
+        bSentDelayedCommand = true;
+
+      if (bSuppressPluginSend)
+        {
+        CBoolStateGuard processingGuard
+          (m_pDoc->m_bPluginProcessingSend, true);
+        m_pDoc->DoSendMsg (strCommand.Mid (1), bEcho, bLog);
+        }
+      else
+        m_pDoc->DoSendMsg (strCommand.Mid (1), bEcho, bLog);
+
+      }
+    }
+  catch (...)
+    {
+    m_bProcessingQueue = false;
+    if ((m_bDrainQueue || m_nCommandsToDrain > 0) &&
+        !m_pDoc->m_QueuedCommandsList.IsEmpty () && !m_iTimer)
+      m_iTimer = SetTimer (COMMAND_QUEUE_TIMER_ID,
+                           MAX ((int) m_pDoc->m_iSpeedWalkDelay, 1), NULL);
+    throw;
+    }
+
+  m_bProcessingQueue = false;
+  m_bDrainQueue = false;
+  m_nCommandsToDrain = 0;
   m_pDoc->ShowQueuedCommands ();    // update status line
 }
 
@@ -82,28 +149,19 @@ void CTimerWnd::ChangeTimerRate (const int iRate)
 
   // get rid of old timer
   if (m_iTimer)
-      KillTimer (m_iTimer);
+    {
+    KillTimer (m_iTimer);
+    m_iTimer = 0;
+    }
 
   // if zero, no timer wanted
   if (iNewRate)
-    m_iTimer = SetTimer(COMMAND_QUEUE_TIMER_ID, iNewRate, NULL); 
-  else
     {
-
-    // if no delay any more, send all outstanding lines
-    while (!m_pDoc->m_QueuedCommandsList.IsEmpty ())
-      {
-      CString strCommand = m_pDoc->m_QueuedCommandsList.RemoveHead ();
-  
-      char cMessageType = strCommand [0];
-     
-      m_pDoc->DoSendMsg (strCommand.Mid (1), 
-                         cMessageType == QUEUE_WITH_ECHO ||
-                         cMessageType == IMMEDIATE_WITH_ECHO,
-                         cMessageType >= 'A');  // log flag
-      }   // end of sending all lines
-
+    m_bDrainQueue = false;
+    m_iTimer = SetTimer(COMMAND_QUEUE_TIMER_ID, iNewRate, NULL);
     }
+  else
+    DrainQueue (false);
 
   }  // end of ChangeTimerRate
 
