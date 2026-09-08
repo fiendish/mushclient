@@ -223,7 +223,6 @@ OneShotItemMap AliasList;
     CPreparedAliasDeletion () : iOldArraySize (0), bArrayPrepared (false) { }
     set<CAlias *> aliasesToDelete;
     vector<CAlias *> newAliasArray;
-    CAliasRevMap newAliasRevMap;
     int iOldArraySize;
     bool bArrayPrepared;
     };
@@ -241,7 +240,6 @@ OneShotItemMap AliasList;
       prepared.aliasesToDelete.insert (alias_it->second);
     prepared.iOldArraySize = GetAliasArray ().GetSize ();
     BuildAliasIndexes (prepared.newAliasArray,
-                       prepared.newAliasRevMap,
                        &prepared.aliasesToDelete);
     }
 
@@ -283,7 +281,6 @@ OneShotItemMap AliasList;
     GetAliasArray ().SetSize (prepared.newAliasArray.size ());
     for (size_t i = 0; i < prepared.newAliasArray.size (); i++)
       GetAliasArray ().SetAt (i, prepared.newAliasArray [i]);
-    GetAliasRevMap ().swap (prepared.newAliasRevMap);
     }
 
   for (map<CPlugin *, AliasDeletionMap>::iterator plugin_it =
@@ -644,7 +641,8 @@ static void PublishLoadedSet (
     if (stagedMap.Lookup (strName, pReplacement))
       continue;
     removedObjects.push_back (make_pair (strName, pObject));
-    excludedObjects.insert (pObject);
+    if (sortObjects)
+      excludedObjects.insert (pObject);
     }
 
   size_t iApplied = 0;
@@ -654,7 +652,8 @@ static void PublishLoadedSet (
       liveMap.SetAt (changes [iApplied].strName, changes [iApplied].pNew);
 
     // Build all runtime indexes while removed objects are still recoverable.
-    (pDoc->*sortObjects) (&excludedObjects);
+    if (sortObjects)
+      (pDoc->*sortObjects) (&excludedObjects);
     }
   catch (...)
     {
@@ -769,12 +768,9 @@ std::unique_ptr<CFile> f;
 std::unique_ptr<CArchive> ar;
 COwnedSetMap<CTrigger, CTriggerMap> stagedTriggers;
 CTriggerArray stagedTriggerArray;
-CTriggerRevMap stagedTriggerRevMap;
 COwnedSetMap<CAlias, CAliasMap> stagedAliases;
 CAliasArray stagedAliasArray;
-CAliasRevMap stagedAliasRevMap;
 COwnedSetMap<CTimer, CTimerMap> stagedTimers;
-CTimerRevMap stagedTimerRevMap;
 const bool bStagedReplacement = replace &&
   (set_type == TRIGGER || set_type == ALIAS || set_type == TIMER);
 bool bStagedReplacementPublished = false;
@@ -803,7 +799,6 @@ bool bStagedReplacementPublished = false;
               CXMLLoadContext loadContext (this);
               loadContext.pTriggerMap = &stagedTriggers.map;
               loadContext.pTriggerArray = &stagedTriggerArray;
-              loadContext.pTriggerRevMap = &stagedTriggerRevMap;
               Load_World_XML (*ar,
                 XML_TRIGGERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY,
                 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &loadContext);
@@ -839,7 +834,6 @@ bool bStagedReplacementPublished = false;
               CXMLLoadContext loadContext (this);
               loadContext.pAliasMap = &stagedAliases.map;
               loadContext.pAliasArray = &stagedAliasArray;
-              loadContext.pAliasRevMap = &stagedAliasRevMap;
               Load_World_XML (*ar,
                 XML_ALIASES | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY,
                 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &loadContext);
@@ -882,14 +876,13 @@ bool bStagedReplacementPublished = false;
               {
               CXMLLoadContext loadContext (this);
               loadContext.pTimerMap = &stagedTimers.map;
-              loadContext.pTimerRevMap = &stagedTimerRevMap;
               Load_World_XML (*ar,
                 XML_TIMERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY,
                 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &loadContext);
               PublishLoadedSet<CTimer> (this,
                                         m_TimerMap,
                                         stagedTimers.map,
-                                        &CMUSHclientDoc::SortTimers,
+                                        NULL,
                                         &CMUSHclientDoc::RetireTimer);
               bStagedReplacementPublished = true;
               bNotifyPluginListChanged = EndPluginListChangedDeferral ();

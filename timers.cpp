@@ -280,9 +280,6 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     if (timer_item->nCreationNumber == iFiredTimerCreationNumber &&
         timer_item->bOneShot)
       {
-      set<CTimer *> timersToDelete;
-      timersToDelete.insert (timer_item);
-      SortTimers (&timersToDelete);
       VERIFY (TimerMap.RemoveKey (strTimerName));
       delete timer_item;
       }
@@ -416,36 +413,3 @@ void CMUSHclientDoc::OnUpdateGameResetalltimers(CCmdUI* pCmdUI)
   DoFixMenus (pCmdUI);  // remove accelerators from menus
   pCmdUI->Enable (!m_TimerMap.IsEmpty ());
 }
-
-
-void CMUSHclientDoc::BuildTimerIndex (
-  CTimerRevMap & timerRevMap,
-  const set<CTimer *> * pExclude,
-  CTimerMap * pObjectMap)
-  {
-CTimerMap & objectMap = pObjectMap ? *pObjectMap : GetTimerMap ();
-
-CString strTimerName;
-CTimer * pTimer;
-POSITION pos;
-
-  // extract pointers into a simple array
-  for (pos = objectMap.GetStartPosition(); pos; )
-    {
-     objectMap.GetNextAssoc (pos, strTimerName, pTimer);
-     if (pExclude && pExclude->find (pTimer) != pExclude->end ())
-       continue;
-     timerRevMap [pTimer] = strTimerName;
-    }
-  }
-
-void  CMUSHclientDoc::SortTimers (const set<CTimer *> * pExclude)
-  {
-  CTimerRevMap newTimerRevMap;
-  BuildTimerIndex (newTimerRevMap, pExclude);
-
-  GetTimerRevMap ().swap (newTimerRevMap);
-
-  } // end of CMUSHclientDoc::SortTimers
-
-

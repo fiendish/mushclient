@@ -12,12 +12,9 @@
 CXMLLoadContext::CXMLLoadContext (CMUSHclientDoc * pDoc) :
   pAliasMap (&pDoc->GetAliasMap ()),
   pAliasArray (&pDoc->GetAliasArray ()),
-  pAliasRevMap (&pDoc->GetAliasRevMap ()),
   pTriggerMap (&pDoc->GetTriggerMap ()),
   pTriggerArray (&pDoc->GetTriggerArray ()),
-  pTriggerRevMap (&pDoc->GetTriggerRevMap ()),
-  pTimerMap (&pDoc->GetTimerMap ()),
-  pTimerRevMap (&pDoc->GetTimerRevMap ())
+  pTimerMap (&pDoc->GetTimerMap ())
   {}
 
 template <class T>
@@ -90,7 +87,6 @@ static void PrepareAndPublishXMLLoadRollback (
     it->bRollbackOwnsNew = false;
 
   vector<CTrigger *> triggerArray;
-  CTriggerRevMap triggerRevMap;
   triggerArray.reserve (objectMap.GetCount ());
   CString strName;
   CTrigger * pTrigger;
@@ -101,7 +97,6 @@ static void PrepareAndPublishXMLLoadRollback (
     if (!pTrigger)
       continue;
     triggerArray.push_back (pTrigger);
-    triggerRevMap [pTrigger] = strName;
     }
   if (triggerArray.size () > 1)
     qsort (&triggerArray [0], triggerArray.size (),
@@ -115,7 +110,6 @@ static void PrepareAndPublishXMLLoadRollback (
   context.pTriggerArray->SetSize (triggerArray.size ());
   for (size_t i = 0; i < triggerArray.size (); i++)
     context.pTriggerArray->SetAt (i, triggerArray [i]);
-  context.pTriggerRevMap->swap (triggerRevMap);
   }
 
 static void PrepareAndPublishXMLLoadRollback (
@@ -128,7 +122,6 @@ static void PrepareAndPublishXMLLoadRollback (
     it->bRollbackOwnsNew = false;
 
   vector<CAlias *> aliasArray;
-  CAliasRevMap aliasRevMap;
   aliasArray.reserve (objectMap.GetCount ());
   CString strName;
   CAlias * pAlias;
@@ -139,7 +132,6 @@ static void PrepareAndPublishXMLLoadRollback (
     if (!pAlias)
       continue;
     aliasArray.push_back (pAlias);
-    aliasRevMap [pAlias] = strName;
     }
   if (aliasArray.size () > 1)
     qsort (&aliasArray [0], aliasArray.size (),
@@ -153,11 +145,10 @@ static void PrepareAndPublishXMLLoadRollback (
   context.pAliasArray->SetSize (aliasArray.size ());
   for (size_t i = 0; i < aliasArray.size (); i++)
     context.pAliasArray->SetAt (i, aliasArray [i]);
-  context.pAliasRevMap->swap (aliasRevMap);
   }
 
 static void PrepareAndPublishXMLLoadRollback (
-  CXMLLoadContext & context,
+  CXMLLoadContext &,
   CTimerMap & objectMap,
   vector<CXMLLoadChange<CTimer> > & changes)
   {
@@ -165,19 +156,15 @@ static void PrepareAndPublishXMLLoadRollback (
        it != changes.end (); ++it)
     it->bRollbackOwnsNew = false;
 
-  CTimerRevMap timerRevMap;
   CString strName;
   CTimer * pTimer;
   for (POSITION pos = objectMap.GetStartPosition (); pos; )
     {
     objectMap.GetNextAssoc (pos, strName, pTimer);
-    pTimer = SimulateXMLLoadRollback (strName, pTimer, changes);
-    if (pTimer)
-      timerRevMap [pTimer] = strName;
+    SimulateXMLLoadRollback (strName, pTimer, changes);
     }
 
   ApplyXMLLoadMapRollback (objectMap, changes);
-  context.pTimerRevMap->swap (timerRevMap);
   }
 
 template <class T>
@@ -222,7 +209,6 @@ static void PublishXMLLoadRollbackWithoutAllocation (
            sizeof (CTrigger *), CompareXMLRollbackTrigger);
 
   ApplyXMLLoadMapRollback (objectMap, changes);
-  context.pTriggerRevMap->clear ();
   }
 
 static void PublishXMLLoadRollbackWithoutAllocation (
@@ -256,7 +242,6 @@ static void PublishXMLLoadRollbackWithoutAllocation (
            sizeof (CAlias *), CompareXMLRollbackAlias);
 
   ApplyXMLLoadMapRollback (objectMap, changes);
-  context.pAliasRevMap->clear ();
   }
 
 static void PublishXMLLoadRollbackWithoutAllocation (
@@ -264,16 +249,7 @@ static void PublishXMLLoadRollbackWithoutAllocation (
   CTimerMap & objectMap,
   vector<CXMLLoadChange<CTimer> > & changes)
   {
-  ResetXMLLoadRollbackDecisions (changes);
-  CString strName;
-  CTimer * pTimer;
-  for (POSITION pos = objectMap.GetStartPosition (); pos; )
-    {
-    objectMap.GetNextAssoc (pos, strName, pTimer);
-    SimulateXMLLoadRollback (strName, pTimer, changes);
-    }
-  ApplyXMLLoadMapRollback (objectMap, changes);
-  context.pTimerRevMap->clear ();
+  PrepareAndPublishXMLLoadRollback (context, objectMap, changes);
   }
 
 template <class T, class TMap>
@@ -1543,12 +1519,10 @@ UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent,
   END_LOAD_LOOP;
 
   vector<CTrigger *> triggerArray;
-  CTriggerRevMap triggerRevMap;
-  BuildTriggerIndexes (triggerArray, triggerRevMap, NULL, &objectMap);
+  BuildTriggerIndexes (triggerArray, NULL, &objectMap);
   context.pTriggerArray->SetSize (triggerArray.size ());
   for (size_t i = 0; i < triggerArray.size (); i++)
     context.pTriggerArray->SetAt (i, triggerArray [i]);
-  context.pTriggerRevMap->swap (triggerRevMap);
     }
   catch (...)
     {
@@ -1838,12 +1812,10 @@ CXMLLoadChangeGuard<CAlias, CAliasMap> changeGuard
   END_LOAD_LOOP;
 
   vector<CAlias *> aliasArray;
-  CAliasRevMap aliasRevMap;
-  BuildAliasIndexes (aliasArray, aliasRevMap, NULL, &objectMap);
+  BuildAliasIndexes (aliasArray, NULL, &objectMap);
   context.pAliasArray->SetSize (aliasArray.size ());
   for (size_t i = 0; i < aliasArray.size (); i++)
     context.pAliasArray->SetAt (i, aliasArray [i]);
-  context.pAliasRevMap->swap (aliasRevMap);
     }
   catch (...)
     {
@@ -2111,9 +2083,6 @@ CXMLLoadChangeGuard<CTimer, CTimerMap> changeGuard
 
   END_LOAD_LOOP;
 
-  CTimerRevMap timerRevMap;
-  BuildTimerIndex (timerRevMap, NULL, &objectMap);
-  context.pTimerRevMap->swap (timerRevMap);
     }
   catch (...)
     {

@@ -226,20 +226,6 @@ bool bReplace = false;
   GetTimerMap ().SetAt (strTimerName, timer_item);
   new_timer_item.release ();
 
-  try
-    {
-    SortTimers ();
-    }
-  catch (...)
-    {
-    if (old_timer_item)
-      GetTimerMap ().SetAt (strTimerName, old_timer_item);
-    else
-      GetTimerMap ().RemoveKey (strTimerName);
-    delete timer_item;
-    throw;
-    }
-
   RetireTimer (old_timer_item);
 
   if ((Flags & eTemporary) == 0)
@@ -264,9 +250,6 @@ CTimer * timer_item;
   if (timer_item->bExecutingScript)
     return eItemInUse;
 
-  set<CTimer *> timersToDelete;
-  timersToDelete.insert (timer_item);
-  SortTimers (&timersToDelete);
   VERIFY (GetTimerMap ().RemoveKey (strTimerName));
   delete timer_item;
 
@@ -523,20 +506,6 @@ CString strTimerName;
   GetTimerMap ().SetAt (strTimerName, timer_item);
   new_timer_item.release ();
 
-  try
-    {
-    SortTimers ();
-    }
-  catch (...)
-    {
-    if (old_timer_item)
-      GetTimerMap ().SetAt (strTimerName, old_timer_item);
-    else
-      GetTimerMap ().RemoveKey (strTimerName);
-    delete timer_item;
-    throw;
-    }
-
   RetireTimer (old_timer_item);
 
 	return eOK;
@@ -576,7 +545,6 @@ POSITION pos;
 CString strTimerName;
 CTimer * timer_item;
 vector<pair<string, CTimer *> > timersToDelete;
-set<CTimer *> excludedTimers;
 
   for (pos = GetTimerMap ().GetStartPosition(); pos; )
     {
@@ -584,13 +552,11 @@ set<CTimer *> excludedTimers;
     if (timer_item->bTemporary && !timer_item->bExecutingScript)
       {
       timersToDelete.push_back (make_pair (string ((LPCTSTR) strTimerName), timer_item));
-      excludedTimers.insert (timer_item);
       }
     }   // end of deleting timers
 
   if (!timersToDelete.empty ())
     {
-    SortTimers (&excludedTimers);
     for (vector<pair<string, CTimer *> >::const_iterator it = timersToDelete.begin ();
          it != timersToDelete.end ();
          ++it)
@@ -646,7 +612,6 @@ long CMUSHclientDoc::DeleteTimerGroup(LPCTSTR GroupName)
     return 0;
 
   vector<pair<string, CTimer *> > vToDelete;
-  set<CTimer *> excludedTimers;
 
   // count timers
   for (pos = GetTimerMap ().GetStartPosition(); pos; )
@@ -661,13 +626,11 @@ long CMUSHclientDoc::DeleteTimerGroup(LPCTSTR GroupName)
 
       // remember to delete from timer map
       vToDelete.push_back (make_pair (string ((LPCTSTR) strTimerName), timer_item));
-      excludedTimers.insert (timer_item);
       }
     }   // end of timers
 
   if (!vToDelete.empty ())
     {
-    SortTimers (&excludedTimers);
     for (vector<pair<string, CTimer *> >::const_iterator it = vToDelete.begin ();
          it != vToDelete.end ();
          ++it)

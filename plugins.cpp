@@ -1388,20 +1388,13 @@ void CMUSHclientDoc::OnFilePluginwizard()
 
       // Build every replacement index before changing a live index or map.
       vector<CTrigger *> newTriggerArray;
-      CTriggerRevMap newTriggerRevMap;
       vector<CAlias *> newAliasArray;
-      CAliasRevMap newAliasRevMap;
-      CTimerRevMap newTimerRevMap;
       if (!triggersToDelete.empty ())
         BuildTriggerIndexes (newTriggerArray,
-                             newTriggerRevMap,
                              &triggersToDelete);
       if (!aliasesToDelete.empty ())
         BuildAliasIndexes (newAliasArray,
-                           newAliasRevMap,
                            &aliasesToDelete);
-      if (!timersToDelete.empty ())
-        BuildTimerIndex (newTimerRevMap, &timersToDelete);
 
       // Grow both live arrays before publishing either replacement. Shrinking
       // after this point does not allocate.
@@ -1438,17 +1431,13 @@ void CMUSHclientDoc::OnFilePluginwizard()
         m_TriggerArray.SetSize (newTriggerArray.size ());
         for (size_t i = 0; i < newTriggerArray.size (); i++)
           m_TriggerArray.SetAt (i, newTriggerArray [i]);
-        m_TriggerRevMap.swap (newTriggerRevMap);
         }
       if (!aliasesToDelete.empty ())
         {
         m_AliasArray.SetSize (newAliasArray.size ());
         for (size_t i = 0; i < newAliasArray.size (); i++)
           m_AliasArray.SetAt (i, newAliasArray [i]);
-        m_AliasRevMap.swap (newAliasRevMap);
         }
-      if (!timersToDelete.empty ())
-        m_TimerRevMap.swap (newTimerRevMap);
 
       if (!triggersToDelete.empty ())
         {

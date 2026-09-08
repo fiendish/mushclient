@@ -74,12 +74,9 @@ struct CXMLLoadContext
   explicit CXMLLoadContext (CMUSHclientDoc * pDoc);
   CAliasMap * pAliasMap;
   CAliasArray * pAliasArray;
-  CAliasRevMap * pAliasRevMap;
   CTriggerMap * pTriggerMap;
   CTriggerArray * pTriggerArray;
-  CTriggerRevMap * pTriggerRevMap;
   CTimerMap * pTimerMap;
-  CTimerRevMap * pTimerRevMap;
   };
 
 template <class T>
@@ -731,14 +728,11 @@ public:
 
   CAliasMap m_AliasMap;
   CAliasArray m_AliasArray;       // array of aliases for sequencing
-  CAliasRevMap m_AliasRevMap;     // for getting name back from pointer
   CAlias * m_pRetiredAliases;  // replaced while their script was active
   CTriggerMap m_TriggerMap;       
   CTriggerArray m_TriggerArray;   // array of triggers for sequencing
-  CTriggerRevMap m_TriggerRevMap; // for getting name back from pointer
   CTrigger * m_pRetiredTriggers;  // replaced while their script was active
   CTimerMap m_TimerMap;
-  CTimerRevMap m_TimerRevMap;     // for getting name back from pointer
   CTimer * m_pRetiredTimers;  // replaced while their script was active
 
 
@@ -1870,20 +1864,13 @@ public:
   // set up trigger array after adding a trigger or two
   void SortTriggers (const set<CTrigger *> * pExclude = NULL);
   void BuildTriggerIndexes (vector<CTrigger *> & triggerArray,
-                            CTriggerRevMap & triggerRevMap,
                             const set<CTrigger *> * pExclude = NULL,
                             CTriggerMap * pObjectMap = NULL);
   // set up alias array after adding an alias or two
   void SortAliases (const set<CAlias *> * pExclude = NULL);
   void BuildAliasIndexes (vector<CAlias *> & aliasArray,
-                          CAliasRevMap & aliasRevMap,
                           const set<CAlias *> * pExclude = NULL,
                           CAliasMap * pObjectMap = NULL);
-  // set up timer reverse map after adding timers
-  void SortTimers (const set<CTimer *> * pExclude = NULL);
-  void BuildTimerIndex (CTimerRevMap & timerRevMap,
-                        const set<CTimer *> * pExclude = NULL,
-                        CTimerMap * pObjectMap = NULL);
   void RetireAlias (CAlias * pAlias);
   void RetireTrigger (CTrigger * pTrigger);
   void RetireTimer (CTimer * pTimer);
@@ -2283,14 +2270,6 @@ public:
       return m_TriggerArray;
     };
 
-  CTriggerRevMap & GetTriggerRevMap (void)
-    {
-    if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_TriggerRevMap;
-    else
-      return m_TriggerRevMap;
-    };
-
   CAliasMap & GetAliasMap (void)
     {
     if (m_CurrentPlugin)
@@ -2307,28 +2286,12 @@ public:
       return m_AliasArray;
     };
 
-  CAliasRevMap & GetAliasRevMap (void)
-    {
-    if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_AliasRevMap;
-    else
-      return m_AliasRevMap;
-    };
-
   CTimerMap & GetTimerMap (void)
     {
     if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TimerMap;
     else
       return m_TimerMap;
-    };
-
-  CTimerRevMap & GetTimerRevMap (void)
-    {
-    if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_TimerRevMap;
-    else
-      return m_TimerRevMap;
     };
 
   CVariableMap & GetVariableMap (void)
