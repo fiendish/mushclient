@@ -698,12 +698,16 @@ bool CTextView::SetText(const char * sText)
     {
     int nLen = strlen (sText);
 
-	  LPVOID hText = LocalAlloc(LMEM_MOVEABLE, (nLen+1)*sizeof(TCHAR));
+	  HLOCAL hText = LocalAlloc(LMEM_MOVEABLE, (nLen+1)*sizeof(TCHAR));
 	  if (hText == NULL)
 		  AfxThrowMemoryException();
 
 	  LPTSTR lpszText = (LPTSTR)LocalLock(hText);
-	  ASSERT(lpszText != NULL);
+	  if (lpszText == NULL)
+      {
+      LocalFree (hText);
+      AfxThrowMemoryException ();
+      }
 
     strcpy (lpszText, sText);
 
