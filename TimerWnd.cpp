@@ -81,7 +81,10 @@ void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
         (char) (cQueueFlags & ~QUEUE_SUPPRESS_PLUGIN_SEND);
       bool bEcho = toupper ((unsigned char) cMessageType) == QUEUE_WITH_ECHO ||
                    toupper ((unsigned char) cMessageType) == IMMEDIATE_WITH_ECHO;
-      bool bLog = cMessageType >= 'A';
+      bool bLog = cMessageType == QUEUE_WITH_ECHO ||
+                  cMessageType == QUEUE_WITHOUT_ECHO ||
+                  cMessageType == IMMEDIATE_WITH_ECHO ||
+                  cMessageType == IMMEDIATE_WITHOUT_ECHO;
 
       if (bSuppressPluginSend)
         {
