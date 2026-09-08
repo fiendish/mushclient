@@ -367,6 +367,8 @@ void FixFont (ptrCFont & pFont,
 
 // for escaping out things like \r in a trigger
 CString FixupEscapeSequences (const CString & strSource);
+void SetFileDialogFileName (CFileDialog & dialog, CString & buffer,
+                            const CString & initialName);
 
 template <class T>
 class CValueStateGuard

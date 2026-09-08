@@ -341,7 +341,7 @@ void CTextDocument::OnFileOpen()
                  NULL);        // parent window
 
 	dlgFile.m_ofn.lpstrTitle = title;
-	dlgFile.m_ofn.lpstrFile = fileName.GetBuffer(_MAX_PATH);
+	SetFileDialogFileName (dlgFile, fileName, "");
   ChangeToFileBrowsingDirectory ();
 	int nResult = dlgFile.DoModal();
   ChangeToStartupDirectory ();
