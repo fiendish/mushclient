@@ -570,11 +570,14 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
 
   CMiniWindow * mw = it->second;
 
+  // Callbacks can delete this window before the recursion guard returns.
+  std::shared_ptr<bool> addingHotspot = mw->m_pAddingHotspot;
+
   // don't recurse into infinite loops
-  if (mw->m_bAddingHotspot)
+  if (*addingHotspot)
     return eItemInUse;
 
-  CBoolStateGuard addingHotspotGuard (mw->m_bAddingHotspot, true);
+  CBoolStateGuard addingHotspotGuard (*addingHotspot, true);
 
   string sPluginID;
 
