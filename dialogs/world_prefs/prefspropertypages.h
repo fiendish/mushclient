@@ -25,6 +25,7 @@ public:
 
 	CStaticLink	m_MudListLink;
 	CStaticLink	m_BugReportLink;
+  CButton m_ctlUseSSL;
 
   CString m_strProxyUserName;
   CString m_strProxyPassword;
