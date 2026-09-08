@@ -3346,8 +3346,19 @@ void ChangeToFileBrowsingDirectory ()
   {
 
   if (_chdir(file_browsing_dir) != 0)
-    AfxThrowFileException (CFileException::genericException, errno,
-                           file_browsing_dir);
+    {
+    int iError = errno;
+    char strFailedDirectory [_MAX_PATH];
+    strcpy (strFailedDirectory, file_browsing_dir);
+
+    // Keep the error visible, but use a valid directory on the next attempt.
+    if (_chdir (working_dir) != 0)
+      AfxThrowFileException (CFileException::genericException, errno,
+                             working_dir);
+    strcpy (file_browsing_dir, working_dir);
+    AfxThrowFileException (CFileException::genericException, iError,
+                           strFailedDirectory);
+    }
 
   }  // end of ChangeToFileBrowsingDirectory
 
