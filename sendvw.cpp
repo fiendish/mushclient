@@ -273,6 +273,7 @@ CSendView::CSendView()
 {
   m_HistoryPosition = NULL;
   m_inputcount = 0;
+  m_iHistoryDiscarded = 0;
   m_pHistoryFindInfo->m_strTitle = "Find in command history...";
   m_iHistoryStatus = eAtBottom;
   m_backbr = NULL;
@@ -2160,6 +2161,7 @@ void CSendView::OnDisplayClearCommandHistory()
                     return;
 
   // OK, do it ...
+  m_iHistoryDiscarded += m_msgList.GetCount ();
 	m_msgList.RemoveAll ();
   m_HistoryPosition = NULL;
   m_iHistoryStatus = eAtBottom;
@@ -2439,6 +2441,7 @@ ASSERT_VALID(pDoc);
       if (m_pHistoryFindInfo->m_pFindPosition == oldHead)
         m_pHistoryFindInfo->m_pFindPosition = NULL;
       m_msgList.RemoveHead ();   // keep max of "m_nHistoryLines" previous commands
+      ++m_iHistoryDiscarded;
       m_pHistoryFindInfo->m_nCurrentLine--;     // adjust for a "find again"
       if (m_pHistoryFindInfo->m_nCurrentLine < 0)
         m_pHistoryFindInfo->m_nCurrentLine = 0;
