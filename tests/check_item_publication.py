@@ -1,0 +1,232 @@
+"""Compile source excerpts for XML staging and set publication.
+Run with Python 3 and clang++. MFC collections and XML tokenization are
+substitutes. The source supplies index builders, rollback, and publication.
+"""
+from pathlib import Path
+import subprocess, os, json
+ROOT=Path(__file__).resolve().parents[1]
+OUT=ROOT/'.test-output/item-publication'
+OUT.mkdir(parents=True,exist_ok=True)
+xml=(ROOT/'xml/xml_load_world.cpp').read_text(); doc=(ROOT/'doc.cpp').read_text(); hdr=(ROOT/'doc.h').read_text(); timers=(ROOT/'timers.cpp').read_text()
+def block(text,start):
+ b=text.index(start); i=text.index('{',b); depth=0
+ for e in range(i,len(text)):
+  depth+=(text[e]=='{')-(text[e]=='}')
+  if depth==0:return text[b:e+1]
+ raise ValueError(start)
+fields=['AliasMap','AliasArray','TriggerMap','TriggerArray','TimerMap']
+program=r'''
+#include <cassert>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <cstdlib>
+#include <iterator>
+using namespace std;
+using CString=string; using POSITION=size_t; using UINT=unsigned int;
+#define __int64 long long
+#define ASSERT assert
+const int XML_OVERWRITE=1;
+struct CException {};
+struct Counter { long long n=1; long long GetUniqueNumber() {return n++;} } App;
+void ThrowErrorException(const char*,const CString&) { throw runtime_error("duplicate label"); }
+template<int N> struct Item {
+ bool bExecutingScript=false; Item* pNextRetired=nullptr;
+ long long nCreationNumber=0,nUpdateNumber=0;
+ int iSequence=0; CString name,trigger,strInternalName;
+};
+using CAlias=Item<0>; using CTrigger=Item<1>; using CTimer=Item<2>;
+template<class T> struct ItemMap {
+ map<CString,T*> items;
+ int setsUntilFailure=-1;
+ bool Lookup(const CString& key,T*& result) {auto i=items.find(key);if(i==items.end())return false;result=i->second;return true;}
+ void SetAt(const CString& key,T* value) {if(setsUntilFailure==0){setsUntilFailure=-1;throw bad_alloc();}if(setsUntilFailure>0)--setsUntilFailure;items[key]=value;}
+ void RemoveKey(const CString& key) {items.erase(key);}
+ void RemoveAll() {items.clear();}
+ size_t GetCount() {return items.size();}
+ POSITION GetStartPosition() {return items.empty()?0:1;}
+ void GetNextAssoc(POSITION& pos,CString& key,T*& value) {auto i=items.begin();advance(i,pos-1);key=i->first;value=i->second;pos=pos<items.size()?pos+1:0;}
+};
+template<class T> struct ItemArray {
+ vector<T*> items;
+ bool failGrowth=false;
+ void SetSize(size_t size) {if(failGrowth && size>items.size()){failGrowth=false;throw bad_alloc();}items.resize(size);}
+ size_t GetSize() {return items.size();}
+ void SetAt(size_t i,T* value) {items.at(i)=value;}
+ T*& operator[](size_t i) {return items.at(i);}
+};
+using CAliasMap=ItemMap<CAlias>;using CTriggerMap=ItemMap<CTrigger>;using CTimerMap=ItemMap<CTimer>;
+using CAliasArray=ItemArray<CAlias>;using CTriggerArray=ItemArray<CTrigger>;
+struct CXMLelement { string kind,key; vector<CXMLelement*> children; bool warning=false; };
+#define LOAD_LOOP(parent,type,node) for(auto* node:(parent).children) { if(node->kind==type) {
+#define END_LOAD_LOOP } }
+#define GET_VERSION_AND_DEFAULTS(node) long iVersion=0; bool bUseDefault=false
+class CMUSHclientDoc;
+'''
+program+=block(hdr,'struct CXMLLoadContext')+';\n'
+program+='template <class T>\n'+block(hdr,'struct CXMLLoadChange')+';\n'
+members='\n'.join(f'C{f} m_{f};' for f in fields)
+program+='struct CPlugin { '+members+' };\n'
+program+='struct CMUSHclientDoc {\n'+members+'\nCPlugin* m_CurrentPlugin=nullptr;\n'
+program+='std::function<void()> callback; int warnings=0; void CheckUsed(CXMLelement& node) {if(node.warning){++warnings;callback();}}\n'
+program+='void HandleLoadException(const char*,CException* e) {throw e;} void ResetOneTimer(CTimer*) {}\n'
+for f in fields:program+=block(hdr,f'C{f} & Get{f} (void)')+'\n'
+for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers')]:
+ program+=f'C{kind} *m_pRetired{plural}=nullptr; void Retire{kind}(C{kind}*);\n'
+ for name in [f'Load_{plural}_XML',f'Load_One_{kind}_XML'] + ([] if kind=='Timer' else [f'Build{kind}Indexes',f'Sort{plural}']):
+  idx=hdr.index(' '+name+' ('); start=hdr.rfind('\n',0,idx)+1;end=hdr.index(';',idx)+1
+  program+=hdr[start:end]+'\n'
+program+='};\n'
+# Compile the actual context constructor, rollback helpers, and change guard.
+start=xml.index('CXMLLoadContext::CXMLLoadContext'); end=xml.index('\n/*',start)
+program+=xml[start:end]+'\n'
+for kind,plural,var in [('Alias','Aliases','a'),('Trigger','Triggers','t'),('Timer','Timers','t')]:
+ program+=block(doc,f'void CMUSHclientDoc::Retire{kind} (')+'\n'
+ if kind!='Timer': program+=block(doc,('static int CompareAlias (' if kind=='Alias' else 'int CompareTrigger ('))+'\n'
+ if kind!='Timer':
+  program+=block(doc,f'void CMUSHclientDoc::Build{kind}Indexes (')+'\n'
+  program+=block(doc,f'void  CMUSHclientDoc::Sort{plural} (')+'\n'
+ program+=block(xml,f'UINT CMUSHclientDoc::Load_{plural}_XML (')+'\n'
+ one=block(xml,f'bool CMUSHclientDoc::Load_One_{kind}_XML ('); start=one.index(f'  {var}->nUpdateNumber    = App.GetUniqueNumber ();'); tail=one[start:one.index('  return true;',start)]
+ sig=one[:one.index('{')]
+ program+=sig+f'''{{
+ std::unique_ptr<C{kind}> new{kind}(new C{kind});
+ auto* {var}=new{kind}.get(); CString str{kind}Name=node.key;
+ {tail}
+ return true;
+}}
+'''
+# Extract final set publication too. These helpers have no UI dependencies.
+evaluate=(ROOT/'evaluate.cpp').read_text()
+start=evaluate.index('template <class TObject>\nstruct CSetPublishChange');end=evaluate.index('BOOL CMUSHclientDoc::Load_Set',start)
+# Clang requires typename for this existing MSVC-dependent template statement.
+publication=evaluate[start:end]
+assert publication.count('for (vector<pair<CString, TObject *> >::iterator')==1
+publication=publication.replace('for (vector<pair<CString, TObject *> >::iterator','for (typename vector<pair<CString, TObject *> >::iterator')
+program+=publication+'\n'
+program+='int main() {\n'
+for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers')]:
+ fs=[f for f in fields if f.startswith(kind)]
+ for failure in [False,True]:
+  program+='''{
+ CMUSHclientDoc d; CPlugin plugin;
+ CXMLLoadContext context(&d);
+'''
+  program+='\n'.join(f'C{f} staged{f}; context.p{f}=&staged{f};' for f in fs)+'\n'
+  program+=f'''
+ auto *live=new C{kind}, *local=new C{kind};
+ d.m_{kind}Map.SetAt("x",live); plugin.m_{kind}Map.SetAt("x",local);
+ {'' if kind=='Timer' else f'd.Sort{plural}();'} d.m_CurrentPlugin=&plugin; {'' if kind=='Timer' else f'd.Sort{plural}();'} d.m_CurrentPlugin=nullptr;
+ CXMLelement x{{"{kind.lower()}","x"}},y{{"{kind.lower()}","y"}};
+ CXMLelement section{{"{plural.lower()}","",{{&x,&y}},true}};
+ CXMLelement root{{"root","",{{&section}}}};
+ d.callback=[&] {{
+   // Plugin warning callback deletes its own x, then performs a nested import.
+   d.m_CurrentPlugin=&plugin;
+   C{kind}* old=nullptr; assert(d.Get{kind}Map().Lookup("x",old));
+   d.Get{kind}Map().RemoveKey("x"); delete old; {'' if kind=='Timer' else f'd.Sort{plural}();'}
+   CXMLelement nestedItem{{"{kind.lower()}","nested"}};
+   CXMLelement nestedSection{{"{plural.lower()}","",{{&nestedItem}}}};
+   CXMLelement nestedRoot{{"root","",{{&nestedSection}}}};
+   assert(d.Load_{plural}_XML(nestedRoot,XML_OVERWRITE,0)==1);
+   // A nested world callback changes the live world, not the staged set.
+   d.m_CurrentPlugin=nullptr;
+   assert(d.Get{kind}Map().Lookup("x",old));
+   d.Get{kind}Map().RemoveKey("x"); delete old; {'' if kind=='Timer' else f'd.Sort{plural}();'}
+   assert(d.Load_{plural}_XML(nestedRoot,XML_OVERWRITE,0)==1);
+   {'throw runtime_error("section warning failure");' if failure else ''}
+ }};
+ bool failed=false;
+ try {{ assert(d.Load_{plural}_XML(root,XML_OVERWRITE,0,&context)==2); }}
+ catch(const runtime_error& e) {{ assert(string(e.what())=="section warning failure"); failed=true; }}
+ assert(failed=={str(failure).lower()}); assert(d.warnings==1);
+ assert(plugin.m_{kind}Map.items.count("x")==0 && plugin.m_{kind}Map.items.count("nested")==1);
+ assert(d.m_{kind}Map.items.count("x")==0 && d.m_{kind}Map.items.count("nested")==1);
+ assert(staged{kind}Map.GetCount()=={0 if failure else 2});
+'''
+  if not failure:
+   program+=f'''
+ PublishLoadedSet<C{kind}>(&d,d.m_{kind}Map,staged{kind}Map,{'NULL' if kind=='Timer' else f'&CMUSHclientDoc::Sort{plural}'},&CMUSHclientDoc::Retire{kind});
+ assert(d.m_{kind}Map.GetCount()==2 && d.m_{kind}Map.items.count("x")==1 && d.m_{kind}Map.items.count("y")==1);
+ assert(staged{kind}Map.GetCount()==0);
+'''
+  program+=f'''
+ for(auto &item:d.m_{kind}Map.items) delete item.second;
+ for(auto &item:plugin.m_{kind}Map.items) delete item.second;
+ std::cout<<"{kind}: {'rollback' if failure else 'publication'} with plugin and world warning reentry and nested imports passed\\n";
+}}
+'''
+ # Exercise both rollback implementations against a replacement entry.
+ for fallback in [False,True]:
+  program+='''{ CMUSHclientDoc d; CXMLLoadContext context(&d);
+'''
+  program+='\n'.join(f'C{f} staged{f}; context.p{f}=&staged{f};' for f in fs)+'\n'
+  program+=f'''
+ auto* old=new C{kind}; auto* replacement=new C{kind}; replacement->nCreationNumber=App.GetUniqueNumber();
+ staged{kind}Map.SetAt("x",replacement);
+ vector<CXMLLoadChange<C{kind}>> changes(1);
+ auto& c=changes[0]; c.strName="x"; c.pOld=old;c.pNew=replacement;c.iNewCreationNumber=replacement->nCreationNumber;c.bApplied=true;
+ {'PublishXMLLoadRollbackWithoutAllocation' if fallback else 'PrepareAndPublishXMLLoadRollback'}(context,staged{kind}Map,changes);
+ assert(staged{kind}Map.items.at("x")==old);assert(c.bRollbackOwnsNew);
+ assert(d.m_{kind}Map.GetCount()==0);
+ delete old;delete replacement;
+ std::cout<<"{kind}: {'allocation fallback' if fallback else 'prepared'} rollback keeps explicit targets passed\\n";
+}}
+'''
+
+# Check ordering, excluded objects, and failure before sorted-array publication.
+for kind,plural,match in [('Alias','Aliases','name'),('Trigger','Triggers','trigger')]:
+ program+=f'''
+ {{ CMUSHclientDoc d; C{kind} a,b,c;
+ a.iSequence=2; b.iSequence=c.iSequence=1; b.{match}="z"; c.{match}="a";
+ d.m_{kind}Map.SetAt("a",&a);d.m_{kind}Map.SetAt("b",&b);d.m_{kind}Map.SetAt("c",&c);
+ d.Sort{plural}(); assert(d.m_{kind}Array.items==vector<C{kind}*>({{&c,&b,&a}}));
+ set<C{kind}*> exclude{{&b}}; d.Sort{plural}(&exclude);
+ assert(d.m_{kind}Array.items==vector<C{kind}*>({{&c,&a}}));
+ d.m_{kind}Array.failGrowth=true; bool failed=false;
+ try {{ d.Sort{plural}(); }} catch(const bad_alloc&) {{failed=true;}}
+ assert(failed && d.m_{kind}Array.items==vector<C{kind}*>({{&c,&a}}));
+ cout<<"{kind}: order, exclusion, and array allocation failure passed\\n";
+ }}
+'''
+# Each set publication must restore prior entries if a map insertion fails.
+for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers')]:
+ for failure in [0,1]:
+  program+=f'''
+ {{ CMUSHclientDoc d; C{kind}Map staged; C{kind} old,replacement,added;
+ d.m_{kind}Map.SetAt("x",&old); staged.SetAt("x",&replacement);staged.SetAt("y",&added);
+ {'' if kind=='Timer' else f'd.Sort{plural}();'}
+ d.m_{kind}Map.setsUntilFailure={failure}; bool failed=false;
+ try {{ PublishLoadedSet<C{kind}>(&d,d.m_{kind}Map,staged,{'NULL' if kind=='Timer' else f'&CMUSHclientDoc::Sort{plural}'},&CMUSHclientDoc::Retire{kind}); }}
+ catch(const bad_alloc&) {{failed=true;}}
+ assert(failed && d.m_{kind}Map.GetCount()==1 && d.m_{kind}Map.items.at("x")==&old);
+ assert(staged.GetCount()==2);
+ {'' if kind=='Timer' else f'assert(d.m_{kind}Array.items==vector<C{kind}*>({{&old}}));'}
+ cout<<"{kind}: set publication map failure {failure} passed\\n";
+ }}
+'''
+
+program+='}\n'
+(OUT/'staging_integration.cpp').write_text(program)
+cmd=['/usr/bin/clang++','-std=c++17','-O0','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(OUT/'staging_integration.cpp'),'-o',str(OUT/'staging_integration')]
+subprocess.run(cmd,check=True)
+env=os.environ.copy()
+r=subprocess.run([str(OUT/'staging_integration')],env=env,text=True,capture_output=True)
+(OUT/'staging_integration.log').write_text(r.stdout+r.stderr);print(r.stdout+r.stderr,end='');r.check_returncode()
+# Includes retain targets, while nested callback API imports use the default.
+assert 'piPrinting, bPlugin ? NULL : pLoadContext);' in block(xml,'void CMUSHclientDoc::Load_One_Include_XML')
+assert 'piPrinting, pLoadContext);' in block(xml,'void CMUSHclientDoc::Load_Includes_XML')
+assert block(xml,'UINT CMUSHclientDoc::Load_World_XML').count('piPrinting, pLoadContext);')==2
+for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers')]:
+ one=block(xml,f'bool CMUSHclientDoc::Load_One_{kind}_XML')
+ assert f'Get{kind}Map ()' not in one
+ section=block(xml,f'UINT CMUSHclientDoc::Load_{plural}_XML')
+ assert 'iFlags, changes.back (), objectMap)' in section
+ assert 'objectMap, context, changes' in section
+print('Source contracts: all item parsers, include calls, and rollback guards use explicit targets')
+(OUT/'staging-validation.json').write_text(json.dumps({'result':'pass','command':cmd,'cases':20,'sourceContracts':'pass','limits':'MFC containers and XML tokenization are substitutes. Section loaders, publication tails, indexes, retirement, rollback, and set publication are extracted source.'},indent=2)+'\n')

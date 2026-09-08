@@ -979,7 +979,6 @@ assemble the full text of the original line.
     CPreparedTriggerDeletion () : iOldArraySize (0), bArrayPrepared (false) { }
     set<CTrigger *> triggersToDelete;
     vector<CTrigger *> newTriggerArray;
-    CTriggerRevMap newTriggerRevMap;
     int iOldArraySize;
     bool bArrayPrepared;
     };
@@ -997,7 +996,6 @@ assemble the full text of the original line.
       prepared.triggersToDelete.insert (trigger_it->second);
     prepared.iOldArraySize = GetTriggerArray ().GetSize ();
     BuildTriggerIndexes (prepared.newTriggerArray,
-                         prepared.newTriggerRevMap,
                          &prepared.triggersToDelete);
     }
 
@@ -1039,7 +1037,6 @@ assemble the full text of the original line.
     GetTriggerArray ().SetSize (prepared.newTriggerArray.size ());
     for (size_t i = 0; i < prepared.newTriggerArray.size (); i++)
       GetTriggerArray ().SetAt (i, prepared.newTriggerArray [i]);
-    GetTriggerRevMap ().swap (prepared.newTriggerRevMap);
     }
 
   for (map<CPlugin *, TriggerDeletionMap>::iterator plugin_it =
