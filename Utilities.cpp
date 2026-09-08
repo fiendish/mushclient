@@ -2572,24 +2572,19 @@ CString TranslateGeneric (const char * sText, const char * sSection)
   if (App.m_Translator_Lua == NULL || bInTranslateGeneric)
     return sText;  // no file - just return source text
 
-  bInTranslateGeneric = true;
+  CValueStateGuard<bool> inTranslateGenericGuard (bInTranslateGeneric, true);
 
   lua_settop (App.m_Translator_Lua, 0); // pop everything from last time
 
   lua_getglobal (App.m_Translator_Lua, sSection);
   if (!lua_istable (App.m_Translator_Lua, -1))
-    {
-    bInTranslateGeneric = false;
     return sText;  // no messages table - just return source text
-    }
 
   lua_getfield (App.m_Translator_Lua, -1, sText);
 
   // if we found it, take result
   if (lua_isstring (App.m_Translator_Lua, -1))
     sResult = lua_tostring (App.m_Translator_Lua, -1);
-
-  bInTranslateGeneric = false;
 
   // if string is not empty, use it
   if (sResult [0])
@@ -2625,7 +2620,7 @@ CString TFormat (const char * sFormat, ...)
 
   bool bNotFound = App.m_Translator_Lua == NULL || bInTFormat;
 
-  bInTFormat = true;
+  CValueStateGuard<bool> inTFormatGuard (bInTFormat, true);
 
   if (!bNotFound)
     {
@@ -2808,11 +2803,9 @@ CString TFormat (const char * sFormat, ...)
 	  va_start(argList, sFormat);
 	  strTranslated = CFormat (sFormat, argList);
 	  va_end(argList);
-    bInTFormat = false;
     return strTranslated;
     }
 
-  bInTFormat = false;
   return sResult;
   }    // end of TFormat
 
