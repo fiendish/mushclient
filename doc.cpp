@@ -2200,6 +2200,10 @@ const __int64 iAppendCreationNumber =
   for (p = lpszText; *p; p++)
     {
     c = *p;
+
+retry_character:
+    if (!m_pCurrentLine)
+      return false;
     int iLineLength = m_pCurrentLine->len;
 
     // for Unicode the width of the line is characters, not stored bytes
@@ -2271,6 +2275,10 @@ Unicode range              UTF-8 bytes
         bool bCreatedLine = false;
         if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine))
           return false;
+        // A callback can leave a full continuation line. Recheck its width
+        // and capacity before writing this byte, and keep its output and style.
+        if (!bCreatedLine)
+          goto retry_character;
         if (iAppendCreationNumber && bCreatedLine)
           pTransaction->RecordCreatedLine ();
         }
@@ -2316,6 +2324,10 @@ Unicode range              UTF-8 bytes
               if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
                   pLine->len == last_space)
                 {
+                // The callback may have shrunk the temporarily shortened line.
+                if (pLine->iMemoryAllocated < iOldLineLength)
+                  pLine->ResizeText (iOldLineLength);
+                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
                 pLine->len = iOldLineLength;
                 break;
                 }
@@ -2331,6 +2343,10 @@ Unicode range              UTF-8 bytes
               if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
                   pLine->len == last_space)
                 {
+                // The callback may have shrunk the temporarily shortened line.
+                if (pLine->iMemoryAllocated < iOldLineLength)
+                  pLine->ResizeText (iOldLineLength);
+                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
                 pLine->len = iOldLineLength;
                 break;
                 }
@@ -2348,11 +2364,15 @@ Unicode range              UTF-8 bytes
               if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
                   pLine->len == last_space)
                 {
+                // The callback may have shrunk the temporarily shortened line.
+                if (pLine->iMemoryAllocated < iOldLineLength)
+                  pLine->ResizeText (iOldLineLength);
+                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
                 pLine->len = iOldLineLength;
                 break;
                 }
               }
-            goto add_character;
+            goto retry_character;
             }
 
           if (iAppendCreationNumber)
@@ -2507,6 +2527,8 @@ Unicode range              UTF-8 bytes
           bool bCreatedLine = false;
           if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine))
             return false;
+          if (!bCreatedLine)
+            goto retry_character;
           if (iAppendCreationNumber && bCreatedLine)
             pTransaction->RecordCreatedLine ();
           }  // end saved_count == 0
@@ -2514,7 +2536,6 @@ Unicode range              UTF-8 bytes
         } // end of line wrapping wanted and possible
       }   // end of line being full
 
-add_character:
     ASSERT (m_pCurrentLine->text);
 
     CStyle * pAppendStyle = m_pCurrentLine->styleList.GetTail ();
