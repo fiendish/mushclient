@@ -45,7 +45,7 @@ def main():
         'FINALIZATION': between(start, '  // atomic element?  (looked-up earlier)', '  } // end of CMUSHclientDoc::MXP_StartTag'),
         'SEND_PACKET': between(doc, 'void  CMUSHclientDoc::SendPacket (const char *', 'void  CMUSHclientDoc::SendPacket (const unsigned char *'),
         'REMEMBER_STYLE': between(doc, 'void CMUSHclientDoc::RememberStyle (', 'void CMUSHclientDoc::OnDebugWorldInput'),
-        'PREPARE_STYLE': between(doc, 'void COutputAppendTransaction::MarkCurrentLineStyles ()', 'void COutputAppendTransaction::RecordCreatedLine ()'),
+        'PREPARE_STYLE': between(doc, 'void COutputAppendTransaction::TrackLine (', 'void COutputAppendTransaction::RecordCreatedLine ()'),
         'RESULT_INIT': between(atomic, 'unsigned short iFlags', '// find current foreground'),
         'PACKET_CASES': '\n'.join(packet_cases),
         'BR_CASE': between(atomic, '    case MXP_ACTION_BR:', '          // reset'),

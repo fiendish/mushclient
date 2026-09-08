@@ -100,9 +100,11 @@ struct CMUSHclientDoc;
 struct COutputAppendTransaction {
   CMUSHclientDoc* m_pDoc;
   __int64 m_iAppendCreationNumber=++serial;
+  __int64 m_iFirstAffectedLineCreationNumber=m_iAppendCreationNumber;
   bool committed=false;
-  COutputAppendTransaction(CMUSHclientDoc* d,int):m_pDoc(d){}
+  COutputAppendTransaction(CMUSHclientDoc* d,int);
   void Reserve(size_t) {}
+  void TrackLine(const CLine*);
   void MarkCurrentLineStyles();
   CStyle* PrepareAppendStyle();
   void OwnStyle(CStyle*);
@@ -146,6 +148,7 @@ struct CMUSHclientDoc {
   bool MXP_OpenAtomicTag(CString,int,CStyle*,__int64&,CString&,CString&,CString&,CArgumentList&,__int64,COutputAppendTransaction*,vector<CDeferredMXPMessage>&);
   void Run(bool custom,bool paired,int action,bool followBold=false);
 };
+COutputAppendTransaction::COutputAppendTransaction(CMUSHclientDoc* d,int):m_pDoc(d) { TrackLine(d->m_pCurrentLine); }
 bool COutputAppendTransaction::StartNewLine(bool,int,bool,bool* created) { if(m_pDoc->callback) m_pDoc->callback(); *created=m_pDoc->outputCreatesLine; if(*created) m_pDoc->newLine(); return true; }
 void COutputAppendTransaction::SetListCount(int n) { m_pDoc->m_iListCount=n; }
 @PREPARE_STYLE@
