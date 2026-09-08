@@ -1609,7 +1609,8 @@ int count;
 
 
 bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle (const int flags,
-                                                     bool * pbCreated)
+                                                     bool * pbCreated,
+                                                     const bool bFinishTransition)
   {
   if (pbCreated)
     *pbCreated = false;
@@ -1626,7 +1627,9 @@ bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle (const int flags,
    bool bCreated = false;
    try
      {
-     bStarted = StartNewLine (false, flags, false, &bCreated);
+     bStarted = bFinishTransition ?
+       FinishNewLine (flags, false, &bCreated) :
+       StartNewLine (false, flags, false, &bCreated);
      }
    catch (...)
      {
@@ -1676,8 +1679,10 @@ COutputAppendTransaction::COutputAppendTransaction (
   const size_t iLength) :
   m_pDoc (pDoc),
   m_iAppendCreationNumber (App.GetUniqueNumber ()),
+  m_iFirstAffectedLineCreationNumber (m_iAppendCreationNumber),
   m_bCommitted (false)
   {
+  TrackLine (m_pDoc->m_pCurrentLine);
   Reserve (iLength);
   }
 
@@ -1698,10 +1703,19 @@ void COutputAppendTransaction::Reserve (const size_t iLength)
   m_ListCounts.reserve (m_ListCounts.size () + iLength + 2);
   }
 
+// Line identities increase with tail insertion and survive pruning and style moves.
+// Keep an identity boundary, not a list position or a pointer across callbacks.
+void COutputAppendTransaction::TrackLine (const CLine * pLine)
+  {
+  if (pLine && pLine->nCreationNumber < m_iFirstAffectedLineCreationNumber)
+    m_iFirstAffectedLineCreationNumber = pLine->nCreationNumber;
+  }
+
 void COutputAppendTransaction::MarkCurrentLineStyles ()
   {
   if (!m_pDoc->m_pCurrentLine)
     return;
+  TrackLine (m_pDoc->m_pCurrentLine);
   for (POSITION pos = m_pDoc->m_pCurrentLine->styleList.GetHeadPosition ();
        pos; )
     {
@@ -1713,6 +1727,7 @@ void COutputAppendTransaction::MarkCurrentLineStyles ()
 
 CStyle * COutputAppendTransaction::PrepareAppendStyle ()
   {
+  TrackLine (m_pDoc->m_pCurrentLine);
   CStyle * pStyle = m_pDoc->m_pCurrentLine->styleList.GetTail ();
   if (pStyle->nOutputAppendCreationNumber == m_iAppendCreationNumber &&
       pStyle->iLength == 0)
@@ -1733,6 +1748,30 @@ CStyle * COutputAppendTransaction::PrepareAppendStyle ()
 void COutputAppendTransaction::OwnStyle (CStyle * pStyle)
   {
   ASSERT (pStyle);
+  // Normal append callers own the current tail style. Retain support for callers
+  // that explicitly supply a style in an earlier line or before publication.
+  if (m_pDoc->m_pCurrentLine &&
+      !m_pDoc->m_pCurrentLine->styleList.IsEmpty () &&
+      m_pDoc->m_pCurrentLine->styleList.GetTail () == pStyle)
+    TrackLine (m_pDoc->m_pCurrentLine);
+  else
+    {
+    bool bFound = false;
+    for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition ();
+         linepos && !bFound; )
+      {
+      CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+      for (POSITION stylepos = pLine->styleList.GetTailPosition (); stylepos; )
+        if (pLine->styleList.GetPrev (stylepos) == pStyle)
+          {
+          TrackLine (pLine);
+          bFound = true;
+          break;
+          }
+      }
+    if (!bFound)
+      m_iFirstAffectedLineCreationNumber = 0; // publication location is unknown
+    }
   pStyle->nOutputAppendCreationNumber = m_iAppendCreationNumber;
   }
 
@@ -1754,11 +1793,13 @@ void COutputAppendTransaction::RecordCreatedLine ()
 CLine * COutputAppendTransaction::FindLine (
   const __int64 iLineCreationNumber) const
   {
-  for (POSITION pos = m_pDoc->m_LineList.GetHeadPosition (); pos; )
+  for (POSITION pos = m_pDoc->m_LineList.GetTailPosition (); pos; )
     {
-    CLine * pLine = m_pDoc->m_LineList.GetNext (pos);
+    CLine * pLine = m_pDoc->m_LineList.GetPrev (pos);
     if (pLine->nCreationNumber == iLineCreationNumber)
       return pLine;
+    if (pLine->nCreationNumber < iLineCreationNumber)
+      break;
     }
   return NULL;
   }
@@ -1840,6 +1881,7 @@ size_t COutputAppendTransaction::PrepareWrap (
   CLine * pPreviousLine,
   const int iSplitLength)
   {
+  TrackLine (pPreviousLine);
   CWrapMove wrap;
   wrap.iPreviousLineCreationNumber = pPreviousLine->nCreationNumber;
   wrap.iNewLineCreationNumber = 0;
@@ -2018,9 +2060,11 @@ void COutputAppendTransaction::Commit ()
       }
     }
 
-  for (POSITION linepos = m_pDoc->m_LineList.GetHeadPosition (); linepos; )
+  for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
     {
-    CLine * pLine = m_pDoc->m_LineList.GetNext (linepos);
+    CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+    if (pLine->nCreationNumber < m_iFirstAffectedLineCreationNumber)
+      break;
     for (POSITION stylepos = pLine->styleList.GetHeadPosition (); stylepos; )
       {
       CStyle * pStyle = pLine->styleList.GetNext (stylepos);
@@ -2200,6 +2244,11 @@ const __int64 iAppendCreationNumber =
   for (p = lpszText; *p; p++)
     {
     c = *p;
+    bool bFinishTransition = false;
+
+retry_character:
+    if (!m_pCurrentLine)
+      return false;
     int iLineLength = m_pCurrentLine->len;
 
     // for Unicode the width of the line is characters, not stored bytes
@@ -2269,8 +2318,16 @@ Unicode range              UTF-8 bytes
         (m_pCurrentLine->len - last_space) >= m_nWrapColumn)
         {
         bool bCreatedLine = false;
-        if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine))
+        if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine,
+                                             bFinishTransition))
           return false;
+        // Recheck callback output with the normal word-wrap rules. The active
+        // transition has delivered its callbacks; finish it before this byte.
+        if (!bCreatedLine)
+          {
+          bFinishTransition = true;
+          goto retry_character;
+          }
         if (iAppendCreationNumber && bCreatedLine)
           pTransaction->RecordCreatedLine ();
         }
@@ -2303,10 +2360,9 @@ Unicode range              UTF-8 bytes
           bool bCreatedNewLine = false;
           try
             {
-            bStartedNewLine = StartNewLine (false,
-                                            flags,
-                                            false,
-                                            &bCreatedNewLine);
+            bStartedNewLine = bFinishTransition ?
+              FinishNewLine (flags, false, &bCreatedNewLine) :
+              StartNewLine (false, flags, false, &bCreatedNewLine);
             }
           catch (...)
             {
@@ -2316,6 +2372,10 @@ Unicode range              UTF-8 bytes
               if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
                   pLine->len == last_space)
                 {
+                // The callback may have shrunk the temporarily shortened line.
+                if (pLine->iMemoryAllocated < iOldLineLength)
+                  pLine->ResizeText (iOldLineLength);
+                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
                 pLine->len = iOldLineLength;
                 break;
                 }
@@ -2331,6 +2391,10 @@ Unicode range              UTF-8 bytes
               if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
                   pLine->len == last_space)
                 {
+                // The callback may have shrunk the temporarily shortened line.
+                if (pLine->iMemoryAllocated < iOldLineLength)
+                  pLine->ResizeText (iOldLineLength);
+                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
                 pLine->len = iOldLineLength;
                 break;
                 }
@@ -2348,11 +2412,16 @@ Unicode range              UTF-8 bytes
               if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
                   pLine->len == last_space)
                 {
+                // The callback may have shrunk the temporarily shortened line.
+                if (pLine->iMemoryAllocated < iOldLineLength)
+                  pLine->ResizeText (iOldLineLength);
+                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
                 pLine->len = iOldLineLength;
                 break;
                 }
               }
-            goto add_character;
+            bFinishTransition = true;
+            goto retry_character;
             }
 
           if (iAppendCreationNumber)
@@ -2505,8 +2574,14 @@ Unicode range              UTF-8 bytes
         else  
           {   // saved_count == 0
           bool bCreatedLine = false;
-          if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine))
+          if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine,
+                                             bFinishTransition))
             return false;
+          if (!bCreatedLine)
+            {
+            bFinishTransition = true;
+            goto retry_character;
+            }
           if (iAppendCreationNumber && bCreatedLine)
             pTransaction->RecordCreatedLine ();
           }  // end saved_count == 0
@@ -2514,9 +2589,10 @@ Unicode range              UTF-8 bytes
         } // end of line wrapping wanted and possible
       }   // end of line being full
 
-add_character:
     ASSERT (m_pCurrentLine->text);
 
+    if (pTransaction)
+      pTransaction->TrackLine (m_pCurrentLine);
     CStyle * pAppendStyle = m_pCurrentLine->styleList.GetTail ();
     if (pAppendStyle->nOutputAppendCreationNumber !=
         iAppendCreationNumber)
@@ -3212,8 +3288,6 @@ bool CMUSHclientDoc::StartNewLine (const bool hard_break, const int flags,
                                   const bool bResizePrevious,
                                   bool * pbCreated)
   {
-POSITION pos;
-
   if (pbCreated)
     *pbCreated = false;
 
@@ -3262,6 +3336,19 @@ POSITION pos;
       }
     }
 
+
+  return FinishNewLine (flags, bResizePrevious, pbCreated);
+  } // end of CMUSHclientDoc::StartNewLine
+
+// Complete a line transition after its callbacks and trigger processing.
+// Append reentry uses this phase after recomputing the callback line's wrap.
+bool CMUSHclientDoc::FinishNewLine (const int flags,
+                                   const bool bResizePrevious,
+                                   bool * pbCreated)
+  {
+POSITION pos;
+  if (pbCreated)
+    *pbCreated = false;
 
   // if our buffer is full, remove the JUMP_SIZE items
 
@@ -3409,7 +3496,7 @@ POSITION pos;
 
   return true;
 
-  }   // end of CMUSHclientDoc::StartNewLine
+  }   // end of CMUSHclientDoc::FinishNewLine
 
 const bool CMUSHclientDoc::CheckScriptingAvailable (const char * sWhat,
                                                     const DISPID dispid,
@@ -7026,23 +7113,23 @@ int CompareTrigger (const void * elem1, const void * elem2)
 
 void CMUSHclientDoc::BuildTriggerIndexes (
   vector<CTrigger *> & triggerArray,
-  CTriggerRevMap & triggerRevMap,
-  const set<CTrigger *> * pExclude)
+  const set<CTrigger *> * pExclude,
+  CTriggerMap * pObjectMap)
   {
+CTriggerMap & objectMap = pObjectMap ? *pObjectMap : GetTriggerMap ();
 CString strTriggerName;
 CTrigger * pTrigger;
 POSITION pos;
 
-  triggerArray.reserve (GetTriggerMap ().GetCount ());
+  triggerArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (pos = GetTriggerMap ().GetStartPosition(); pos; )
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetTriggerMap ().GetNextAssoc (pos, strTriggerName, pTrigger);
+     objectMap.GetNextAssoc (pos, strTriggerName, pTrigger);
      if (pExclude && pExclude->find (pTrigger) != pExclude->end ())
        continue;
      triggerArray.push_back (pTrigger);
-     triggerRevMap [pTrigger] = strTriggerName;
     }
 
   // sort the array
@@ -7055,15 +7142,13 @@ POSITION pos;
 
 void  CMUSHclientDoc::SortTriggers (const set<CTrigger *> * pExclude)
   {
-  CTriggerRevMap newTriggerRevMap;
   vector<CTrigger *> newTriggerArray;
-  BuildTriggerIndexes (newTriggerArray, newTriggerRevMap, pExclude);
+  BuildTriggerIndexes (newTriggerArray, pExclude);
 
-  // build the replacement indexes before changing either live index
+  // Build the sorted replacement before changing the live array.
   GetTriggerArray ().SetSize (newTriggerArray.size ());
   for (size_t i = 0; i < newTriggerArray.size (); i++)
     GetTriggerArray ().SetAt (i, newTriggerArray [i]);
-  GetTriggerRevMap ().swap (newTriggerRevMap);
 
   } // end of CMUSHclientDoc::SortTriggers
 
@@ -7092,23 +7177,23 @@ static int CompareAlias (const void * elem1, const void * elem2)
 
 void CMUSHclientDoc::BuildAliasIndexes (
   vector<CAlias *> & aliasArray,
-  CAliasRevMap & aliasRevMap,
-  const set<CAlias *> * pExclude)
+  const set<CAlias *> * pExclude,
+  CAliasMap * pObjectMap)
   {
+CAliasMap & objectMap = pObjectMap ? *pObjectMap : GetAliasMap ();
 CString strAliasName;
 CAlias * pAlias;
 POSITION pos;
 
-  aliasArray.reserve (GetAliasMap ().GetCount ());
+  aliasArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (pos = GetAliasMap ().GetStartPosition(); pos; )
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
+     objectMap.GetNextAssoc (pos, strAliasName, pAlias);
      if (pExclude && pExclude->find (pAlias) != pExclude->end ())
        continue;
      aliasArray.push_back (pAlias);
-     aliasRevMap [pAlias] = strAliasName;
     }
 
   // sort the array
@@ -7121,15 +7206,13 @@ POSITION pos;
 
 void  CMUSHclientDoc::SortAliases (const set<CAlias *> * pExclude)
   {
-  CAliasRevMap newAliasRevMap;
   vector<CAlias *> newAliasArray;
-  BuildAliasIndexes (newAliasArray, newAliasRevMap, pExclude);
+  BuildAliasIndexes (newAliasArray, pExclude);
 
-  // build the replacement indexes before changing either live index
+  // Build the sorted replacement before changing the live array.
   GetAliasArray ().SetSize (newAliasArray.size ());
   for (size_t i = 0; i < newAliasArray.size (); i++)
     GetAliasArray ().SetAt (i, newAliasArray [i]);
-  GetAliasRevMap ().swap (newAliasRevMap);
 
   } // end of CMUSHclientDoc::SortAliases
 

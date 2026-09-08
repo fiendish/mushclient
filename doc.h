@@ -67,6 +67,18 @@ class CSendView;
 class CTextDocument;
 class UDPsocket;
 class COutputAppendTransaction;
+class CMUSHclientDoc;
+
+// XML parser targets are local to a load. Script APIs use the live document.
+struct CXMLLoadContext
+  {
+  explicit CXMLLoadContext (CMUSHclientDoc * pDoc);
+  CAliasMap * pAliasMap;
+  CAliasArray * pAliasArray;
+  CTriggerMap * pTriggerMap;
+  CTriggerArray * pTriggerArray;
+  CTimerMap * pTimerMap;
+  };
 
 template <class T>
 struct CXMLLoadChange
@@ -717,26 +729,12 @@ public:
 
   CAliasMap m_AliasMap;
   CAliasArray m_AliasArray;       // array of aliases for sequencing
-  CAliasRevMap m_AliasRevMap;     // for getting name back from pointer
   CAlias * m_pRetiredAliases;  // replaced while their script was active
   CTriggerMap m_TriggerMap;       
   CTriggerArray m_TriggerArray;   // array of triggers for sequencing
-  CTriggerRevMap m_TriggerRevMap; // for getting name back from pointer
   CTrigger * m_pRetiredTriggers;  // replaced while their script was active
   CTimerMap m_TimerMap;
-  CTimerRevMap m_TimerRevMap;     // for getting name back from pointer
   CTimer * m_pRetiredTimers;  // replaced while their script was active
-
-  // Temporary targets used while a replacement set is parsed. The live maps
-  // and runtime indexes stay unchanged until the complete set is valid.
-  CAliasMap * m_pSetLoadAliasMap;
-  CAliasArray * m_pSetLoadAliasArray;
-  CAliasRevMap * m_pSetLoadAliasRevMap;
-  CTriggerMap * m_pSetLoadTriggerMap;
-  CTriggerArray * m_pSetLoadTriggerArray;
-  CTriggerRevMap * m_pSetLoadTriggerRevMap;
-  CTimerMap * m_pSetLoadTimerMap;
-  CTimerRevMap * m_pSetLoadTimerRevMap;
 
 
 // new in version 7
@@ -1496,7 +1494,8 @@ public:
   bool AddToLineInternal (LPCTSTR lpszText, const int flags,
                           COutputAppendTransaction * pTransaction);
   bool StartNewLine_KeepPreviousStyle (const int flags,
-                                       bool * pbCreated = NULL);
+                                       bool * pbCreated = NULL,
+                                       const bool bFinishTransition = false);
   void Phase_ESC (const unsigned char c);  
   void Phase_UTF8 (const unsigned char c);  
   void Phase_ANSI (const unsigned char c);           
@@ -1644,14 +1643,23 @@ public:
   bool StartNewLine (const bool hard_break, const int flags,
                      const bool bResizePrevious = true,
                      bool * pbCreated = NULL);
+  bool FinishNewLine (const int flags, const bool bResizePrevious,
+                      bool * pbCreated);
   bool ProcessPreviousLine (void);
   void SendLineToPlugin (void);
   void SetNewLineColour (const int flags);
 
+  struct CTriggerLineSnapshot
+    {
+    __int64 iCreationNumber;
+    int iColumn;  // byte offset in the original paragraph
+    int iLength;
+    };
+
   void ProcessOneTriggerSequence (CString & strCurrentLine,
                             CPaneLine & StyledLine,
                             CString & strResponse,
-                            const POSITION prevpos,
+                            const vector<CTriggerLineSnapshot> & triggerLines,
                             bool & bNoLog,
                             bool & bNoOutput,
                             bool & bChangedColour,
@@ -1669,7 +1677,8 @@ public:
 
   void WriteToLog (const char * text, size_t len);
   void WriteToLog (const CString & strText);
-  void LogLineInHTMLcolour (POSITION startpos);
+  void LogLineInHTMLcolour (POSITION startpos,
+                            const map<__int64, int> * pLineLengths = NULL);
   void LogCommand (const char * text);
   void OutputBadUTF8characters (void);
 
@@ -1765,7 +1774,8 @@ public:
                         UINT * piVariables = NULL,
                         UINT * piColours = NULL,
                         UINT * piKeypad = NULL,
-                        UINT * piPrinting = NULL);
+                        UINT * piPrinting = NULL,
+                        CXMLLoadContext * pLoadContext = NULL);
 
   void LoadError (const char * sType, const char * sMessage, UINT iLine = 0);
   void CheckUsed (CXMLelement & node);
@@ -1782,7 +1792,8 @@ public:
                       UINT * piVariables,
                       UINT * piColours,
                       UINT * piKeypad,
-                      UINT * piPrinting);
+                      UINT * piPrinting,
+                      CXMLLoadContext * pLoadContext = NULL);
   void Load_One_Include_XML (CXMLelement & node,
                       const unsigned long iMask,
                       const unsigned long iFlags,
@@ -1794,28 +1805,33 @@ public:
                       UINT * piVariables,
                       UINT * piColours,
                       UINT * piKeypad,
-                      UINT * piPrinting);
+                      UINT * piPrinting,
+                      CXMLLoadContext * pLoadContext = NULL);
 
   void Load_General_XML (CXMLelement & parent, 
     const unsigned long iFlags);
   UINT Load_Triggers_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Trigger_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
     const unsigned long iFlags,
-    CXMLLoadChange<CTrigger> & change);
+    CXMLLoadChange<CTrigger> & change,
+    CTriggerMap & objectMap);
   UINT Load_Aliases_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Alias_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
     const unsigned long iFlags,
-    CXMLLoadChange<CAlias> & change);
+    CXMLLoadChange<CAlias> & change,
+    CAliasMap & objectMap);
   UINT Load_Variables_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
@@ -1826,13 +1842,15 @@ public:
     const unsigned long iFlags);
   UINT Load_Timers_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Timer_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
     const unsigned long iFlags,
-    CXMLLoadChange<CTimer> & change);
+    CXMLLoadChange<CTimer> & change,
+    CTimerMap & objectMap);
   UINT Load_Macros_XML (CXMLelement & parent, 
     const unsigned long iFlags);
   void Load_One_Macro_XML (CXMLelement & node, 
@@ -1878,17 +1896,13 @@ public:
   // set up trigger array after adding a trigger or two
   void SortTriggers (const set<CTrigger *> * pExclude = NULL);
   void BuildTriggerIndexes (vector<CTrigger *> & triggerArray,
-                            CTriggerRevMap & triggerRevMap,
-                            const set<CTrigger *> * pExclude = NULL);
+                            const set<CTrigger *> * pExclude = NULL,
+                            CTriggerMap * pObjectMap = NULL);
   // set up alias array after adding an alias or two
   void SortAliases (const set<CAlias *> * pExclude = NULL);
   void BuildAliasIndexes (vector<CAlias *> & aliasArray,
-                          CAliasRevMap & aliasRevMap,
-                          const set<CAlias *> * pExclude = NULL);
-  // set up timer reverse map after adding timers
-  void SortTimers (const set<CTimer *> * pExclude = NULL);
-  void BuildTimerIndex (CTimerRevMap & timerRevMap,
-                        const set<CTimer *> * pExclude = NULL);
+                          const set<CAlias *> * pExclude = NULL,
+                          CAliasMap * pObjectMap = NULL);
   void RetireAlias (CAlias * pAlias);
   void RetireTrigger (CTrigger * pTrigger);
   void RetireTimer (CTimer * pTimer);
@@ -2274,9 +2288,7 @@ public:
   // helper routines to get the appropriate map
   CTriggerMap & GetTriggerMap (void)
     {
-    if (m_pSetLoadTriggerMap)
-      return *m_pSetLoadTriggerMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerMap;
     else
       return m_TriggerMap;
@@ -2284,29 +2296,15 @@ public:
 
   CTriggerArray & GetTriggerArray (void)
     {
-    if (m_pSetLoadTriggerArray)
-      return *m_pSetLoadTriggerArray;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerArray;
     else
       return m_TriggerArray;
     };
 
-  CTriggerRevMap & GetTriggerRevMap (void)
-    {
-    if (m_pSetLoadTriggerRevMap)
-      return *m_pSetLoadTriggerRevMap;
-    else if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_TriggerRevMap;
-    else
-      return m_TriggerRevMap;
-    };
-
   CAliasMap & GetAliasMap (void)
     {
-    if (m_pSetLoadAliasMap)
-      return *m_pSetLoadAliasMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasMap;
     else
       return m_AliasMap;
@@ -2314,42 +2312,18 @@ public:
 
   CAliasArray & GetAliasArray (void)
     {
-    if (m_pSetLoadAliasArray)
-      return *m_pSetLoadAliasArray;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasArray;
     else
       return m_AliasArray;
     };
 
-  CAliasRevMap & GetAliasRevMap (void)
-    {
-    if (m_pSetLoadAliasRevMap)
-      return *m_pSetLoadAliasRevMap;
-    else if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_AliasRevMap;
-    else
-      return m_AliasRevMap;
-    };
-
   CTimerMap & GetTimerMap (void)
     {
-    if (m_pSetLoadTimerMap)
-      return *m_pSetLoadTimerMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TimerMap;
     else
       return m_TimerMap;
-    };
-
-  CTimerRevMap & GetTimerRevMap (void)
-    {
-    if (m_pSetLoadTimerRevMap)
-      return *m_pSetLoadTimerRevMap;
-    else if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_TimerRevMap;
-    else
-      return m_TimerRevMap;
     };
 
   CVariableMap & GetVariableMap (void)
@@ -2990,6 +2964,7 @@ class COutputAppendTransaction
 
     __int64 Identity () const;
     void Reserve (const size_t iLength);
+    void TrackLine (const CLine * pLine);
     void MarkCurrentLineStyles ();
     CStyle * PrepareAppendStyle ();
     void OwnStyle (CStyle * pStyle);
@@ -3062,6 +3037,7 @@ class COutputAppendTransaction
 
     CMUSHclientDoc * m_pDoc;
     __int64 m_iAppendCreationNumber;
+    __int64 m_iFirstAffectedLineCreationNumber;
     vector<CCreatedLine> m_CreatedLines;
     vector<CWrapMove> m_Wraps;
     vector<CLineBreakState> m_LineBreaks;
