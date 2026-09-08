@@ -138,9 +138,13 @@ long CMUSHclientDoc::ArrayCreate(LPCTSTR Name)
   if (it != GetArrayMap ().end ())
     return eArrayAlreadyExists;
 
-  tStringToStringMap * m = new tStringToStringMap;
+  std::unique_ptr<tStringToStringMap> m (new tStringToStringMap);
 
-  GetArrayMap ().insert (make_pair (Name, m));
+  pair<tStringMapOfMaps::iterator, bool> result =
+    GetArrayMap ().insert (make_pair (Name, m.get ()));
+  if (!result.second)
+    return eArrayAlreadyExists;
+  m.release ();
 
   return eOK;
 
