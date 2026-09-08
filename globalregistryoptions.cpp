@@ -235,6 +235,8 @@ void CMUSHclientApp::SaveGlobalsToDatabase (void)
     }
 
   db_rc = db_execute ("BEGIN TRANSACTION", true);
+  if (db_rc != SQLITE_OK)
+    return;
 
   int i;
 
@@ -263,7 +265,15 @@ void CMUSHclientApp::SaveGlobalsToDatabase (void)
 
       };
 
-  db_execute ("COMMIT", true);
+  if (db_rc != SQLITE_OK)
+    {
+    db_execute ("ROLLBACK", true);
+    return;
+    }
+
+  db_rc = db_execute ("COMMIT", true);
+  if (db_rc != SQLITE_OK)
+    db_execute ("ROLLBACK", true);
 
   } // end of CMUSHclientApp::SaveGlobalsToDatabase
 
