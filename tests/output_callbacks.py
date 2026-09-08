@@ -56,7 +56,39 @@ void CMUSHclientDoc::Colour(const vector<CTriggerLineSnapshot>& triggerLines,
  auto iOutputGeneration=m_iOutputGeneration;
  send();
 ''' + colour + '\n break;\n }\n }\n }\n'
+    if not append_only:
+        body += section(trigger, 'static inline unsigned short get_foreground',
+                        '// Resolve the original paragraph')
+        # Compile the actual matching block, including its local POSITION scope.
+        matching = section(trigger, '      if (trigger_item->iMatch && !trigger_item->bMultiLine)',
+                           '    // copy the wildcard contents to the clipboard')
+        body += r'''
+bool CMUSHclientDoc::Match(const vector<CTriggerLineSnapshot>& triggerLines,
+ const CString& strCurrentLine,int iStartCol,int condition,function<void()> send) {
+ struct Trigger {int iMatch;bool bMultiLine=false;};
+ Trigger item{condition};auto trigger_item=&item;
+ auto outputLines=ResolveTriggerLines(this,triggerLines);
+ auto iOutputGeneration=m_iOutputGeneration;
+ send();
+''' + section(trigger, '      if (iOutputGeneration != m_iOutputGeneration)',
+                '      if (trigger_item->iMatch && !trigger_item->bMultiLine)') + \
+            '\nfor(int fixture=0;fixture<1;++fixture) {\n' + matching + \
+            '\nreturn true;\n}\nreturn false;\n}\n'
+        # Keep the full logging and omission paths. View invalidation is outside
+        # this fixture. Deferred note replay is observed through its staged text.
+        body += r'''
+void CMUSHclientDoc::Finalize(const vector<CTriggerLineSnapshot>& triggerLines,
+ long long iParagraphGeneration,POSITION prevpos,bool omit,bool bNoLog,
+ const CString& strCurrentLine,long iParagraphReceivedNumber) {
+ POSITION pos;
+ m_bLineOmittedFromOutput=omit;
+''' + section(trigger, '  // Keep the original identity boundary',
+                '// if we have changed the colour of this trigger') + \
+            section(trigger, '  // logging wanted?',
+                    '  // display any stuff sent to output window') + '\n}\n'
     main = (Path(__file__).parent / 'output_callbacks_main.cpp').read_text()
+    if not append_only:
+        main += (Path(__file__).parent / 'output_callbacks_followup.cpp').read_text()
     defines = '#define APPEND_ONLY\n' if append_only else ''
     cpp = output / 'output_callbacks.cpp'
     cpp.write_text(defines + shim + body + main)

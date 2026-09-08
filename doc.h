@@ -1496,7 +1496,8 @@ public:
   bool AddToLineInternal (LPCTSTR lpszText, const int flags,
                           COutputAppendTransaction * pTransaction);
   bool StartNewLine_KeepPreviousStyle (const int flags,
-                                       bool * pbCreated = NULL);
+                                       bool * pbCreated = NULL,
+                                       const bool bFinishTransition = false);
   void Phase_ESC (const unsigned char c);  
   void Phase_UTF8 (const unsigned char c);  
   void Phase_ANSI (const unsigned char c);           
@@ -1637,6 +1638,8 @@ public:
   bool StartNewLine (const bool hard_break, const int flags,
                      const bool bResizePrevious = true,
                      bool * pbCreated = NULL);
+  bool FinishNewLine (const int flags, const bool bResizePrevious,
+                      bool * pbCreated);
   bool ProcessPreviousLine (void);
   void SendLineToPlugin (void);
   void SetNewLineColour (const int flags);
@@ -1669,7 +1672,8 @@ public:
 
   void WriteToLog (const char * text, size_t len);
   void WriteToLog (const CString & strText);
-  void LogLineInHTMLcolour (POSITION startpos);
+  void LogLineInHTMLcolour (POSITION startpos,
+                            const map<__int64, int> * pLineLengths = NULL);
   void LogCommand (const char * text);
   void OutputBadUTF8characters (void);
 

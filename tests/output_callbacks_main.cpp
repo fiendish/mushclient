@@ -34,7 +34,7 @@ static void appendCases() {
   assert(d.m_pCurrentLine->styleList.GetTail()->iForeColour==13);
   assert(d.m_pCurrentLine->styleList.GetTail()->pAction==supplied->styleList.GetTail()->pAction);
   assert(text(supplied)==string(fill,'B')+(fill<80?"Z":""));
-  assert(deliveries==2+(fill==80?1:0));checkStyles(d);
+  assert(deliveries==2);checkStyles(d);
  }
  cout<<"24 callback width, word-wrap, style, and action cases passed\n";
  for(int shape=0;shape<3;++shape) {
@@ -49,8 +49,10 @@ static void appendCases() {
   int remaining=repeats;bool entered=false;
   d.callback=[&]{if(entered||!remaining)return;--remaining;entered=true;
    assert(d.StartNewLine(true,0));assert(d.AddToLine(string(80,'B').c_str(),0));entered=false;};
-  assert(d.AddToLine("Z",0));assert(remaining==0);
-  assert(allText(d)==string(80,'A')+string(80*repeats,'B')+"Z");checkStyles(d);
+  assert(d.AddToLine(string((repeats-1)*80+1,'Z').c_str(),0));assert(remaining==0);
+  string expected(80,'A');
+  for(int i=0;i<repeats;++i)expected+=string(80,'B')+string(i+1==repeats?1:80,'Z');
+  assert(allText(d)==expected);checkStyles(d);
  }
  for(int failure:{0,1,2}) {
   CMUSHclientDoc d;assert(d.AddToLine(string(80,'A').c_str(),0));bool done=false;
@@ -181,10 +183,12 @@ static void colourCases() {
  cout<<"Colour pruning, removed spans, repeated matches, callback output, invalidation, and style-only controls passed\n";
 }
 #endif
+static void followupCases();
 int main() {
  appendCases();
 #ifndef APPEND_ONLY
  colourCases();
+ followupCases();
 #endif
  cout<<"All output regression checks passed\n";
 }

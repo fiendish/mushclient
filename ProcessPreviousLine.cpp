@@ -32,7 +32,8 @@ static inline unsigned short get_style (int style)
 
 // shared stuff for logging in colour
 
-void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos)
+void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos,
+                                        const map<__int64, int> * pLineLengths)
   {
    COLORREF prevcolour = NO_COLOUR;
    bool bInSpan = false;
@@ -42,12 +43,21 @@ void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos)
    for (POSITION pos = startpos; pos; )
    {
    CLine * pLine = m_LineList.GetNext (pos);
+   int iLineLength = pLine->len;
+   if (pLineLengths)
+     {
+     map<__int64, int>::const_iterator saved =
+       pLineLengths->find (pLine->nCreationNumber);
+     if (saved == pLineLengths->end ())
+       continue;
+     iLineLength = MIN (iLineLength, saved->second);
+     }
 
    if (!pLine->styleList.IsEmpty ())
      {
 
       int iCol = 0;
-      CString strLine = CString (pLine->text, pLine->len);
+      CString strLine = CString (pLine->text, iLineLength);
 
       for (POSITION style_pos = pLine->styleList.GetHeadPosition(); style_pos; )
         {
@@ -56,7 +66,9 @@ void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos)
 
         CStyle * pStyle = pLine->styleList.GetNext (style_pos);
 
-        int iLength = pStyle->iLength;
+        if (iCol >= iLineLength)
+          break;
+        int iLength = MIN (static_cast<int> (pStyle->iLength), iLineLength - iCol);
 
         // ignore zero length styles
         if (iLength <= 0)
@@ -573,6 +585,7 @@ assemble the full text of the original line.
 
   m_sRecentLines.push_back ((const char *) strCurrentLine);
   m_newlines_received++;
+  const long iParagraphReceivedNumber = m_newlines_received;
 
   // too many? remove oldest one
   if (m_sRecentLines.size () > MAX_RECENT_LINES)
@@ -701,6 +714,11 @@ assemble the full text of the original line.
     m_CurrentPlugin = NULL; // not in a plugin any more
     } // if iBad <= 0
 
+  // Keep the original identity boundary for all post-trigger consumers.
+  map<__int64, int> paragraphLengths;
+  for (size_t i = 0; i < triggerLines.size (); ++i)
+    paragraphLengths [triggerLines [i].iCreationNumber] = triggerLines [i].iLength;
+
   // Find the first surviving paragraph line for logging and omission as well.
   // Callback-created lines are not a replacement for a deleted paragraph.
   if (iParagraphGeneration != m_iOutputGeneration)
@@ -745,7 +763,11 @@ assemble the full text of the original line.
     {
     // remember that we want to log it (them), for retrospective logging
     for (pos = prevpos; pos; )
-      (m_LineList.GetNext (pos))->flags |= LOG_LINE;
+      {
+      CLine * pLine = m_LineList.GetNext (pos);
+      if (paragraphLengths.count (pLine->nCreationNumber))
+        pLine->flags |= LOG_LINE;
+      }
 
     // log it now?
     if (m_logfile && !m_bLogRaw) 
@@ -774,7 +796,7 @@ assemble the full text of the original line.
       CString strMessage = strCurrentLine;
       // fix up HTML sequences
       if (m_bLogHTML && m_bLogInColour)
-        LogLineInHTMLcolour (prevpos);
+        LogLineInHTMLcolour (prevpos, &paragraphLengths);
       // not colour - just straight HTML?
       else if (m_bLogHTML)
         WriteToLog (FixHTMLString (strMessage));
@@ -796,11 +818,19 @@ assemble the full text of the original line.
     vector<POSITION> linesToDelete;
     list<CPaneStyle> stagedOutstandingLines;
     int iRecentLinesToRemove = 0;
+    CLine * pSurvivingCurrentLine = NULL;
     POSITION scan = m_LineList.GetTailPosition ();
     while (scan)
       {
       POSITION current = scan;
       CLine * pLine = m_LineList.GetPrev (scan);
+      if (!paragraphLengths.count (pLine->nCreationNumber))
+        {
+        // Later callback output keeps its text, styles, actions, and identity.
+        if (!pSurvivingCurrentLine)
+          pSurvivingCurrentLine = pLine;
+        continue;
+        }
       linesToDelete.push_back (current);
 
       if (pLine->flags & NOTE_OR_COMMAND)
@@ -835,11 +865,14 @@ assemble the full text of the original line.
         break;
       }
 
-    CLine * pSurvivingCurrentLine = scan ? m_LineList.GetAt (scan) : NULL;
-    if (pSurvivingCurrentLine &&
-        (((pSurvivingCurrentLine->flags & COMMENT) == 0) ||
-         pSurvivingCurrentLine->hard_return))
-      pSurvivingCurrentLine = NULL;
+    if (!pSurvivingCurrentLine)
+      {
+      pSurvivingCurrentLine = scan ? m_LineList.GetAt (scan) : NULL;
+      if (pSurvivingCurrentLine &&
+          (((pSurvivingCurrentLine->flags & COMMENT) == 0) ||
+           pSurvivingCurrentLine->hard_return))
+        pSurvivingCurrentLine = NULL;
+      }
 
     std::unique_ptr<CLine> pNewLine;
     if (!pSurvivingCurrentLine)
@@ -864,8 +897,11 @@ assemble the full text of the original line.
       m_total_lines--;
       }
 
-    while (iRecentLinesToRemove-- > 0 && !m_sRecentLines.empty ())
-      m_sRecentLines.pop_back ();
+    const unsigned long iLaterLines =
+      static_cast<unsigned long> (m_newlines_received) -
+      static_cast<unsigned long> (iParagraphReceivedNumber);
+    while (iRecentLinesToRemove-- > 0 && m_sRecentLines.size () > iLaterLines)
+      m_sRecentLines.erase (m_sRecentLines.end () - iLaterLines - 1);
 
     if (pSurvivingCurrentLine)
       m_pCurrentLine = pSurvivingCurrentLine;
@@ -881,7 +917,8 @@ assemble the full text of the original line.
     for (pos = m_LineList.GetHeadPosition (); pos; iLine++)
       {
       POSITION current = pos;
-      m_LineList.GetNext (pos);
+      CLine * pLine = m_LineList.GetNext (pos);
+      pLine->m_nLineNumber = m_total_lines - m_LineList.GetCount () + iLine + 1;
       if (iLine % JUMP_SIZE == 0)
         m_pLinePositions [iLine / JUMP_SIZE] = current;
       }
@@ -1193,7 +1230,7 @@ __int64 iOutputGeneration = m_iOutputGeneration;
            int iStyleCol = 0;
      
            // find style run
-           for (pos = pLine->styleList.GetHeadPosition(); pos; )
+           for (POSITION pos = pLine->styleList.GetHeadPosition(); pos; )
              {
              pStyle = pLine->styleList.GetNext (pos);
              iStyleCol += pStyle->iLength;

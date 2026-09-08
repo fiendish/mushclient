@@ -1609,7 +1609,8 @@ int count;
 
 
 bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle (const int flags,
-                                                     bool * pbCreated)
+                                                     bool * pbCreated,
+                                                     const bool bFinishTransition)
   {
   if (pbCreated)
     *pbCreated = false;
@@ -1626,7 +1627,9 @@ bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle (const int flags,
    bool bCreated = false;
    try
      {
-     bStarted = StartNewLine (false, flags, false, &bCreated);
+     bStarted = bFinishTransition ?
+       FinishNewLine (flags, false, &bCreated) :
+       StartNewLine (false, flags, false, &bCreated);
      }
    catch (...)
      {
@@ -2200,6 +2203,7 @@ const __int64 iAppendCreationNumber =
   for (p = lpszText; *p; p++)
     {
     c = *p;
+    bool bFinishTransition = false;
 
 retry_character:
     if (!m_pCurrentLine)
@@ -2273,12 +2277,16 @@ Unicode range              UTF-8 bytes
         (m_pCurrentLine->len - last_space) >= m_nWrapColumn)
         {
         bool bCreatedLine = false;
-        if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine))
+        if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine,
+                                             bFinishTransition))
           return false;
-        // A callback can leave a full continuation line. Recheck its width
-        // and capacity before writing this byte, and keep its output and style.
+        // Recheck callback output with the normal word-wrap rules. The active
+        // transition has delivered its callbacks; finish it before this byte.
         if (!bCreatedLine)
+          {
+          bFinishTransition = true;
           goto retry_character;
+          }
         if (iAppendCreationNumber && bCreatedLine)
           pTransaction->RecordCreatedLine ();
         }
@@ -2311,10 +2319,9 @@ Unicode range              UTF-8 bytes
           bool bCreatedNewLine = false;
           try
             {
-            bStartedNewLine = StartNewLine (false,
-                                            flags,
-                                            false,
-                                            &bCreatedNewLine);
+            bStartedNewLine = bFinishTransition ?
+              FinishNewLine (flags, false, &bCreatedNewLine) :
+              StartNewLine (false, flags, false, &bCreatedNewLine);
             }
           catch (...)
             {
@@ -2372,6 +2379,7 @@ Unicode range              UTF-8 bytes
                 break;
                 }
               }
+            bFinishTransition = true;
             goto retry_character;
             }
 
@@ -2525,10 +2533,14 @@ Unicode range              UTF-8 bytes
         else  
           {   // saved_count == 0
           bool bCreatedLine = false;
-          if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine))
+          if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine,
+                                             bFinishTransition))
             return false;
           if (!bCreatedLine)
+            {
+            bFinishTransition = true;
             goto retry_character;
+            }
           if (iAppendCreationNumber && bCreatedLine)
             pTransaction->RecordCreatedLine ();
           }  // end saved_count == 0
@@ -3233,8 +3245,6 @@ bool CMUSHclientDoc::StartNewLine (const bool hard_break, const int flags,
                                   const bool bResizePrevious,
                                   bool * pbCreated)
   {
-POSITION pos;
-
   if (pbCreated)
     *pbCreated = false;
 
@@ -3283,6 +3293,19 @@ POSITION pos;
       }
     }
 
+
+  return FinishNewLine (flags, bResizePrevious, pbCreated);
+  } // end of CMUSHclientDoc::StartNewLine
+
+// Complete a line transition after its callbacks and trigger processing.
+// Append reentry uses this phase after recomputing the callback line's wrap.
+bool CMUSHclientDoc::FinishNewLine (const int flags,
+                                   const bool bResizePrevious,
+                                   bool * pbCreated)
+  {
+POSITION pos;
+  if (pbCreated)
+    *pbCreated = false;
 
   // if our buffer is full, remove the JUMP_SIZE items
 
@@ -3430,7 +3453,7 @@ POSITION pos;
 
   return true;
 
-  }   // end of CMUSHclientDoc::StartNewLine
+  }   // end of CMUSHclientDoc::FinishNewLine
 
 const bool CMUSHclientDoc::CheckScriptingAvailable (const char * sWhat,
                                                     const DISPID dispid,
