@@ -32,6 +32,17 @@ local cancelmessage = "spell check cancelled"
 local previousword  --> not used right now
 local change, ignore  -- tables of change-all, ignore-all words
 
+local function db_success (code)
+  return code == sqlite3.OK or code == sqlite3.ROW or code == sqlite3.DONE
+end -- db_success
+
+local function dbcheck (code)
+  if not db_success (code) then
+    error (db:errmsg (), 2)
+  end -- database error
+  return code
+end -- dbcheck
+
 -- dictionaries - add new entries along similar lines to add more dictionary files
 local files = {
 
@@ -80,12 +91,12 @@ local function insert_word (word, user)
   local m1, m2 = utils.metaphone (word, METAPHONE_LENGTH)
   local fixed_word = string.gsub (word, "'", "''")  -- convert ' to ''
   
-  assert (db:execute (string.format ("INSERT INTO words VALUES (NULL, '%s', '%s', %i)",
+  dbcheck (db:execute (string.format ("INSERT INTO words VALUES (NULL, '%s', '%s', %i)",
             fixed_word, m1, user)));
     
   -- do 2nd metaphone, if any
    if m2 then
-    assert (db:execute (string.format ("INSERT INTO words VALUES (NULL, '%s', '%s', %i)",
+    dbcheck (db:execute (string.format ("INSERT INTO words VALUES (NULL, '%s', '%s', %i)",
               fixed_word, m2, user)));
    end -- having alternative      
   
@@ -330,13 +341,18 @@ local function init ()
     end -- if
   end
   
-  -- enable WAL (Write-Ahead Logging)
-  assert (db:execute "PRAGMA journal_mode=WAL;")
+  -- WAL is optional; dictionary operations still check database errors.
+  local wal_result = db:execute "PRAGMA journal_mode=WAL;"
+  if not db_success (wal_result) then
+    utils.msgbox ("Could not enable write-ahead logging for the spellchecker database.\n" ..
+                  "The spellchecker will continue with the current journal mode.\n\n" ..
+                  db:errmsg (), "Spellchecker warning", "ok", "!")
+  end -- WAL unavailable
   
   -- if no words table, make one
   if not words_table then
       -- create a table to hold the words
-    assert (db:execute[[
+    dbcheck (db:execute[[
       DROP TABLE IF EXISTS words;
       CREATE TABLE words(
         word_id INTEGER NOT NULL PRIMARY KEY autoincrement,
@@ -366,25 +382,31 @@ local function init ()
       dlg:setstep (1)
     end -- if SHOW_PROGRESS_BAR
      
-    assert (db:execute "BEGIN TRANSACTION");
-    
-    for k, v in ipairs (files) do
-      ok, result = pcall (function () 
-                            read_dict (dlg, v) 
-                          end)
-      if not ok then 
-        if SHOW_PROGRESS_BAR then
-          dlg:close ()
-        end -- if SHOW_PROGRESS_BAR
-        error (result)
-      end -- not ok
-    end -- reading each file
+    local transaction_started = false
+    local ok, result = pcall (function ()
+      dbcheck (db:execute "BEGIN TRANSACTION")
+      transaction_started = true
+
+      for k, v in ipairs (files) do
+        read_dict (dlg, v)
+      end -- reading each file
+
+      dbcheck (db:execute "COMMIT")
+    end)
     
     if SHOW_PROGRESS_BAR then
       dlg:close ()
     end -- if SHOW_PROGRESS_BAR
-    
-    assert (db:execute "COMMIT");
+
+    if not ok then
+      if transaction_started then
+        local rollback = db:execute "ROLLBACK"
+        if not db_success (rollback) then
+          result = tostring (result) .. "\nRollback failed: " .. db:errmsg ()
+        end -- rollback failed
+      end -- transaction started
+      error (result, 0)
+    end -- transaction failed
     
   end -- if nothing in database
   
