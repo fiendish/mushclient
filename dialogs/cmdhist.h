@@ -12,6 +12,9 @@ public:
 
   CStringList * m_msgList;
   CStringList m_msgListSnapshot;
+  vector<long> m_HistoryLineNumbers;
+  unsigned __int64 m_iHistoryDiscarded;
+  long m_nSnapshotLines;
   CSendView * m_sendview;
   std::shared_ptr<CFindInfo> m_pHistoryFindInfo;
   CFindInfo m_HistoryFindInfo;
