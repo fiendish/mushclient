@@ -337,8 +337,9 @@ unsigned __stdcall CMUSHclientDoc::ThreadFunc(void * pParam)
     return 0;
 
 	HANDLE	aHandles[2];
-	aHandles[0] = hChange;
-	aHandles[1] = hEvent;
+	// Give shutdown priority when both handles are signaled.
+	aHandles[0] = hEvent;
+	aHandles[1] = hChange;
 	BOOL	bContinue = TRUE;
 
     // Sleep until a file change notification wakes this thread or
@@ -347,7 +348,7 @@ unsigned __stdcall CMUSHclientDoc::ThreadFunc(void * pParam)
 	{
 		switch ((::WaitForMultipleObjects(2, aHandles, FALSE, INFINITE)))
 		{
-		case 0:
+		case 1:
 			{
 			// Respond to a change notification.
 			CFileChangeNotification * pNotification = new CFileChangeNotification;
