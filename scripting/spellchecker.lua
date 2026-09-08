@@ -341,8 +341,13 @@ local function init ()
     end -- if
   end
   
-  -- enable WAL (Write-Ahead Logging)
-  dbcheck (db:execute "PRAGMA journal_mode=WAL;")
+  -- WAL is optional; dictionary operations still check database errors.
+  local wal_result = db:execute "PRAGMA journal_mode=WAL;"
+  if not db_success (wal_result) then
+    utils.msgbox ("Could not enable write-ahead logging for the spellchecker database.\n" ..
+                  "The spellchecker will continue with the current journal mode.\n\n" ..
+                  db:errmsg (), "Spellchecker warning", "ok", "!")
+  end -- WAL unavailable
   
   -- if no words table, make one
   if not words_table then
