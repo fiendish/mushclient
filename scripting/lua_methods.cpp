@@ -5083,12 +5083,23 @@ static int L_Save (lua_State *L)
   CMUSHclientDoc *pDoc = doc (L);
   CString strOldName = pDoc->GetPathName ();
   bool bSaveAs = optboolean (L, 2, 0);  // Save-As flag
-  if (bSaveAs) 
-    lua_pushboolean (L, pDoc->Save (my_checkstring (L, 1)));
-  else
-    lua_pushboolean (L, pDoc->Save (my_optstring (L, 1, "")));
+  bool bSaved = false;
+  try
+    {
+    if (bSaveAs)
+      bSaved = pDoc->Save (my_checkstring (L, 1));
+    else
+      bSaved = pDoc->Save (my_optstring (L, 1, ""));
+    }
+  catch (...)
+    {
+    if (bSaveAs)
+      pDoc->SetPathName (strOldName, FALSE);
+    throw;
+    }
   if (bSaveAs)
     pDoc->SetPathName (strOldName, FALSE);
+  lua_pushboolean (L, bSaved);
   return 1;  // number of result fields
   } // end of L_Save
 
