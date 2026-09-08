@@ -15,5 +15,3 @@ Local changes in luacom.cpp:
 
 3. In luacom_StartMessageLoop, reject the call when the mushclient_embedded
    registry flag is set. MUSHclient uses its own message loop.
-
-Whitespace-only cleanup is also retained in LuaCompat.cpp and luacom5.lua.
