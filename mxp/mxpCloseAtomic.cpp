@@ -105,7 +105,22 @@ void CMUSHclientDoc::MXP_CloseAtomicTag (
       {
       vector<std::unique_ptr<CStagedMXPActionStyle> > stagedStyles;
 
-      for (linepos = m_LineList.GetHeadPosition (); linepos; )
+      // Lines keep increasing identities when styles split or move forward.
+      // Locate the first surviving content line from the tail, then retain
+      // the original forward action order without scanning older history.
+      POSITION firstContentLine = 0;
+      if (!contentStyleRangeNumbers.empty ())
+        for (POSITION scan = m_LineList.GetTailPosition (); scan; )
+          {
+          POSITION current = scan;
+          CLine * pCandidate = m_LineList.GetPrev (scan);
+          if (pCandidate->nCreationNumber <
+              preparedClose.iFirstContentLineCreationNumber)
+            break;
+          firstContentLine = current;
+          }
+
+      for (linepos = firstContentLine; linepos; )
         {
         CLine * pLine2 = m_LineList.GetNext (linepos);
         stylepos = pLine2->styleList.GetHeadPosition ();

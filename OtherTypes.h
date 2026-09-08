@@ -980,6 +980,7 @@ struct CPreparedMXPClose
   CPreparedMXPClose () :
     bHaveVariable (false),
     iActiveTagCreationNumber (0),
+    iFirstContentLineCreationNumber (0),
     bOpeningInParagraph (false),
     bOpeningPreMode (false),
     bOpeningMXPScript (false),
@@ -994,6 +995,7 @@ struct CPreparedMXPClose
   CString strVariable;
   bool bHaveVariable;
   __int64 iActiveTagCreationNumber;
+  __int64 iFirstContentLineCreationNumber;
   bool bOpeningInParagraph;
   bool bOpeningPreMode;
   bool bOpeningMXPScript;
