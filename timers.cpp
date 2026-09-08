@@ -420,17 +420,19 @@ void CMUSHclientDoc::OnUpdateGameResetalltimers(CCmdUI* pCmdUI)
 
 void CMUSHclientDoc::BuildTimerIndex (
   CTimerRevMap & timerRevMap,
-  const set<CTimer *> * pExclude)
+  const set<CTimer *> * pExclude,
+  CTimerMap * pObjectMap)
   {
+CTimerMap & objectMap = pObjectMap ? *pObjectMap : GetTimerMap ();
 
 CString strTimerName;
 CTimer * pTimer;
 POSITION pos;
 
   // extract pointers into a simple array
-  for (pos = GetTimerMap ().GetStartPosition(); pos; )
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetTimerMap ().GetNextAssoc (pos, strTimerName, pTimer);
+     objectMap.GetNextAssoc (pos, strTimerName, pTimer);
      if (pExclude && pExclude->find (pTimer) != pExclude->end ())
        continue;
      timerRevMap [pTimer] = strTimerName;

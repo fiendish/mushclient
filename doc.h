@@ -66,6 +66,22 @@ class CChildFrame;
 class CSendView;
 class CTextDocument;
 class UDPsocket;
+class CMUSHclientDoc;
+
+// XML parser targets are local to a load. Script APIs use the live document.
+struct CXMLLoadContext
+  {
+  explicit CXMLLoadContext (CMUSHclientDoc * pDoc);
+  CAliasMap * pAliasMap;
+  CAliasArray * pAliasArray;
+  CAliasRevMap * pAliasRevMap;
+  CTriggerMap * pTriggerMap;
+  CTriggerArray * pTriggerArray;
+  CTriggerRevMap * pTriggerRevMap;
+  CTimerMap * pTimerMap;
+  CTimerRevMap * pTimerRevMap;
+  };
+
 template <class T>
 struct CXMLLoadChange
   {
@@ -724,17 +740,6 @@ public:
   CTimerMap m_TimerMap;
   CTimerRevMap m_TimerRevMap;     // for getting name back from pointer
   CTimer * m_pRetiredTimers;  // replaced while their script was active
-
-  // Temporary targets used while a replacement set is parsed. The live maps
-  // and runtime indexes stay unchanged until the complete set is valid.
-  CAliasMap * m_pSetLoadAliasMap;
-  CAliasArray * m_pSetLoadAliasArray;
-  CAliasRevMap * m_pSetLoadAliasRevMap;
-  CTriggerMap * m_pSetLoadTriggerMap;
-  CTriggerArray * m_pSetLoadTriggerArray;
-  CTriggerRevMap * m_pSetLoadTriggerRevMap;
-  CTimerMap * m_pSetLoadTimerMap;
-  CTimerRevMap * m_pSetLoadTimerRevMap;
 
 
 // new in version 7
@@ -1743,7 +1748,8 @@ public:
                         UINT * piVariables = NULL,
                         UINT * piColours = NULL,
                         UINT * piKeypad = NULL,
-                        UINT * piPrinting = NULL);
+                        UINT * piPrinting = NULL,
+                        CXMLLoadContext * pLoadContext = NULL);
 
   void LoadError (const char * sType, const char * sMessage, UINT iLine = 0);
   void CheckUsed (CXMLelement & node);
@@ -1760,7 +1766,8 @@ public:
                       UINT * piVariables,
                       UINT * piColours,
                       UINT * piKeypad,
-                      UINT * piPrinting);
+                      UINT * piPrinting,
+                      CXMLLoadContext * pLoadContext = NULL);
   void Load_One_Include_XML (CXMLelement & node,
                       const unsigned long iMask,
                       const unsigned long iFlags,
@@ -1772,28 +1779,33 @@ public:
                       UINT * piVariables,
                       UINT * piColours,
                       UINT * piKeypad,
-                      UINT * piPrinting);
+                      UINT * piPrinting,
+                      CXMLLoadContext * pLoadContext = NULL);
 
   void Load_General_XML (CXMLelement & parent, 
     const unsigned long iFlags);
   UINT Load_Triggers_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Trigger_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
     const unsigned long iFlags,
-    CXMLLoadChange<CTrigger> & change);
+    CXMLLoadChange<CTrigger> & change,
+    CTriggerMap & objectMap);
   UINT Load_Aliases_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Alias_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
     const unsigned long iFlags,
-    CXMLLoadChange<CAlias> & change);
+    CXMLLoadChange<CAlias> & change,
+    CAliasMap & objectMap);
   UINT Load_Variables_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
@@ -1804,13 +1816,15 @@ public:
     const unsigned long iFlags);
   UINT Load_Timers_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Timer_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
     const unsigned long iFlags,
-    CXMLLoadChange<CTimer> & change);
+    CXMLLoadChange<CTimer> & change,
+    CTimerMap & objectMap);
   UINT Load_Macros_XML (CXMLelement & parent, 
     const unsigned long iFlags);
   void Load_One_Macro_XML (CXMLelement & node, 
@@ -1857,16 +1871,19 @@ public:
   void SortTriggers (const set<CTrigger *> * pExclude = NULL);
   void BuildTriggerIndexes (vector<CTrigger *> & triggerArray,
                             CTriggerRevMap & triggerRevMap,
-                            const set<CTrigger *> * pExclude = NULL);
+                            const set<CTrigger *> * pExclude = NULL,
+                            CTriggerMap * pObjectMap = NULL);
   // set up alias array after adding an alias or two
   void SortAliases (const set<CAlias *> * pExclude = NULL);
   void BuildAliasIndexes (vector<CAlias *> & aliasArray,
                           CAliasRevMap & aliasRevMap,
-                          const set<CAlias *> * pExclude = NULL);
+                          const set<CAlias *> * pExclude = NULL,
+                          CAliasMap * pObjectMap = NULL);
   // set up timer reverse map after adding timers
   void SortTimers (const set<CTimer *> * pExclude = NULL);
   void BuildTimerIndex (CTimerRevMap & timerRevMap,
-                        const set<CTimer *> * pExclude = NULL);
+                        const set<CTimer *> * pExclude = NULL,
+                        CTimerMap * pObjectMap = NULL);
   void RetireAlias (CAlias * pAlias);
   void RetireTrigger (CTrigger * pTrigger);
   void RetireTimer (CTimer * pTimer);
@@ -2252,9 +2269,7 @@ public:
   // helper routines to get the appropriate map
   CTriggerMap & GetTriggerMap (void)
     {
-    if (m_pSetLoadTriggerMap)
-      return *m_pSetLoadTriggerMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerMap;
     else
       return m_TriggerMap;
@@ -2262,9 +2277,7 @@ public:
 
   CTriggerArray & GetTriggerArray (void)
     {
-    if (m_pSetLoadTriggerArray)
-      return *m_pSetLoadTriggerArray;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerArray;
     else
       return m_TriggerArray;
@@ -2272,9 +2285,7 @@ public:
 
   CTriggerRevMap & GetTriggerRevMap (void)
     {
-    if (m_pSetLoadTriggerRevMap)
-      return *m_pSetLoadTriggerRevMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TriggerRevMap;
     else
       return m_TriggerRevMap;
@@ -2282,9 +2293,7 @@ public:
 
   CAliasMap & GetAliasMap (void)
     {
-    if (m_pSetLoadAliasMap)
-      return *m_pSetLoadAliasMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasMap;
     else
       return m_AliasMap;
@@ -2292,9 +2301,7 @@ public:
 
   CAliasArray & GetAliasArray (void)
     {
-    if (m_pSetLoadAliasArray)
-      return *m_pSetLoadAliasArray;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasArray;
     else
       return m_AliasArray;
@@ -2302,9 +2309,7 @@ public:
 
   CAliasRevMap & GetAliasRevMap (void)
     {
-    if (m_pSetLoadAliasRevMap)
-      return *m_pSetLoadAliasRevMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_AliasRevMap;
     else
       return m_AliasRevMap;
@@ -2312,9 +2317,7 @@ public:
 
   CTimerMap & GetTimerMap (void)
     {
-    if (m_pSetLoadTimerMap)
-      return *m_pSetLoadTimerMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TimerMap;
     else
       return m_TimerMap;
@@ -2322,9 +2325,7 @@ public:
 
   CTimerRevMap & GetTimerRevMap (void)
     {
-    if (m_pSetLoadTimerRevMap)
-      return *m_pSetLoadTimerRevMap;
-    else if (m_CurrentPlugin)
+    if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TimerRevMap;
     else
       return m_TimerRevMap;

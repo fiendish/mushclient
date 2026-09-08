@@ -6216,18 +6216,20 @@ int CompareTrigger (const void * elem1, const void * elem2)
 void CMUSHclientDoc::BuildTriggerIndexes (
   vector<CTrigger *> & triggerArray,
   CTriggerRevMap & triggerRevMap,
-  const set<CTrigger *> * pExclude)
+  const set<CTrigger *> * pExclude,
+  CTriggerMap * pObjectMap)
   {
+CTriggerMap & objectMap = pObjectMap ? *pObjectMap : GetTriggerMap ();
 CString strTriggerName;
 CTrigger * pTrigger;
 POSITION pos;
 
-  triggerArray.reserve (GetTriggerMap ().GetCount ());
+  triggerArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (pos = GetTriggerMap ().GetStartPosition(); pos; )
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetTriggerMap ().GetNextAssoc (pos, strTriggerName, pTrigger);
+     objectMap.GetNextAssoc (pos, strTriggerName, pTrigger);
      if (pExclude && pExclude->find (pTrigger) != pExclude->end ())
        continue;
      triggerArray.push_back (pTrigger);
@@ -6282,18 +6284,20 @@ static int CompareAlias (const void * elem1, const void * elem2)
 void CMUSHclientDoc::BuildAliasIndexes (
   vector<CAlias *> & aliasArray,
   CAliasRevMap & aliasRevMap,
-  const set<CAlias *> * pExclude)
+  const set<CAlias *> * pExclude,
+  CAliasMap * pObjectMap)
   {
+CAliasMap & objectMap = pObjectMap ? *pObjectMap : GetAliasMap ();
 CString strAliasName;
 CAlias * pAlias;
 POSITION pos;
 
-  aliasArray.reserve (GetAliasMap ().GetCount ());
+  aliasArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (pos = GetAliasMap ().GetStartPosition(); pos; )
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
+     objectMap.GetNextAssoc (pos, strAliasName, pAlias);
      if (pExclude && pExclude->find (pAlias) != pExclude->end ())
        continue;
      aliasArray.push_back (pAlias);

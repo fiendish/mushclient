@@ -603,22 +603,6 @@ class COwnedSetMap
   };
 
 template <class TObject>
-class CScopedSetLoadTarget
-  {
-  public:
-    CScopedSetLoadTarget (TObject * & target, TObject * pReplacement) :
-      m_Target (target), m_pOldTarget (target)
-      { m_Target = pReplacement; }
-
-    ~CScopedSetLoadTarget ()
-      { m_Target = m_pOldTarget; }
-
-  private:
-    TObject * & m_Target;
-    TObject * m_pOldTarget;
-  };
-
-template <class TObject>
 struct CSetPublishChange
   {
   CString strName;
@@ -816,16 +800,13 @@ bool bStagedReplacementPublished = false;
             BeginPluginListChangedDeferral ();
             try
               {
-                {
-                CScopedSetLoadTarget<CTriggerMap> mapTarget
-                  (m_pSetLoadTriggerMap, &stagedTriggers.map);
-                CScopedSetLoadTarget<CTriggerArray> arrayTarget
-                  (m_pSetLoadTriggerArray, &stagedTriggerArray);
-                CScopedSetLoadTarget<CTriggerRevMap> reverseTarget
-                  (m_pSetLoadTriggerRevMap, &stagedTriggerRevMap);
-                Load_World_XML (*ar,
-                  XML_TRIGGERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
-                }
+              CXMLLoadContext loadContext (this);
+              loadContext.pTriggerMap = &stagedTriggers.map;
+              loadContext.pTriggerArray = &stagedTriggerArray;
+              loadContext.pTriggerRevMap = &stagedTriggerRevMap;
+              Load_World_XML (*ar,
+                XML_TRIGGERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY,
+                0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &loadContext);
               PublishLoadedSet<CTrigger> (this,
                                           m_TriggerMap,
                                           stagedTriggers.map,
@@ -855,16 +836,13 @@ bool bStagedReplacementPublished = false;
             BeginPluginListChangedDeferral ();
             try
               {
-                {
-                CScopedSetLoadTarget<CAliasMap> mapTarget
-                  (m_pSetLoadAliasMap, &stagedAliases.map);
-                CScopedSetLoadTarget<CAliasArray> arrayTarget
-                  (m_pSetLoadAliasArray, &stagedAliasArray);
-                CScopedSetLoadTarget<CAliasRevMap> reverseTarget
-                  (m_pSetLoadAliasRevMap, &stagedAliasRevMap);
-                Load_World_XML (*ar,
-                  XML_ALIASES | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
-                }
+              CXMLLoadContext loadContext (this);
+              loadContext.pAliasMap = &stagedAliases.map;
+              loadContext.pAliasArray = &stagedAliasArray;
+              loadContext.pAliasRevMap = &stagedAliasRevMap;
+              Load_World_XML (*ar,
+                XML_ALIASES | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY,
+                0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &loadContext);
               PublishLoadedSet<CAlias> (this,
                                         m_AliasMap,
                                         stagedAliases.map,
@@ -902,14 +880,12 @@ bool bStagedReplacementPublished = false;
             BeginPluginListChangedDeferral ();
             try
               {
-                {
-                CScopedSetLoadTarget<CTimerMap> mapTarget
-                  (m_pSetLoadTimerMap, &stagedTimers.map);
-                CScopedSetLoadTarget<CTimerRevMap> reverseTarget
-                  (m_pSetLoadTimerRevMap, &stagedTimerRevMap);
-                Load_World_XML (*ar,
-                  XML_TIMERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY);
-                }
+              CXMLLoadContext loadContext (this);
+              loadContext.pTimerMap = &stagedTimers.map;
+              loadContext.pTimerRevMap = &stagedTimerRevMap;
+              Load_World_XML (*ar,
+                XML_TIMERS | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY,
+                0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &loadContext);
               PublishLoadedSet<CTimer> (this,
                                         m_TimerMap,
                                         stagedTimers.map,
