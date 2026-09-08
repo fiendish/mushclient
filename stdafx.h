@@ -317,7 +317,8 @@ typedef void (*InitiateSearch) (const CObject * pObject,
 bool FindRoutine (const CObject * pObject,       // passed back to callback routines
                   CFindInfo & FindInfo,          // details about find
                   const InitiateSearch pInitiateSearch, // how to re-initiate a find
-                  const GetNextLine pGetNextLine);
+                  const GetNextLine pGetNextLine,
+                  bool * pCancelled = NULL);
 
 
 // find-and-replace for strings
