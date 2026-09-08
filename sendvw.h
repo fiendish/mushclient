@@ -34,6 +34,7 @@ public:
 	CStringList m_msgList;
   CString m_last_command;
   long m_inputcount;
+  unsigned __int64 m_iHistoryDiscarded;
   POSITION m_HistoryPosition;
   int m_iHistoryStatus;   // see enum above
   CMUSHView * m_topview;
