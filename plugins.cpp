@@ -1489,12 +1489,9 @@ void  CMUSHclientDoc::PluginListChanged (void)
   m_bInPluginListChanged = true;
   try
     {
-    do
-      {
-      m_bPluginListChangedPending = false;
-      SendToAllPluginCallbacks (ON_PLUGIN_LIST_CHANGED);
-      }
-    while (m_bPluginListChangedPending);
+    // Let OnIdle deliver nested changes after the message loop regains control.
+    m_bPluginListChangedPending = false;
+    SendToAllPluginCallbacks (ON_PLUGIN_LIST_CHANGED);
     }
   catch (...)
     {
