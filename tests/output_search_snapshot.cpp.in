@@ -1,0 +1,435 @@
+#ifdef NDEBUG
+#error Output search checks require assertions
+#endif
+#include <algorithm>
+#include <cassert>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <iostream>
+#include <list>
+#include <map>
+#include <memory>
+#include <regex>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using namespace std;
+using __int64 = long long;
+using LPCTSTR = const char *;
+using HWND = unsigned long;
+#define ASSERT_VALID(x) assert(x)
+#define IDOK 1
+#define IDCANCEL 2
+#define MB_ICONINFORMATION 0
+#define PCRE_CASELESS 1
+#define PCRE_UTF8 2
+struct CObject {};
+struct CString : string {
+  using string::string;
+  using string::operator=;
+  CString(const string & s) : string(s) {}
+  CString(const char * s, int n) : string(s, n) {}
+  operator LPCTSTR() const { return c_str(); }
+  bool IsEmpty() const { return empty(); }
+  int GetLength() const { return static_cast<int>(size()); }
+  void Empty() { clear(); }
+  void MakeLower() { for (char & c : *this) c = tolower(static_cast<unsigned char>(c)); }
+  int Find(const CString & s, int start) const {
+    size_t p = find(s, start); return p == npos ? -1 : static_cast<int>(p);
+  }
+};
+struct Node { Node * prev = nullptr, * next = nullptr; virtual ~Node() = default; };
+using POSITION = Node *;
+template<class T> struct ValueNode : Node { T value; explicit ValueNode(const T & v) : value(v) {} };
+template<class T> struct List {
+  Node * head = nullptr, * tail = nullptr;
+  int count = 0;
+  ~List() { RemoveAll(); }
+  int GetCount() const { return count; }
+  bool IsEmpty() const { return !head; }
+  POSITION GetHeadPosition() const { return head; }
+  POSITION GetTailPosition() const { return tail; }
+  T GetAt(POSITION p) const { assert(p); return static_cast<ValueNode<T> *>(p)->value; }
+  T GetNext(POSITION & p) const { T v = GetAt(p); p = p->next; return v; }
+  T GetPrev(POSITION & p) const { T v = GetAt(p); p = p->prev; return v; }
+  T GetHead() const { return GetAt(head); }
+  POSITION AddTail(const T & v) {
+    auto n = new ValueNode<T>(v); n->prev = tail;
+    if (tail) tail->next = n; else head = n;
+    tail = n; ++count; return n;
+  }
+  void AddHead(const T & v) {
+    auto n = new ValueNode<T>(v); n->next = head;
+    if (head) head->prev = n; else tail = n;
+    head = n; ++count;
+  }
+  T RemoveHead() {
+    T v = GetAt(head); Node * n = head; head = head->next;
+    if (head) head->prev = nullptr; else tail = nullptr;
+    delete n; --count; return v;
+  }
+  T RemoveTail() {
+    T v = GetAt(tail); Node * n = tail; tail = tail->prev;
+    if (tail) tail->next = nullptr; else head = nullptr;
+    delete n; --count; return v;
+  }
+  void RemoveAll() { while (head) RemoveHead(); }
+};
+using CStringList = List<CString>;
+
+// The substitute regexp has strict ownership and records its compile flags.
+struct t_regexp {
+  static int count;
+  regex pattern;
+  int flags;
+  int m_vOffsets[2] = {};
+  t_regexp(const char * s, int f) :
+    pattern(s, regex::ECMAScript | (f & PCRE_CASELESS ? regex::icase : regex::flag_type{})), flags(f) { ++count; }
+  ~t_regexp() { --count; }
+};
+int t_regexp::count = 0;
+t_regexp * regcomp(const CString & text, int flags) { return new t_regexp(text, flags); }
+bool regexec(t_regexp * compiled, const CString & line, int start) {
+  assert(compiled);
+  cmatch result;
+  if (!regex_search(line.c_str() + start, result, compiled->pattern)) return false;
+  compiled->m_vOffsets[0] = start + result.position();
+  compiled->m_vOffsets[1] = compiled->m_vOffsets[0] + result.length();
+  return true;
+}
+class CProgressDlg;
+@FIND_INFO@
+using InitiateSearch = void (*)(const CObject *, CFindInfo &);
+using GetNextLine = bool (*)(const CObject *, CFindInfo &, CString &);
+bool FindRoutine(const CObject *, CFindInfo &, InitiateSearch, GetNextLine, bool * = nullptr);
+
+function<void()> progressCallback, modalCallback, notFoundCallback, statusCallback, selectionCallback;
+bool cancelProgress = false, cancelDialog = false, failCreate = false;
+int progressCount = 0, notFoundCount = 0;
+void invokeOnce(function<void()> & slot) { auto callback = std::move(slot); slot = {}; if (callback) callback(); }
+CString dialogText;
+bool dialogRegexp = false, dialogForwards = true, dialogMatchCase = false;
+struct CFindDlg {
+  CString m_strFindText, m_strTitle;
+  bool m_bMatchCase = false, m_bForwards = true, m_bRegexp = false;
+  explicit CFindDlg(CStringList &) {}
+  int DoModal() {
+    invokeOnce(modalCallback);
+    if (cancelDialog) { cancelDialog = false; return IDCANCEL; }
+    m_strFindText = dialogText; m_bRegexp = dialogRegexp;
+    m_bForwards = dialogForwards; m_bMatchCase = dialogMatchCase;
+    return IDOK;
+  }
+};
+struct CProgressDlg {
+  static int count;
+  CProgressDlg() { ++count; }
+  ~CProgressDlg() { --count; }
+  bool Create() { if (failCreate) throw runtime_error("progress creation"); return true; }
+  void SetStatus(const CString &) {}
+  void SetRange(int, long) {}
+  void SetWindowText(const CString &) {}
+  void SetPos(long) { ++progressCount; invokeOnce(progressCallback); }
+  bool CheckCancelButton() { bool c = cancelProgress; cancelProgress = false; return c; }
+};
+int CProgressDlg::count = 0;
+struct FrameType {
+  void SetStatusNormal() {}
+  void SetStatusMessageNow(const CString &) { invokeOnce(statusCallback); }
+} Frame;
+struct CException { void ReportError() {} void Delete() { delete this; } };
+void AfxThrowResourceException() { throw runtime_error("resource"); }
+CString Translate(const char * s) { return s; }
+CString TFormat(const char * format, ...) {
+  char buffer[1024]; va_list args; va_start(args, format);
+  vsnprintf(buffer, sizeof buffer, format, args); va_end(args); return buffer;
+}
+void UMessageBox(const CString &, int) { ++notFoundCount; invokeOnce(notFoundCallback); }
+@FIND_ROUTINE@
+
+map<HWND, class CWnd *> windows;
+HWND nextWindow = 0;
+struct CWnd {
+  HWND window = ++nextWindow;
+  CWnd() { windows[window] = this; }
+  virtual ~CWnd() { windows.erase(window); }
+  HWND GetSafeHwnd() const { return window; }
+  static CWnd * FromHandlePermanent(HWND w) { auto p = windows.find(w); return p == windows.end() ? nullptr : p->second; }
+  void DestroyWindow() { windows.erase(window); }
+};
+bool IsWindow(HWND w) { return windows.count(w) != 0; }
+__int64 nextIdentity = 0;
+struct CLine {
+  __int64 nCreationNumber = ++nextIdentity;
+  string bytes;
+  const char * text;
+  int len;
+  bool hard_return;
+  CLine(string s, bool hard) : bytes(std::move(s)), text(bytes.data()), len(bytes.size()), hard_return(hard) {}
+  void Change(string s) { bytes = std::move(s); text = bytes.data(); len = bytes.size(); }
+};
+struct CMUSHclientDoc;
+map<CMUSHclientDoc *, __int64> documents;
+struct CMUSHclientDoc {
+  __int64 m_iUniqueDocumentNumber = ++nextIdentity, m_iOutputGeneration = 0;
+  bool m_bWorldClosePending = false;
+  int m_iActiveProgressOperations = 0;
+  List<CLine *> m_LineList;
+  CFindInfo m_DisplayFindInfo;
+  CMUSHclientDoc() { documents[this] = m_iUniqueDocumentNumber; m_DisplayFindInfo.m_bAgain = false; }
+  ~CMUSHclientDoc() { assert(m_iActiveProgressOperations == 0); ClearLines(); documents.erase(this); }
+  void BeginProgressOperation() { ++m_iActiveProgressOperations; }
+  void EndProgressOperation() { assert(m_iActiveProgressOperations > 0); --m_iActiveProgressOperations; }
+  void ClearLines() { while (!m_LineList.IsEmpty()) delete m_LineList.RemoveHead(); ++m_iOutputGeneration; }
+  CLine * Add(string s, bool hard = true) { auto line = new CLine(std::move(s), hard); m_LineList.AddTail(line); return line; }
+  CLine * At(int index) { auto pos = m_LineList.GetHeadPosition(); while (index--) m_LineList.GetNext(pos); return m_LineList.GetAt(pos); }
+  void Prune(int count) {
+    for (int i = 0; i < count; ++i) delete m_LineList.RemoveHead();
+    ++m_iOutputGeneration;
+    m_DisplayFindInfo.m_nCurrentLine = max(0L, m_DisplayFindInfo.m_nCurrentLine - count);
+  }
+  void ClearOutput() {
+    ClearLines(); Add("", false);
+    m_DisplayFindInfo.m_nCurrentLine = 0;
+    m_DisplayFindInfo.m_pFindPosition = nullptr;
+    m_DisplayFindInfo.m_bAgain = false;
+  }
+};
+bool IsWorldDocumentLive(const CMUSHclientDoc * doc, __int64 identity) {
+  auto p = documents.find(const_cast<CMUSHclientDoc *>(doc));
+  return p != documents.end() && p->second == identity;
+}
+@GUARD@
+struct CMUSHView : CWnd {
+  long m_selstart_line = -9, m_selend_line = -9;
+  int m_selstart_col = -9, m_selend_col = -9, ensured = 0, notified = 0, invalidated = 0;
+  void EnsureSelectionVisible() { ++ensured; }
+  void Invalidate() { ++invalidated; }
+  void NotifySelectionChanged() { ++notified; invokeOnce(selectionCallback); }
+};
+class COutputSearchSnapshot;
+struct CSendView : CWnd {
+  CMUSHclientDoc * doc;
+  CMUSHView * m_topview;
+  shared_ptr<COutputSearchSnapshot> m_pOutputSearchSnapshot;
+  CSendView(CMUSHclientDoc & d, CMUSHView & v) : doc(&d), m_topview(&v) {}
+  CMUSHclientDoc * GetDocument() { return doc; }
+  void DoFind(bool);
+  static void InitiateSearch(const CObject *, CFindInfo &);
+  static bool GetNextLine(const CObject *, CFindInfo &, CString &);
+};
+@PRODUCTION@
+
+struct Fixture {
+  CMUSHclientDoc doc;
+  CMUSHView top;
+  CSendView send{doc, top};
+  Fixture() {
+    progressCallback = modalCallback = notFoundCallback = statusCallback = selectionCallback = {};
+    cancelProgress = cancelDialog = failCreate = false;
+    dialogText = "target"; dialogRegexp = false; dialogForwards = true; dialogMatchCase = false;
+    progressCount = notFoundCount = 0;
+  }
+  ~Fixture() { assert(CProgressDlg::count == 0); assert(doc.m_iActiveProgressOperations == 0); }
+  void Noise(int count) { for (int i = 0; i < count; ++i) doc.Add("noise"); }
+  void Find(const char * text = "target", bool forwards = true, bool regexp = false) {
+    dialogText = text; dialogForwards = forwards; dialogRegexp = regexp; send.DoFind(false);
+  }
+  void Again(bool forwards = true) { doc.m_DisplayFindInfo.m_bForwards = forwards; send.DoFind(true); }
+  void Selected(long first, int start, long last, int end) {
+    assert(top.m_selstart_line == first); assert(top.m_selstart_col == start);
+    assert(top.m_selend_line == last); assert(top.m_selend_col == end);
+    assert(doc.m_DisplayFindInfo.m_pFindPosition == nullptr);
+  }
+  void Unselected() { assert(top.m_selstart_line == -9); assert(top.ensured == 0); }
+};
+int cases = 0;
+void run(const char * name, function<void()> test) {
+  test(); assert(t_regexp::count == 0); ++cases; cout << "PASS: " << name << endl;
+}
+int main() {
+  run("forward wrapped matches and Find Again", [] {
+    Fixture f; f.doc.Add("prefix ab", false); f.doc.Add("cd ef ab", false); f.doc.Add("cd end"); f.doc.Add("tail abcd");
+    f.Find("abcd"); f.Selected(0, 7, 1, 2);
+    f.Again(); f.Selected(1, 6, 2, 2);
+    f.Again(); f.Selected(3, 5, 3, 9);
+  });
+  run("backward wrapped matches and Find Again", [] {
+    Fixture f; f.doc.Add("ab", false); f.doc.Add("cd ab", false); f.doc.Add("cd"); f.doc.Add("last abcd");
+    f.Find("abcd", false); f.Selected(3, 5, 3, 9);
+    f.Again(false); f.Selected(1, 3, 2, 2);
+    f.Again(false); f.Selected(0, 0, 1, 2);
+  });
+  run("direction change uses the whole previous wrapped line", [] {
+    Fixture f; f.doc.Add("abcd"); f.doc.Add("ab", false); f.doc.Add("cd"); f.doc.Add("abcd");
+    f.Find("abcd", false); f.Again(false); f.Selected(1, 0, 2, 2);
+    f.Again(true); f.Selected(3, 0, 3, 4);
+    f.Again(false); f.Selected(1, 0, 2, 2);
+    f.Again(false); f.Selected(0, 0, 0, 4);
+  });
+  run("case flags, regexp ownership, and repeated regexp matches", [] {
+    Fixture f; f.doc.m_DisplayFindInfo.m_bUTF8 = true; f.doc.Add("AB12 ab34");
+    f.Find("ab[0-9]+", true, true); f.Selected(0, 0, 0, 4);
+    assert(f.doc.m_DisplayFindInfo.m_regexp->flags == (PCRE_CASELESS | PCRE_UTF8));
+    f.Again(); f.Selected(0, 5, 0, 9);
+    f.Find("aB", true, false); f.Selected(0, 0, 0, 2);
+    assert(f.doc.m_DisplayFindInfo.m_regexp == nullptr);
+  });
+  run("empty wrapped pieces and match boundary columns", [] {
+    Fixture f; f.doc.Add("", false); f.doc.Add("ab", false); f.doc.Add("", false); f.doc.Add("cd");
+    f.Find("ab"); f.Selected(1, 0, 1, 2);
+    f.Find("cd"); f.Selected(3, 0, 3, 2);
+    f.Find("$", true, true); f.Selected(3, 2, 3, 2);
+  });
+  run("UTF-8 selection uses byte offsets", [] {
+    Fixture f; f.doc.Add("\xc3\xa9" "ab", false); f.doc.Add("cd");
+    f.Find("abcd"); f.Selected(0, 2, 1, 2);
+  });
+  run("empty regexp match on empty wrapped pieces has ordered endpoints", [] {
+    Fixture f; f.doc.Add("", false); f.doc.Add("", false); f.doc.Add("");
+    f.Find("$", true, true); f.Selected(2, 0, 2, 0);
+  });
+  run("append during progress preserves existing match", [] {
+    Fixture f; f.Noise(620); f.doc.At(550)->Change("target");
+    progressCallback = [&] { assert(f.doc.m_iActiveProgressOperations == 1); f.doc.Add("target"); };
+    f.Find(); f.Selected(550, 0, 550, 6); assert(progressCount > 0);
+  });
+  run("new output is outside this invocation's snapshot", [] {
+    Fixture f; f.Noise(620); progressCallback = [&] { f.doc.Add("target"); };
+    f.Find(); f.Unselected(); assert(notFoundCount == 1);
+    f.Again(); f.Selected(620, 0, 620, 6);
+  });
+  run("empty source can be searched again after new output", [] {
+    Fixture f; f.Find(); f.Unselected(); f.doc.Add("target");
+    f.Again(); f.Selected(0, 0, 0, 6);
+  });
+  run("the saved snapshot retains only the matched logical line", [] {
+    Fixture f; f.Noise(620); f.doc.Add("tar", false); f.doc.Add("get target");
+    f.Find(); f.Selected(620, 0, 621, 3);
+    assert(f.send.m_pOutputSearchSnapshot->m_Lines.size() == 2);
+    f.Again(); f.Selected(621, 4, 621, 10);
+    f.Again(); assert(f.send.m_pOutputSearchSnapshot->m_Lines.empty());
+  });
+  run("prune before match remaps selection and cached Find Again", [] {
+    Fixture f; f.Noise(620); f.doc.At(550)->Change("target target");
+    progressCallback = [&] { f.doc.Prune(100); };
+    f.Find(); f.Selected(450, 0, 450, 6);
+    f.doc.Prune(100); f.Again(); f.Selected(350, 7, 350, 13);
+  });
+  run("backward prune remaps wrapped match", [] {
+    Fixture f; f.Noise(100); f.doc.Add("tar", false); f.doc.Add("get"); f.Noise(620);
+    progressCallback = [&] { f.doc.Prune(50); };
+    f.Find("target", false); f.Selected(50, 0, 51, 3);
+  });
+  run("pruned match is rejected", [] {
+    Fixture f; f.Noise(620); f.doc.At(31)->Change("target");
+    progressCallback = [&] { f.doc.Prune(32); };
+    f.Find(); f.Unselected(); assert(f.doc.m_DisplayFindInfo.m_MatchesOnLine.empty());
+  });
+  run("clear and same-text replacement cannot reuse a selection", [] {
+    Fixture f; f.Noise(620); f.doc.At(31)->Change("target");
+    progressCallback = [&] { f.doc.ClearOutput(); f.doc.At(0)->Change("target"); };
+    f.Find(); f.Unselected(); f.Again(); f.Selected(0, 0, 0, 6);
+  });
+  run("shared regexp deletion cannot affect the active find", [] {
+    Fixture f; f.Noise(620); f.doc.At(550)->Change("target42");
+    auto & state = f.doc.m_DisplayFindInfo;
+    state.m_strFindStringList.AddHead("target[0-9]+"); state.m_bRegexp = true;
+    state.m_nCurrentLine = -1; state.m_regexp = regcomp("target[0-9]+", 0);
+    progressCallback = [&] {
+      delete state.m_regexp; state.m_regexp = nullptr;
+      state.m_nCurrentLine = 0; state.m_pFindPosition = nullptr; state.m_bAgain = false;
+      state.m_MatchesOnLine.push_back({400, 500});
+    };
+    f.Again(); f.Selected(550, 0, 550, 8); assert(state.m_MatchesOnLine.empty());
+  });
+  run("same-length text change rejects the match", [] {
+    Fixture f; f.Noise(620); f.doc.At(31)->Change("target");
+    progressCallback = [&] { f.doc.At(31)->Change("change"); };
+    f.Find(); f.Unselected();
+  });
+  run("changed wrap boundary rejects the match", [] {
+    Fixture f; f.Noise(620); f.doc.At(31)->Change("target");
+    progressCallback = [&] { f.doc.At(30)->hard_return = false; };
+    f.Find(); f.Unselected();
+  });
+  run("append to the matched unterminated line rejects the match", [] {
+    Fixture f; f.Noise(31); f.doc.Add("target", false);
+    for (int i = 0; i < 600; ++i) f.doc.Add("suffix", false);
+    progressCallback = [&] { f.doc.At(631)->Change("suffix appended"); };
+    f.Find(); f.Unselected();
+  });
+  run("new wrapped tail fragment rejects the old logical line", [] {
+    Fixture f; f.Noise(31); f.doc.Add("target", false);
+    for (int i = 0; i < 600; ++i) f.doc.Add("suffix", false);
+    progressCallback = [&] { f.doc.Add("extra", false); };
+    f.Find(); f.Unselected();
+  });
+  run("ClearOutput between Find Again calls invalidates saved columns", [] {
+    Fixture f; f.doc.Add("target target"); f.Find(); f.Selected(0, 0, 0, 6);
+    f.doc.ClearOutput(); f.doc.At(0)->Change("xx target"); f.Again(); f.Selected(0, 3, 0, 9);
+  });
+  run("changed text between Find Again calls is searched again", [] {
+    Fixture f; f.doc.Add("target target"); f.Find();
+    f.doc.At(0)->Change("xx target"); f.Again(); f.Selected(0, 3, 0, 9);
+  });
+  run("nested search owns publication", [] {
+    Fixture f; f.Noise(620); f.doc.At(0)->Change("inner"); f.doc.At(550)->Change("target");
+    progressCallback = [&] { f.Find("inner"); f.Selected(0, 0, 0, 5); };
+    f.Find(); f.Selected(0, 0, 0, 5);
+    assert(f.doc.m_DisplayFindInfo.m_strFindStringList.GetHead() == string("inner"));
+  });
+  run("cancelled dialog preserves pending Find Again matches", [] {
+    Fixture f; f.doc.Add("target target"); f.Find();
+    cancelDialog = true; f.Find("different"); f.Again(); f.Selected(0, 7, 0, 13);
+  });
+  run("nested cancelled dialog lets the outer search finish", [] {
+    Fixture f; f.Noise(620); f.doc.At(550)->Change("target");
+    progressCallback = [&] { cancelDialog = true; f.Find("different"); };
+    f.Find(); f.Selected(550, 0, 550, 6);
+  });
+  run("dialog output replacement keeps the pre-dialog source immutable", [] {
+    Fixture f; f.doc.Add("target");
+    modalCallback = [&] { f.doc.ClearOutput(); f.doc.At(0)->Change("target"); };
+    f.Find(); f.Unselected();
+  });
+  run("not-found dialog can replace output without restoring a stale cursor", [] {
+    Fixture f; f.Noise(620); notFoundCallback = [&] { f.doc.ClearOutput(); };
+    f.Find(); f.Unselected(); assert(f.doc.m_DisplayFindInfo.m_nCurrentLine == 0);
+  });
+  run("progress cancellation releases progress and operation ownership", [] {
+    Fixture f; f.Noise(620); f.doc.At(550)->Change("target");
+    progressCallback = [&] { cancelProgress = true; };
+    f.Find(); f.Unselected(); assert(CProgressDlg::count == 0);
+  });
+  run("progress exception propagates and releases ownership", [] {
+    Fixture f; f.Noise(620); progressCallback = [] { throw runtime_error("callback"); };
+    bool threw = false;
+    try { f.Find(); } catch (const runtime_error & e) { threw = string(e.what()) == "callback"; }
+    assert(threw); assert(CProgressDlg::count == 0); assert(f.doc.m_iActiveProgressOperations == 0);
+  });
+  run("progress creation failure propagates", [] {
+    Fixture f; f.Noise(620); failCreate = true; bool threw = false;
+    try { f.Find(); } catch (const runtime_error & e) { threw = string(e.what()) == "progress creation"; }
+    assert(threw); assert(CProgressDlg::count == 0);
+  });
+  run("accepted document close prevents publication", [] {
+    Fixture f; f.Noise(620); f.doc.At(550)->Change("target");
+    progressCallback = [&] { assert(f.doc.m_iActiveProgressOperations == 1); f.doc.m_bWorldClosePending = true; };
+    f.Find(); f.Unselected(); assert(f.doc.m_DisplayFindInfo.m_strFindStringList.IsEmpty());
+  });
+  run("destroyed output window prevents publication", [] {
+    Fixture f; f.Noise(620); f.doc.At(550)->Change("target");
+    progressCallback = [&] { f.top.DestroyWindow(); };
+    f.Find(); f.Unselected();
+  });
+  run("selection callback runs after repaint and inside operation guard", [] {
+    Fixture f; f.doc.Add("target");
+    selectionCallback = [&] { assert(f.top.invalidated == 1); assert(f.doc.m_iActiveProgressOperations == 1); f.doc.ClearOutput(); f.top.DestroyWindow(); };
+    f.Find(); assert(f.top.notified == 1);
+  });
+  cout << cases << " output search cases passed" << endl;
+}

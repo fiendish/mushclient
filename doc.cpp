@@ -940,7 +940,8 @@ BOOL CMUSHclientDoc::OpenSession (void)
       }
     } // end of executing open script
 
-  if (App.m_bAutoConnectWorlds)
+  if (App.m_bAutoConnectWorlds &&
+      m_iConnectPhase == eConnectNotConnected)
 	  if (ConnectSocket())
 		  return TRUE;
 
@@ -977,6 +978,10 @@ void CMUSHclientDoc::Dump(CDumpContext& dc) const
 
 BOOL CMUSHclientDoc::ConnectSocket(void)
 {
+
+  // Keep the socket and completion phase of an existing host name lookup.
+  if (m_hNameLookup)
+    return TRUE;    // the connection attempt is still waiting for its address
 
 CString str;
 
@@ -1032,6 +1037,8 @@ CString str;
           break;
 
     } // end of switch
+
+  m_iConnectionAttemptNumber++;
 
 	m_bEnableAutoSay = FALSE;		// auto-say off at start of session
 
@@ -4401,6 +4408,7 @@ bool CMUSHclientDoc::SendToMushHelper (CFile * f,
                                        const BOOL bConfirm,
                                        const BOOL bEcho)
   {
+CWorldDocumentOperationGuard operationGuard (this);
 CString str;
 CString full_line;
 
@@ -4451,10 +4459,13 @@ DWORD nLines = 0,
     if (dlg.DoModal () != IDOK)
       return false;
 
+  if (m_bWorldClosePending)
+    return false;
   CArchive ar (f, CArchive::load);
 
   CProgressDlg ProgressDlg;                   
-  ProgressDlg.Create ();                           
+  if (!ProgressDlg.Create ())
+    AfxThrowResourceException ();
   ProgressDlg.SetStatus (Translate ("Sending to world..."));               
   ProgressDlg.SetRange (0, nLines);
   ProgressDlg.SetWindowText (Translate ("Sending..."));                              
@@ -4466,6 +4477,8 @@ DWORD nLines = 0,
 
     if (!dlg.m_strPreamble.IsEmpty ())
       SendMsg (dlg.m_strPreamble, dlg.m_bEcho, false, LoggingInput ());
+    if (m_bWorldClosePending)
+      return false;
     
     CString strSoftcode;
     bool bHashCommenting = false;
@@ -4478,7 +4491,12 @@ DWORD nLines = 0,
       nCurrentLine++;
       ProgressDlg.SetPos (nCurrentLine); 
 
-      if (ProgressDlg.CheckCancelButton())     // abort if user cancels
+      if (m_bWorldClosePending)
+        return false;
+      const BOOL bCancelled = ProgressDlg.CheckCancelButton ();
+      if (m_bWorldClosePending)
+        return false;
+      if (bCancelled)
         break;
 
       if (dlg.m_bCommentedSoftcode)
@@ -4504,6 +4522,8 @@ DWORD nLines = 0,
           full_line += dlg.m_strLinePostamble;
 
           SendMsg (full_line, dlg.m_bEcho, false, LoggingInput ());   // send the line
+          if (m_bWorldClosePending)
+            return false;
           if (dlg.m_iLineDelay > 0)
             {
             if (++iLineCount >= dlg.m_nLineDelayPerLines)
@@ -4544,6 +4564,8 @@ DWORD nLines = 0,
       full_line += str;
       full_line += dlg.m_strLinePostamble;
       SendMsg (full_line, dlg.m_bEcho, false, LoggingInput ());   // send the line
+      if (m_bWorldClosePending)
+        return false;
       if (dlg.m_iLineDelay > 0)
         {
         if (++iLineCount >= dlg.m_nLineDelayPerLines)
@@ -4560,6 +4582,8 @@ DWORD nLines = 0,
       full_line += strSoftcode;
       full_line += dlg.m_strLinePostamble;
       SendMsg (full_line, dlg.m_bEcho, false, LoggingInput ());   // send the line
+      if (m_bWorldClosePending)
+        return false;
       if (dlg.m_iLineDelay > 0)
         {
         if (++iLineCount >= dlg.m_nLineDelayPerLines)
@@ -4590,7 +4614,7 @@ DWORD nLines = 0,
 void CMUSHclientDoc::OnGamePastefile() 
 {
 
-CStdioFile * f = NULL;
+std::unique_ptr<CStdioFile> f;
 CString str;
 CString filename;
 
@@ -4617,9 +4641,9 @@ CString filename;
 
   try
     {
-    f = new CStdioFile (filedlg.GetPathName (), CFile::modeRead | CFile::shareDenyWrite);
+    f.reset (new CStdioFile (filedlg.GetPathName (), CFile::modeRead | CFile::shareDenyWrite));
 
-    SendToMushHelper (f, 
+    SendToMushHelper (f.get (),
                      m_file_preamble,
                      m_line_preamble,
                      m_line_postamble,
@@ -4638,8 +4662,6 @@ CString filename;
       TMessageBox ("Unable to open or read the requested file", MB_ICONEXCLAMATION);
     e->Delete ();
     } // end of catching a file exception
-
-  delete f;       // delete file
 
 }
 
@@ -5409,8 +5431,36 @@ void CMUSHclientDoc::ShowStatusLine (const bool bNow)
 
 
 
+void CMUSHclientDoc::OnCloseDocument()
+{
+  if (m_iActiveProgressOperations != 0 || CProgressDlg::IsPumpingMessages ())
+    {
+    if (!m_bWorldCloseQueued)
+      {
+      App.DeferWorldDocumentClose (m_iUniqueDocumentNumber);
+      m_bWorldCloseQueued = true;
+      }
+    m_bWorldClosePending = true;
+    return;
+    }
+  CDocument::OnCloseDocument ();
+}
+
+void CMUSHclientDoc::BeginProgressOperation ()
+{
+  ++m_iActiveProgressOperations;
+}
+
+void CMUSHclientDoc::EndProgressOperation ()
+{
+  ASSERT (m_iActiveProgressOperations > 0);
+  --m_iActiveProgressOperations;
+}
+
 BOOL CMUSHclientDoc::SaveModified() 
 {
+  if (m_bWorldClosePending)
+    return TRUE; // This accepted close has already run its save and close script.
 CString str;
 
   if (m_pSocket && 
@@ -5834,6 +5884,7 @@ CString CMUSHclientDoc::RecallText (const CString strSearchString,   // what to 
                                     const int  iLines,
                                     const CString strRecallLinePreamble)
     {
+CWorldDocumentOperationGuard operationGuard (this);
 CString strMessage;
 std::unique_ptr<t_regexp> regexp;   // compiled regular expression
 int iCurrentLine;
@@ -5866,18 +5917,6 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
   long nToGo = m_LineList.GetCount ();
   iCurrentLine = 0;
   
-  std::unique_ptr<CProgressDlg> pProgressDlg; // progress dialog
-
-  if (nToGo > 500)
-    {
-    pProgressDlg.reset (new CProgressDlg);
-    if (!pProgressDlg->Create ())
-      AfxThrowResourceException ();
-    pProgressDlg->SetStatus (strStatus);
-    pProgressDlg->SetRange (0, nToGo);     
-    pProgressDlg->SetWindowText (Translate ("Recalling..."));                              
-    }   // end of having enough lines to warrant a progress bar
-
 // go back requested number of lines
 
   POSITION pos = m_LineList.GetHeadPosition ();
@@ -5909,6 +5948,38 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
   else
     pos = m_LineList.GetHeadPosition ();
 
+  struct CRecallLine
+    {
+    CString text;
+    CTime time;
+    int flags;
+    bool hardReturn;
+    };
+  vector<CRecallLine> lines;
+  for (POSITION snapshotPos = pos; snapshotPos; )
+    {
+    const CLine * pLine = m_LineList.GetNext (snapshotPos);
+    CRecallLine line;
+    line.text = CString (pLine->text, pLine->len);
+    line.time = pLine->m_theTime;
+    line.flags = pLine->flags;
+    line.hardReturn = pLine->hard_return;
+    lines.push_back (line);
+    }
+  size_t nextLine = 0;
+
+  std::unique_ptr<CProgressDlg> pProgressDlg; // progress dialog
+
+  if (nToGo > 500)
+    {
+    pProgressDlg.reset (new CProgressDlg);
+    if (!pProgressDlg->Create ())
+      AfxThrowResourceException ();
+    pProgressDlg->SetStatus (strStatus);
+    pProgressDlg->SetRange (0, nToGo);
+    pProgressDlg->SetWindowText (Translate ("Recalling..."));
+    }   // end of having enough lines to warrant a progress bar
+
 // if case-insensitive search wanted, force "text to find" to lower case
 
   if (!bMatchCase)
@@ -5928,15 +5999,15 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
 
       // get lines until a hard return
 
-      while (pos)
+      while (nextLine < lines.size ())
         {
-        CLine * pLine = m_LineList.GetNext (pos);   // get next line
-        strLine += CString (pLine->text, pLine->len);
-        theTime = pLine->m_theTime;
-        iFlags = pLine->flags;
+        const CRecallLine & line = lines [nextLine++];
+        strLine += line.text;
+        theTime = line.time;
+        iFlags = line.flags;
         iMilestone++;
         iCurrentLine++;
-        if (pLine->hard_return)
+        if (line.hardReturn)
           break;
         }
 
@@ -5994,7 +6065,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
           } // end of found it
         } // end of not regular expression
 
-      } while (pos);  // end of looping through each line 
+      } while (nextLine < lines.size ());  // end of looping through each line
 
     } // end of try
 
@@ -6852,7 +6923,7 @@ CTextDocument * pTextDoc = NULL;
   for (POSITION docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
       docPos != NULL; )
     {
-    pTextDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+    pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
     // ignore unrelated worlds
     if (pTextDoc->m_pRelatedWorld == this &&
@@ -7782,21 +7853,58 @@ void CMUSHclientDoc::SendTo (
 
 bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
   {
-  delete [] m_pGetHostStruct;   // delete buffer just in case
-  m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
-
-  if (!m_pGetHostStruct)
+  std::unique_ptr<char []> pNewHostStruct;
+  try
     {
+    pNewHostStruct.reset (new char [MAXGETHOSTSTRUCT]);
+    }
+  catch (...)
+    {
+    if (!m_hNameLookup)
+      {
+      m_iConnectPhase = eConnectNotConnected;
+      App.m_bUpdateActivity = TRUE;
+      }
+    throw;
+    }
+
+  if (!pNewHostStruct)
+    {
+    if (!m_hNameLookup)
+      {
+      m_iConnectPhase = eConnectNotConnected;
+      App.m_bUpdateActivity = TRUE;
+      }
     TMessageBox ("Unable to allocate memory for host name lookup");
     return true;
     }
 
+  if (m_hNameLookup && WSACancelAsyncRequest (m_hNameLookup) == SOCKET_ERROR)
+    {
+    const int iError = WSAGetLastError ();
+    // These two errors mean that no operation remains for this handle.
+    if (iError != WSAEINVAL && iError != WSAEALREADY)
+      {
+      UMessageBox (TFormat ("Unable to cancel the previous host name lookup, "
+                           "code = %i (%s). The previous lookup was not replaced.",
+                           iError, GetSocketError (iError)));
+      return true;    // retain its buffer, generation, and completion phase
+      }
+    }
+
+  m_hNameLookup = NULL;
+  delete [] m_pGetHostStruct;
+  m_pGetHostStruct = pNewHostStruct.release ();
+
   if (Frame.GetSafeHwnd ())   // forget it if we don't have a window yet
+    {
+    m_iNameLookupGeneration++;
     m_hNameLookup = WSAAsyncGetHostByName (Frame.GetSafeHwnd (),
                                            WM_USER_HOST_NAME_RESOLVED,
                                            sName,
                                            m_pGetHostStruct,
                                            MAXGETHOSTSTRUCT);
+    }
 
  if (!m_hNameLookup)
    {
@@ -7810,6 +7918,7 @@ bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
     m_iConnectPhase = eConnectNotConnected;
 
     App.m_bUpdateActivity = TRUE;   // new activity!
+    return true;
 
    }
 
@@ -8488,7 +8597,12 @@ void CMUSHclientDoc::ContinueSSLHandshake (void)
   OnConnectionDisconnect ();
 
   // defer the fallback prompt via PostMessage so we're not inside a socket callback
-  Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT, (WPARAM) this, 0);
+  CTLSFallbackNotification * pNotification = new CTLSFallbackNotification;
+  pNotification->m_iDocumentNumber = m_iUniqueDocumentNumber;
+  pNotification->m_iConnectionAttemptNumber = m_iConnectionAttemptNumber;
+  if (!Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT,
+                          (WPARAM) pNotification, 0))
+    delete pNotification;
 
   }   // end of CMUSHclientDoc::ContinueSSLHandshake
 

@@ -301,7 +301,8 @@ HRESULT LoadTypeInfoFromThisModule(REFIID riid, ITypeInfo **ppti) {
 void CMUSHclientDoc::DisableScripting (void)
   {
 
-  KillThread (m_pThread, m_eventScriptFileChanged);
+  StopMonitoringThread (m_iMonitorToken);
+  m_bScriptFileChangedPending = false;
 
 // release engine
 
@@ -310,80 +311,14 @@ void CMUSHclientDoc::DisableScripting (void)
 
   }   // end of CMUSHclientDoc::DisableScripting
 
-// ------------------- script file change monitoring thread -------------------------
-
-void CMUSHclientDoc::ThreadFunc(LPVOID pParam)
-{
-  CThreadData*	pData = (CThreadData*) pParam;
-	char * strDir = pData->m_strFilename;
-  DWORD pDoc = pData->m_pDoc;
-	char * p = strrchr (strDir, '\\');
-	if (!p)
-		p = strrchr (strDir, ':');   // why?
-  if (p)
-    *p = 0;
-	HWND	hWnd = pData->m_hWnd;
-	HANDLE	hEvent = pData->m_hEvent;
-
-	delete pData;
-
-  // Get a handle to a file change notification object.
-  HANDLE	hChange = ::FindFirstChangeNotification(strDir, TRUE, FILE_NOTIFY_CHANGE_LAST_WRITE);
-
-  delete [] strDir;
-
-  // Return now if ::FindFirstChangeNotification failed.
-  if (hChange == INVALID_HANDLE_VALUE)
-    return;
-
-	HANDLE	aHandles[2];
-	aHandles[0] = hChange;
-	aHandles[1] = hEvent;
-	BOOL	bContinue = TRUE;
-
-    // Sleep until a file change notification wakes this thread or
-    // m_eventScriptFileChanged becomes set indicating it's time for the thread to end.
-    while (bContinue)
-	{
-		switch ((::WaitForMultipleObjects(2, aHandles, FALSE, INFINITE)))
-		{
-		case 0:
-			// Respond to a change notification.
-			::PostMessage(hWnd, WM_USER_SCRIPT_FILE_CONTENTS_CHANGED, (WPARAM) pDoc, 0);
-			::FindNextChangeNotification(hChange);
-			break;
-
-		default:
-			// Kill this thread (m_event became signaled).
-            bContinue = FALSE;
-			break;
-		}
-	}
-
-	// Close the file change notification handle and return.
-	::FindCloseChangeNotification(hChange);
-	return;
-}
-
-// Create script source file monitoring thread
-//
+// Both document types use the same independently owned monitor.
 void CMUSHclientDoc::CreateMonitoringThread()
-{
-  KillThread (m_pThread, m_eventScriptFileChanged);
-
-	CThreadData*	pData = new CThreadData;
-	pData->m_strFilename = new char [m_strScriptFilename.GetLength () + 1];
-  strcpy (pData->m_strFilename, m_strScriptFilename);
-	pData->m_hWnd = Frame.GetSafeHwnd ();
-	pData->m_hEvent = m_eventScriptFileChanged;
-  pData->m_pDoc = (DWORD) this;
-	m_eventScriptFileChanged.ResetEvent();
-
-	m_pThread = (HANDLE) _beginthread (ThreadFunc, 0, pData);
-  SetThreadPriority (m_pThread, THREAD_PRIORITY_IDLE);
-
-	// Thread will delete data object
-}
+  {
+  StopMonitoringThread (m_iMonitorToken);
+  m_bScriptFileChangedPending = false;
+  m_iMonitorToken = ::CreateMonitoringThread
+    (m_strScriptFilename, m_iUniqueDocumentNumber, WM_USER_SCRIPT_FILE_CONTENTS_CHANGED);
+  }
 
 
 // ------------------- handle change to script file -------------------------
@@ -406,7 +341,7 @@ void CMUSHclientDoc::OnScriptFileChanged(const bool bForce)
   if (!bForce && m_nReloadOption == eReloadNever)
     return;
 
-  m_bInScriptFileChanged = true;
+  CBoolStateGuard scriptFileChangedGuard (m_bInScriptFileChanged, true);
 
 	// Check if this script file has changed
 	CFileStatus	status;
@@ -425,7 +360,6 @@ void CMUSHclientDoc::OnScriptFileChanged(const bool bForce)
       } // end of approving modification or wanting it anyway
     } // end of time changing
 
-	m_bInScriptFileChanged = false;
 }
 
 

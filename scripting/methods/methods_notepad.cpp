@@ -34,15 +34,18 @@
 
 bool CMUSHclientDoc::SwitchToNotepad (void)
   {
+  CMUSHclientDoc * pThisDocument = this;
+  __int64 iThisDocumentNumber = m_iUniqueDocumentNumber;
   int iCount = 0;
 
   for (POSITION docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
       docPos != NULL; )
     {
-    CTextDocument * pTextDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+    CTextDocument * pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
     // ignore unrelated worlds
-    if (pTextDoc->m_pRelatedWorld == this &&
+    if (!pTextDoc->m_bClosePending &&
+        pTextDoc->m_pRelatedWorld == this &&
        pTextDoc->m_iUniqueDocumentNumber == m_iUniqueDocumentNumber)
       iCount++;
     } // end of doing each document
@@ -52,9 +55,26 @@ bool CMUSHclientDoc::SwitchToNotepad (void)
     CChooseNotepadDlg dlg;
 
     dlg.m_pWorld = this;
+    dlg.m_iWorldDocumentNumber = iThisDocumentNumber;
 
     if (dlg.DoModal () != IDOK)
       return true;   // they gave up
+
+    bool bDocumentLive = false;
+    for (POSITION worldPos = App.m_pWorldDocTemplate->GetFirstDocPosition(); worldPos; )
+      {
+      CMUSHclientDoc * pWorld =
+        (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (worldPos);
+      if (pWorld == pThisDocument &&
+          pWorld->m_iUniqueDocumentNumber == iThisDocumentNumber)
+        {
+        bDocumentLive = true;
+        break;
+        }
+      }
+
+    if (!bDocumentLive)
+      return true;
 
     if (dlg.m_pTextDocument)  // they chose an existing one
       {
@@ -213,10 +233,11 @@ CTextDocument * pTextDoc = NULL;
   for (POSITION docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
       docPos != NULL; )
     {
-    pTextDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+    pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
     // ignore unrelated worlds
-    if (pTextDoc->m_pRelatedWorld == this &&
+    if (!pTextDoc->m_bClosePending &&
+        pTextDoc->m_pRelatedWorld == this &&
        pTextDoc->m_iUniqueDocumentNumber == m_iUniqueDocumentNumber &&
        pTextDoc->m_strTitle.CompareNoCase (strTitle) == 0)
       return pTextDoc;      // right title, world, document number
@@ -440,6 +461,9 @@ VARIANT CMUSHclientDoc::GetNotepadList(BOOL All)
     {
     pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(pos);
 
+    if (pTextDoc->m_bClosePending)
+      continue;
+
     if (All || (pTextDoc->m_pRelatedWorld == this &&
        pTextDoc->m_iUniqueDocumentNumber == m_iUniqueDocumentNumber))
       iCount++;
@@ -454,6 +478,9 @@ VARIANT CMUSHclientDoc::GetNotepadList(BOOL All)
     for (iCount = 0, pos = App.m_pNormalDocTemplate->GetFirstDocPosition(); pos != NULL; )
       {
       pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(pos);
+
+      if (pTextDoc->m_bClosePending)
+        continue;
 
       // ignore unrelated worlds
       if (!All)

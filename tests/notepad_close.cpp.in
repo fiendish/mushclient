@@ -1,0 +1,571 @@
+// MFC substitutes surround unmodified production functions. Close deletes the
+// document and its view so ASan can detect use after the operation ends.
+#ifdef NDEBUG
+#error Notepad closure tests require checks; do not define NDEBUG.
+#endif
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+#define CHECK(value) do { if (!(value)) { \
+    std::cerr << "CHECK failed: " #value << " at line " << __LINE__ << '\n'; \
+    std::abort(); } } while (false)
+#define ASSERT(value) CHECK(value)
+#define RUNTIME_CLASS(type) 1
+using BOOL = bool;
+using UINT = unsigned;
+using DWORD = unsigned long;
+using __int64 = long long;
+using LPCTSTR = const char *;
+constexpr bool TRUE = true, FALSE = false;
+constexpr int IDOK = 1, IDCANCEL = 2, LB_ERR = -1, LB_ERRSPACE = -2;
+constexpr int IDC_NOTEPAD_LIST = 10, VT_VARIANT = 12;
+enum {
+    eNotepadSaveDefault, eNotepadSaveAlways, eNotepadSaveNever
+};
+enum {
+    eNotepadScript, eNotepadMXPdebug, eNotepadPacketDebug, eNotepadLineInfo,
+    eNotepadWorldLoadError, eNotepadXMLcomments, eNotepadPluginInfo, eNotepadRecall
+};
+
+struct CString : std::string {
+    using std::string::string;
+    operator LPCTSTR() const { return c_str(); }
+    bool IsEmpty() const { return empty(); }
+    int CompareNoCase(const CString &other) const {
+        auto lower = [](std::string value) {
+            for (char &c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return value;
+        };
+        return lower(*this).compare(lower(other));
+    }
+};
+struct VARIANT { std::vector<std::string> titles; };
+struct COleVariant {
+    CString title;
+    explicit COleVariant(const CString &value) : title(value) {}
+};
+struct COleSafeArray {
+    std::vector<std::optional<std::string>> slots;
+    void CreateOneDim(int type, long count) {
+        CHECK(type == VT_VARIANT && count > 0);
+        slots.resize(count);
+    }
+    void PutElement(long *index, COleVariant *value) {
+        CHECK(*index >= 0 && static_cast<size_t>(*index) < slots.size());
+        CHECK(!slots[*index].has_value());
+        slots[*index] = value->title;
+    }
+    VARIANT Detach() {
+        VARIANT result;
+        for (const auto &slot : slots) {
+            CHECK(slot.has_value());
+            result.titles.push_back(*slot);
+        }
+        return result;
+    }
+};
+
+struct CDocument {
+    bool saveAccepted = true;
+    int saveQueries = 0;
+    virtual ~CDocument() = default;
+    BOOL SaveModified() { ++saveQueries; return saveAccepted; }
+    void OnCloseDocument();
+};
+struct Node { CDocument *doc; Node *next = nullptr; };
+using POSITION = Node *;
+struct DocTemplate {
+    Node *head = nullptr;
+    ~DocTemplate() { CHECK(head == nullptr); }
+    POSITION GetFirstDocPosition() const { return head; }
+    CDocument *GetNextDoc(POSITION &pos) const {
+        auto *doc = pos->doc;
+        pos = pos->next;
+        return doc;
+    }
+    void add(CDocument *doc) { head = new Node{doc, head}; }
+    void remove(CDocument *doc) {
+        for (auto **link = &head; *link; link = &(*link)->next) {
+            if ((*link)->doc == doc) {
+                auto *removed = *link;
+                *link = removed->next;
+                delete removed;
+                return;
+            }
+        }
+        CHECK(false);
+    }
+};
+struct CMUSHclientApp {
+    DocTemplate docs, worlds;
+    DocTemplate *m_pNormalDocTemplate = &docs, *m_pWorldDocTemplate = &worlds;
+    std::deque<__int64> m_DeferredTextDocumentCloses;
+    std::map<__int64, std::string> destroyed;
+    __int64 nextID = 1;
+    bool m_bConfirmBeforeClosingMXPdebug = true;
+    void DeferTextDocumentClose(__int64);
+    BOOL ProcessDeferredClose();
+} App;
+// Progress-message dispatch has a separate fixture. These cases run through
+// the document operation guard, outside that dispatch scope.
+struct CProgressDlg {
+    static bool IsPumpingMessages() { return false; }
+};
+
+struct Edit {
+    CString text;
+    int start = 0, end = 0;
+    void SetSel(int first, int last, BOOL) {
+        start = first;
+        end = last < 0 ? static_cast<int>(text.size()) : last;
+    }
+    void ReplaceSel(const CString &value) { text.replace(start, end - start, value); }
+};
+CString GetText(const Edit &edit) { return edit.text; }
+struct Frame {
+    int activations = 0;
+    void ActivateFrame() { ++activations; }
+    void SetActiveView(void *) {}
+};
+struct CView {
+    virtual ~CView() = default;
+    bool IsKindOf(int) const { return true; }
+};
+struct CTextDocument;
+struct AFX_CMDHANDLERINFO {};
+struct CEditView : CView {
+    CTextDocument *doc = nullptr;
+    std::function<void()> command;
+    CTextDocument *GetDocument() const { return doc; }
+    virtual BOOL OnCmdMsg(UINT, int, void *, AFX_CMDHANDLERINFO *) {
+        CHECK(bool(command));
+        command();
+        return true;
+    }
+};
+struct CTextView : CEditView {
+    Edit edit;
+    Frame frame;
+    Edit &GetEditCtrl() { return edit; }
+    int GetWindowTextLength() const { return static_cast<int>(edit.text.size()); }
+    Frame *GetParentFrame() { return &frame; }
+    BOOL OnCmdMsg(UINT, int, void *, AFX_CMDHANDLERINFO *) override;
+};
+struct CMUSHclientDoc : CDocument {
+    __int64 m_iUniqueDocumentNumber = App.nextID++;
+    int m_input_font_name = 0, m_input_font_height = 0, m_input_font_weight = 0;
+    int m_input_font_charset = 0, m_input_text_colour = 0, m_input_background_colour = 0;
+    int activations = 0;
+    CMUSHclientDoc() { App.worlds.add(this); }
+    ~CMUSHclientDoc() { App.worlds.remove(this); }
+    CTextDocument *FindNotepad(const CString);
+    bool AppendToTheNotepad(const CString, const CString, const bool, const int = eNotepadScript);
+    BOOL AppendToNotepad(LPCTSTR, LPCTSTR);
+    BOOL ReplaceNotepad(LPCTSTR, LPCTSTR);
+    long CloseNotepad(LPCTSTR, BOOL);
+    VARIANT GetNotepadList(BOOL);
+    bool SwitchToNotepad();
+    void Activate() { ++activations; }
+};
+struct CTextDocument : CDocument {
+    int m_iActiveOperations = 0;
+    bool m_bClosePending = false, m_bCloseQueued = false, m_bFileChangedPending = false;
+    __int64 m_iMonitorToken = 0, m_iTextDocumentNumber = App.nextID++, m_iUniqueDocumentNumber = 0;
+    CMUSHclientDoc *m_pRelatedWorld = nullptr;
+    CString m_strTitle, path;
+    int m_iSaveOnChange = eNotepadSaveDefault, m_iNotepadType = eNotepadScript;
+    CTextView view;
+    Node viewPosition{this};
+    struct ViewList {
+        CTextView *view;
+        CTextView *GetHead() { return view; }
+    } m_viewList{&view};
+    CTextDocument() { view.doc = this; }
+    ~CTextDocument() {
+        CHECK(m_iActiveOperations == 0);
+        CHECK(App.destroyed.emplace(m_iTextDocumentNumber, view.edit.text).second);
+    }
+    POSITION GetFirstViewPosition() { return &viewPosition; }
+    CView *GetNextView(POSITION &pos) { pos = nullptr; return &view; }
+    CString GetPathName() const { return path; }
+    CString GetTitle() const { return m_strTitle; }
+    BOOL SaveModified();
+    void OnCloseDocument();
+    void BeginOperation();
+    void EndOperation();
+};
+void CDocument::OnCloseDocument() {
+    auto *doc = static_cast<CTextDocument *>(this);
+    App.docs.remove(doc);
+    delete doc;
+}
+void StopMonitoringThread(__int64 &token) { token = 0; }
+template <typename... Rest>
+BOOL CreateTextWindow(LPCTSTR text, LPCTSTR title, CMUSHclientDoc *world, __int64 worldID, Rest...) {
+    auto *doc = new CTextDocument;
+    doc->m_pRelatedWorld = world;
+    doc->m_iUniqueDocumentNumber = worldID;
+    doc->m_strTitle = title;
+    doc->view.edit.text = text;
+    App.docs.add(doc);
+    return true;
+}
+
+struct CDataExchange { bool m_bSaveAndValidate = false; };
+struct CDialog {
+    bool accepted = false;
+    void DoDataExchange(CDataExchange *) {}
+    void OnOK() { accepted = true; }
+};
+struct NumberArray : std::vector<__int64> {
+    void RemoveAll() { clear(); }
+    int GetSize() const { return static_cast<int>(size()); }
+    int Add(__int64 id) { push_back(id); return GetSize() - 1; }
+};
+struct ListBox {
+    struct Item { CString title; DWORD data = 0; };
+    std::vector<Item> items;
+    int selected = LB_ERR;
+    int AddString(const CString &title) {
+        auto pos = std::lower_bound(items.begin(), items.end(), title,
+                                   [](const Item &item, const CString &value) { return item.title < value; });
+        int index = static_cast<int>(pos - items.begin());
+        items.insert(pos, {title, 0});
+        return index;
+    }
+    void SetItemData(int index, DWORD data) { items.at(index).data = data; }
+    DWORD GetItemData(int index) const { return items.at(index).data; }
+    int GetCurSel() const { return selected; }
+    void DeleteString(int index) { items.erase(items.begin() + index); selected = LB_ERR; }
+};
+void DDX_Control(CDataExchange *, int, ListBox &) {}
+struct CChooseNotepadDlg : CDialog {
+    CMUSHclientDoc *m_pWorld = nullptr;
+    CTextDocument *m_pTextDocument = nullptr;
+    __int64 m_iWorldDocumentNumber = 0;
+    NumberArray m_NotepadDocumentNumbers;
+    ListBox m_ctlNotepadList;
+    static int modalCalls;
+    static std::function<int(CChooseNotepadDlg &)> modal;
+    void DoDataExchange(CDataExchange *);
+    CMUSHclientDoc *GetLiveWorld() const;
+    CTextDocument *GetNotepadForIndex(int) const;
+    void OnOpenExisting();
+    int DoModal() {
+        ++modalCalls;
+        CDataExchange dx;
+        DoDataExchange(&dx);
+        return modal ? modal(*this) : IDCANCEL;
+    }
+};
+int CChooseNotepadDlg::modalCalls = 0;
+std::function<int(CChooseNotepadDlg &)> CChooseNotepadDlg::modal;
+
+@GUARD@
+@DOCUMENT@
+@COMMAND@
+@NOTEPAD@
+@CHOOSER@
+@DEFER@
+BOOL CMUSHclientApp::ProcessDeferredClose() {
+    @IDLE_CLOSE@
+    return false;
+}
+
+CTextDocument *registered(__int64 id) {
+    for (POSITION pos = App.docs.GetFirstDocPosition(); pos;) {
+        auto *doc = static_cast<CTextDocument *>(App.docs.GetNextDoc(pos));
+        if (doc->m_iTextDocumentNumber == id) return doc;
+    }
+    return nullptr;
+}
+CTextDocument *create(CMUSHclientDoc &world, const char *title, const char *text = "old text") {
+    CHECK(CreateTextWindow(text, title, &world, world.m_iUniqueDocumentNumber));
+    auto *doc = world.FindNotepad(title);
+    CHECK(doc != nullptr);
+    return doc;
+}
+CChooseNotepadDlg chooser(CMUSHclientDoc &world) {
+    CChooseNotepadDlg dlg;
+    dlg.m_pWorld = &world;
+    dlg.m_iWorldDocumentNumber = world.m_iUniqueDocumentNumber;
+    CDataExchange dx;
+    dlg.DoDataExchange(&dx);
+    return dlg;
+}
+void expectList(CMUSHclientDoc &world, bool all, std::vector<std::string> expected) {
+    auto result = world.GetNotepadList(all).titles;
+    std::sort(result.begin(), result.end());
+    std::sort(expected.begin(), expected.end());
+    CHECK(result == expected);
+}
+void drain() {
+    int count = 0;
+    while (App.ProcessDeferredClose()) CHECK(++count < 20);
+}
+void cleanup() {
+    drain();
+    while (App.docs.head) {
+        auto *doc = static_cast<CTextDocument *>(App.docs.head->doc);
+        CHECK(doc->m_iActiveOperations == 0);
+        doc->OnCloseDocument();
+    }
+}
+
+void closeWrite(bool replace) {
+    CMUSHclientDoc world;
+    auto *old = create(world, "Review");
+    const auto oldID = old->m_iTextDocumentNumber;
+    __int64 replacementID = 0;
+    old->view.command = [&] {
+        CHECK(old->m_iActiveOperations == 1);
+        CHECK(world.CloseNotepad("rEvIeW", false));
+        CHECK(old->m_bClosePending);
+        CHECK(registered(oldID) == old);
+        CHECK(!world.FindNotepad("Review"));
+        expectList(world, false, {});
+        expectList(world, true, {});
+        CHECK(!world.CloseNotepad("Review", false));
+        CHECK(!App.ProcessDeferredClose());
+        CHECK(replace ? world.ReplaceNotepad("Review", "replacement text")
+                      : world.AppendToNotepad("Review", "replacement text"));
+        auto *replacement = world.FindNotepad("review");
+        CHECK(replacement && replacement != old);
+        replacementID = replacement->m_iTextDocumentNumber;
+        CHECK(replacementID != oldID);
+        CHECK(replacement->view.edit.text == "replacement text");
+        CHECK(old->view.edit.text == "old text");
+        expectList(world, false, {"Review"});
+        expectList(world, true, {"Review"});
+        auto dlg = chooser(world);
+        CHECK(dlg.m_ctlNotepadList.items.size() == 1);
+        CHECK(dlg.GetNotepadForIndex(0) == replacement);
+    };
+    CHECK(old->view.OnCmdMsg(1, 0, nullptr, nullptr));
+    CHECK(registered(oldID) == old);
+    CHECK(old->m_iActiveOperations == 0 && old->m_bCloseQueued);
+    CHECK(App.destroyed.count(oldID) == 0);
+    CHECK(App.m_DeferredTextDocumentCloses == std::deque<__int64>{oldID});
+    CHECK(!world.FindNotepad("missing"));
+    CHECK(world.FindNotepad("Review")->m_iTextDocumentNumber == replacementID);
+    // A duplicate stale close must also resolve only the old instance ID.
+    App.DeferTextDocumentClose(oldID);
+    drain();
+    CHECK(!registered(oldID));
+    CHECK(App.destroyed.at(oldID) == "old text");
+    CHECK(registered(replacementID) == world.FindNotepad("Review"));
+    CHECK(registered(replacementID)->view.edit.text == "replacement text");
+    cleanup();
+}
+
+void cancelledClose() {
+    CMUSHclientDoc world;
+    auto *doc = create(world, "Review");
+    doc->saveAccepted = false;
+    auto dlg = chooser(world);
+    const auto id = doc->m_iTextDocumentNumber;
+    doc->view.command = [&] {
+        CHECK(!world.CloseNotepad("Review", true));
+        CHECK(doc->saveQueries == 1);
+        CHECK(!doc->m_bClosePending && !doc->m_bCloseQueued);
+        CHECK(world.FindNotepad("Review") == doc);
+        expectList(world, false, {"Review"});
+        expectList(world, true, {"Review"});
+        CHECK(chooser(world).m_ctlNotepadList.items.size() == 1);
+        CHECK(dlg.GetNotepadForIndex(0) == doc);
+        dlg.m_ctlNotepadList.selected = 0;
+        dlg.OnOpenExisting();
+        CHECK(dlg.accepted && dlg.m_pTextDocument == doc);
+        CHECK(world.AppendToNotepad("Review", " appended"));
+        CHECK(doc->view.edit.text == "old text appended");
+        CHECK(world.ReplaceNotepad("Review", "replaced"));
+        CHECK(doc->view.edit.text == "replaced");
+        CHECK(world.FindNotepad("Review") == doc);
+        CHECK(world.SwitchToNotepad());
+        CHECK(CChooseNotepadDlg::modalCalls == 1);
+    };
+    CHECK(doc->view.OnCmdMsg(1, 0, nullptr, nullptr));
+    CHECK(App.m_DeferredTextDocumentCloses.empty());
+    drain();
+    CHECK(registered(id) == doc);
+    cleanup();
+}
+
+void repeatedClose() {
+    CMUSHclientDoc world;
+    auto *doc = create(world, "Review");
+    const auto id = doc->m_iTextDocumentNumber;
+    doc->view.command = [&] {
+        {
+            CTextDocumentOperationGuard nested(doc);
+            CHECK(doc->m_iActiveOperations == 2);
+            CHECK(world.CloseNotepad("Review", true));
+            CHECK(doc->saveQueries == 1);
+            CHECK(!world.CloseNotepad("Review", true));
+            CHECK(doc->saveQueries == 1);
+            doc->OnCloseDocument();
+            CHECK(!App.ProcessDeferredClose());
+        }
+        CHECK(doc->m_iActiveOperations == 1);
+        CHECK(registered(id) == doc);
+        CHECK(!App.ProcessDeferredClose());
+    };
+    CHECK(doc->view.OnCmdMsg(1, 0, nullptr, nullptr));
+    CHECK(App.m_DeferredTextDocumentCloses == std::deque<__int64>{id});
+    // A nested loop can see a queued close during another operation.
+    {
+        CTextDocumentOperationGuard nested(doc);
+        CHECK(!App.ProcessDeferredClose());
+        CHECK(registered(id) == doc);
+        CHECK(doc->m_bCloseQueued && doc->m_bClosePending);
+    }
+    CHECK(App.m_DeferredTextDocumentCloses == std::deque<__int64>{id});
+    CHECK(!world.CloseNotepad("Review", false));
+    drain();
+    CHECK(!registered(id) && App.destroyed.count(id) == 1);
+    cleanup();
+}
+
+void staleChooser() {
+    CMUSHclientDoc world;
+    auto *old = create(world, "Review");
+    const auto id = old->m_iTextDocumentNumber;
+    auto stale = chooser(world);
+    CHECK(stale.m_ctlNotepadList.items.size() == 1);
+    CHECK(stale.GetNotepadForIndex(0) == old);
+    CHECK(!stale.GetNotepadForIndex(-1) && !stale.GetNotepadForIndex(1));
+    old->view.command = [&] {
+        CHECK(world.CloseNotepad("Review", false));
+        CHECK(chooser(world).m_ctlNotepadList.items.empty());
+        CHECK(!stale.GetNotepadForIndex(0));
+        CHECK(world.AppendToNotepad("Review", "new"));
+        auto *replacement = world.FindNotepad("Review");
+        CHECK(replacement != old);
+        CHECK(!stale.GetNotepadForIndex(0));
+        stale.m_ctlNotepadList.selected = 0;
+        stale.OnOpenExisting();
+        CHECK(!stale.accepted && !stale.m_pTextDocument);
+        CHECK(stale.m_ctlNotepadList.items.empty());
+        auto fresh = chooser(world);
+        CHECK(fresh.m_ctlNotepadList.items.size() == 1);
+        CHECK(fresh.GetNotepadForIndex(0) == replacement);
+        // A recycled world pointer with a different identity is not a match.
+        ++fresh.m_iWorldDocumentNumber;
+        CHECK(!fresh.GetLiveWorld() && !fresh.GetNotepadForIndex(0));
+    };
+    CHECK(old->view.OnCmdMsg(1, 0, nullptr, nullptr));
+    CHECK(!stale.GetNotepadForIndex(0));
+    drain();
+    CHECK(!registered(id));
+    CHECK(!stale.GetNotepadForIndex(0));
+    CHECK(world.FindNotepad("Review")->view.edit.text == "new");
+    cleanup();
+}
+
+void enumeration() {
+    CMUSHclientDoc world, other;
+    auto *pending = create(world, "Pending");
+    auto *foreignPending = create(other, "Foreign pending");
+    const auto foreignID = foreignPending->m_iTextDocumentNumber;
+    create(world, "Z live");
+    create(world, "A live");
+    create(other, "Foreign live");
+    auto *unrelated = create(other, "Unrelated");
+    unrelated->m_pRelatedWorld = nullptr;
+    auto *wrongIdentity = create(world, "Old world identity");
+    ++wrongIdentity->m_iUniqueDocumentNumber;
+    CHECK(!world.FindNotepad("Foreign live"));
+    CHECK(!world.FindNotepad("Unrelated"));
+    CHECK(!world.FindNotepad("Old world identity"));
+    pending->view.command = [&] {
+        CTextDocumentOperationGuard foreignOperation(foreignPending);
+        CHECK(world.CloseNotepad("Pending", false));
+        CHECK(other.CloseNotepad("Foreign pending", false));
+        expectList(world, false, {"Z live", "A live"});
+        expectList(world, true, {"Z live", "A live", "Foreign live", "Unrelated", "Old world identity"});
+        expectList(other, false, {"Foreign live"});
+        auto dlg = chooser(world);
+        CHECK(dlg.m_ctlNotepadList.items.size() == 2);
+        CHECK(dlg.m_NotepadDocumentNumbers.GetSize() == 2);
+        for (int i = 0; i < 2; ++i) {
+            const auto &item = dlg.m_ctlNotepadList.items[i];
+            auto *doc = dlg.GetNotepadForIndex(static_cast<int>(item.data));
+            CHECK(doc && doc->m_strTitle == item.title);
+        }
+    };
+    CHECK(pending->view.OnCmdMsg(1, 0, nullptr, nullptr));
+    expectList(world, false, {"Z live", "A live"});
+    expectList(world, true, {"Z live", "A live", "Foreign live", "Unrelated", "Old world identity"});
+    CHECK(registered(foreignID));
+    drain();
+    CHECK(!registered(foreignID));
+    expectList(world, false, {"Z live", "A live"});
+    cleanup();
+}
+
+void switchNotepad() {
+    CMUSHclientDoc world, other;
+    auto *pending = create(world, "Review");
+    create(other, "Foreign");
+    auto *wrongIdentity = create(world, "Old world identity");
+    ++wrongIdentity->m_iUniqueDocumentNumber;
+    pending->view.command = [&] {
+        CHECK(world.CloseNotepad("Review", false));
+        CHECK(!world.SwitchToNotepad());
+        CHECK(CChooseNotepadDlg::modalCalls == 0);
+        auto *live = create(world, "Live");
+        CChooseNotepadDlg::modal = [&](CChooseNotepadDlg &dlg) {
+            CHECK(dlg.m_ctlNotepadList.items.size() == 1);
+            dlg.m_ctlNotepadList.selected = 0;
+            dlg.OnOpenExisting();
+            CHECK(dlg.accepted && dlg.m_pTextDocument == live);
+            return IDOK;
+        };
+        CHECK(world.SwitchToNotepad());
+        CHECK(CChooseNotepadDlg::modalCalls == 1);
+        CHECK(live->view.frame.activations == 1);
+        CHECK(pending->view.frame.activations == 0);
+        CChooseNotepadDlg::modal = {};
+    };
+    CHECK(pending->view.OnCmdMsg(1, 0, nullptr, nullptr));
+    cleanup();
+}
+
+void immediateClose() {
+    CMUSHclientDoc world;
+    auto *old = create(world, "Review");
+    const auto id = old->m_iTextDocumentNumber;
+    CHECK(world.CloseNotepad("Review", false));
+    CHECK(!registered(id) && App.destroyed.at(id) == "old text");
+    CHECK(App.m_DeferredTextDocumentCloses.empty());
+    CHECK(!world.CloseNotepad("Review", false));
+    CHECK(world.AppendToNotepad("Review", "new"));
+    CHECK(world.FindNotepad("Review")->m_iTextDocumentNumber != id);
+    CHECK(world.FindNotepad("Review")->view.edit.text == "new");
+    cleanup();
+}
+
+int main(int argc, char **argv) {
+    CHECK(argc == 2);
+    const std::string name = argv[1];
+    if (name == "close_append") closeWrite(false);
+    else if (name == "close_replace") closeWrite(true);
+    else if (name == "cancelled_close") cancelledClose();
+    else if (name == "repeated_close") repeatedClose();
+    else if (name == "stale_chooser") staleChooser();
+    else if (name == "enumeration") enumeration();
+    else if (name == "switch") switchNotepad();
+    else if (name == "immediate_close") immediateClose();
+    else CHECK(false);
+    CHECK(App.docs.head == nullptr && App.worlds.head == nullptr);
+    CHECK(App.m_DeferredTextDocumentCloses.empty());
+    std::cout << "PASS: " << name << '\n';
+}

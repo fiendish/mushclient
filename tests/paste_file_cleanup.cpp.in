@@ -1,0 +1,208 @@
+// Only OnGamePastefile is extracted production code. All other code is a fixture.
+// CStdioFile owns a real C stream. Its destructor closes the stream once.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <memory>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+void Check(bool condition, const char* message) {
+  if (!condition) {
+    std::cerr << "CHECK failed: " << message << '\n';
+    std::exit(EXIT_FAILURE);
+  }
+}
+#define CHECK(condition, message) Check(static_cast<bool>(condition), message)
+
+using BOOL = int;
+constexpr int TRUE = 1, IDOK = 1, IDCANCEL = 2;
+constexpr unsigned OFN_HIDEREADONLY = 0x4, OFN_FILEMUSTEXIST = 0x1000;
+constexpr unsigned MB_ICONEXCLAMATION = 0x30;
+
+struct Harness {
+  std::string scenario, path;
+  int allocations = 0, deallocations = 0, constructed = 0, destroyed = 0;
+  int opens = 0, closes = 0, live = 0, helperCalls = 0;
+  int fileExceptions = 0, fileDeletes = 0, fileExceptionDestructors = 0;
+  int resourceExceptions = 0, resourceDeletes = 0, resourceExceptionDestructors = 0;
+  int propagatedResource = 0, propagatedOther = 0, messages = 0;
+  void* resourceIdentity = nullptr;
+} state;
+
+struct CString {
+  std::string value;
+  CString() = default;
+  CString(const char* text) : value(text) {}
+  operator const char*() const { return value.c_str(); }
+  CString& operator+=(const CString& text) { value += text.value; return *this; }
+  void ReleaseBuffer() {}
+};
+
+struct CException {
+  virtual ~CException() = default;
+  virtual void Delete() = 0;
+};
+struct CFileException : CException {
+  enum { fileNotFound = 2, hardIO = 10, endOfFile = 14 };
+  int m_cause;
+  explicit CFileException(int cause) : m_cause(cause) { ++state.fileExceptions; }
+  ~CFileException() override { ++state.fileExceptionDestructors; }
+  void Delete() override { ++state.fileDeletes; delete this; }
+};
+struct CResourceException : CException {
+  CResourceException() { ++state.resourceExceptions; }
+  ~CResourceException() override { ++state.resourceExceptionDestructors; }
+  void Delete() override { ++state.resourceDeletes; delete this; }
+};
+[[noreturn]] void AfxThrowResourceException() {
+  auto* exception = new CResourceException;
+  state.resourceIdentity = exception;
+  throw exception;
+}
+
+struct CFile {
+  enum { modeRead = 0, shareDenyWrite = 0x20 };
+  virtual ~CFile() = default;
+};
+struct CStdioFile : CFile {
+  std::FILE* stream = nullptr;
+  static void* operator new(std::size_t size) {
+    void* object = ::operator new(size);
+    ++state.allocations;
+    return object;
+  }
+  static void operator delete(void* object) noexcept {
+    ++state.deallocations;
+    ::operator delete(object);
+  }
+  CStdioFile(const CString& path, unsigned) {
+    if (state.scenario == "file_open_exception")
+      throw new CFileException(CFileException::fileNotFound);
+    stream = std::fopen(path, "rb");
+    CHECK(stream != nullptr, "real input stream opens");
+    ++state.opens;
+    ++state.live;
+    ++state.constructed;
+  }
+  ~CStdioFile() override {
+    ++state.destroyed;
+    Close();
+  }
+  void Close() {
+    CHECK(stream != nullptr, "file closes exactly once");
+    CHECK(std::fclose(stream) == 0, "real stream closes successfully");
+    stream = nullptr;
+    ++state.closes;
+    --state.live;
+  }
+};
+
+struct CFileDialog {
+  struct { const char* lpstrTitle = nullptr; } m_ofn;
+  CFileDialog(BOOL, const char*, const char*, unsigned, const char*, void*) {}
+  int DoModal() {
+    return state.scenario == "dialog_cancel" ? IDCANCEL : IDOK;
+  }
+  CString GetPathName() const { return state.path.c_str(); }
+};
+void SetFileDialogFileName(CFileDialog&, CString&, const char*) {}
+void ChangeToFileBrowsingDirectory() {}
+void ChangeToStartupDirectory() {}
+void TMessageBox(const char*, unsigned) { ++state.messages; }
+
+struct CMUSHclientDoc {
+  CString m_mush_name, m_file_preamble, m_line_preamble, m_line_postamble, m_file_postamble;
+  BOOL m_bFileCommentedSoftcode = 0, m_bConfirmOnSend = 0, m_bSendEcho = 0;
+  long m_nFileDelay = 0, m_nFileDelayPerLines = 0;
+  void OnGamePastefile();
+  bool SendToMushHelper(CFile* file, CString&, CString&, CString&, CString&,
+                       BOOL, long, long, BOOL, BOOL) {
+    ++state.helperCalls;
+    CHECK(file != nullptr && state.live == 1 && state.destroyed == 0,
+          "helper receives a live file");
+    auto* input = dynamic_cast<CStdioFile*>(file);
+    CHECK(input != nullptr, "helper receives the CStdioFile object");
+    char line[32];
+    CHECK(std::fgets(line, sizeof line, input->stream) != nullptr &&
+          std::strcmp(line, "first line\n") == 0, "helper can read the open stream");
+    if (state.scenario == "send_cancel") return false;
+    if (state.scenario == "file_read_exception") throw new CFileException(CFileException::hardIO);
+    if (state.scenario == "file_eof") throw new CFileException(CFileException::endOfFile);
+    if (state.scenario == "resource_exception") AfxThrowResourceException();
+    if (state.scenario == "other_exception") throw std::runtime_error("paste helper failure");
+    CHECK(std::fgets(line, sizeof line, input->stream) != nullptr &&
+          std::strcmp(line, "second line\n") == 0, "helper reads the second line");
+    CHECK(std::fgets(line, sizeof line, input->stream) == nullptr &&
+          std::feof(input->stream) && !std::ferror(input->stream), "normal input reaches EOF");
+    return true;
+  }
+};
+
+@PASTE_FILE@
+
+int main(int argc, char** argv) {
+  CHECK(argc == 3, "usage: paste_file_cleanup CASE INPUT_FILE");
+  state.scenario = argv[1];
+  state.path = argv[2];
+  const std::vector<std::string> cases = {
+      "normal", "dialog_cancel", "send_cancel", "file_open_exception",
+      "file_read_exception", "file_eof", "resource_exception", "other_exception"};
+  bool known = false;
+  for (const auto& scenario : cases) known = known || state.scenario == scenario;
+  CHECK(known, "known test case");
+
+  CMUSHclientDoc doc;
+  try {
+    doc.OnGamePastefile();
+  } catch (CResourceException* exception) {
+    CHECK(state.scenario == "resource_exception", "resource exception is expected");
+    CHECK(exception == state.resourceIdentity, "original resource exception propagates");
+    CHECK(state.resourceDeletes == 0, "production leaves resource exception ownership to caller");
+    ++state.propagatedResource;
+    exception->Delete();
+  } catch (const std::runtime_error& exception) {
+    CHECK(state.scenario == "other_exception", "other exception is expected");
+    CHECK(std::strcmp(exception.what(), "paste helper failure") == 0,
+          "other exception type and message propagate");
+    ++state.propagatedOther;
+  }
+
+  std::cout << "COUNTERS: allocations=" << state.allocations
+            << " deallocations=" << state.deallocations
+            << " constructed=" << state.constructed << " destroyed=" << state.destroyed
+            << " opens=" << state.opens << " closes=" << state.closes << " live=" << state.live
+            << " fileDeletes=" << state.fileDeletes << " messages=" << state.messages
+            << " resourcePropagated=" << state.propagatedResource
+            << " otherPropagated=" << state.propagatedOther << std::endl;
+  const bool cancelled = state.scenario == "dialog_cancel";
+  const bool openFailed = state.scenario == "file_open_exception";
+  const int opened = !cancelled && !openFailed;
+  CHECK(state.constructed == opened && state.opens == opened, "expected file construction and open count");
+  CHECK(state.destroyed == opened, "file destructor runs exactly once for each constructed file");
+  CHECK(state.closes == opened && state.live == 0, "all opened streams close exactly once");
+  CHECK(state.allocations == !cancelled && state.deallocations == state.allocations,
+        "file allocation is released, including failed construction");
+  CHECK(state.helperCalls == opened, "helper runs only after file open");
+  const int fileException = openFailed || state.scenario == "file_read_exception" ||
+                            state.scenario == "file_eof";
+  CHECK(state.fileExceptions == fileException && state.fileDeletes == fileException &&
+        state.fileExceptionDestructors == fileException, "file exception is caught and deleted once");
+  CHECK(state.messages == (openFailed || state.scenario == "file_read_exception"),
+        "only non-EOF file exceptions show the file error dialog");
+  const int resourceException = state.scenario == "resource_exception";
+  CHECK(state.propagatedResource == resourceException &&
+        state.resourceExceptions == resourceException && state.resourceDeletes == resourceException &&
+        state.resourceExceptionDestructors == resourceException,
+        "resource exception propagates and is deleted by the caller");
+  CHECK(state.propagatedOther == (state.scenario == "other_exception"), "other exception propagates");
+#ifdef NDEBUG
+  std::cout << "PASS NDEBUG: ";
+#else
+  std::cout << "PASS debug: ";
+#endif
+  std::cout << state.scenario << '\n';
+}
