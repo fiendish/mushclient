@@ -163,6 +163,9 @@ class CPluginCallGuard
     }
 
   private:
+  CPluginCallGuard (const CPluginCallGuard &);
+  CPluginCallGuard & operator= (const CPluginCallGuard &);
+
   CPlugin * m_pPlugin;
   };
 
@@ -175,6 +178,9 @@ class CPluginContextGuard
   ~CPluginContextGuard ();
 
   private:
+  CPluginContextGuard (const CPluginContextGuard &);
+  CPluginContextGuard & operator= (const CPluginContextGuard &);
+
   CMUSHclientDoc * m_pDoc;
   CPlugin * m_pPlugin;
   CPlugin * m_pSavedPlugin;
@@ -191,6 +197,9 @@ class CPluginNotesGuard
   ~CPluginNotesGuard ();
 
   private:
+  CPluginNotesGuard (const CPluginNotesGuard &);
+  CPluginNotesGuard & operator= (const CPluginNotesGuard &);
+
   CMUSHclientDoc * m_pDoc;
   bool m_bSavedNotesNotWanted;
   };

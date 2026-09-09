@@ -2729,7 +2729,7 @@ void CPrefsP7::UnloadDialog (CDialog * pDlg, CObject * pItem)
     (regcomp (strRegexp,
               (dlg->m_bIgnoreCase ? PCRE_CASELESS : 0)
 #if ALIASES_USE_UTF8
-              | (m_pDoc->m_bUTF_8 ? PCRE_UTF8 : 0)
+              | (m_doc->m_bUTF_8 ? PCRE_UTF8 : 0)
 #endif // ALIASES_USE_UTF8
              ));
 

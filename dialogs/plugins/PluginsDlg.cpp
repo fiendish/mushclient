@@ -234,6 +234,7 @@ int nItem = 0;
 
   m_ctlPluginList.DeleteAllItems ();
   m_PluginIDs.RemoveAll ();
+  m_PluginInstanceNumbers.RemoveAll ();
 
   CMUSHclientDoc * pDoc = GetLiveDocument ();
   if (!pDoc)
@@ -256,6 +257,7 @@ int nItem = 0;
     m_ctlPluginList.SetItemText (nItem, eColumnEnabled, p->m_bEnabled ? "Yes" : "No");
     m_ctlPluginList.SetItemText (nItem, eColumnVersion, CFormat ("%5.2f", p->m_dVersion));
     int iPluginID = m_PluginIDs.Add (p->m_strID);
+    m_PluginInstanceNumbers.Add (p->m_iPluginInstanceNumber);
     m_ctlPluginList.SetItemData (nItem, (DWORD) iPluginID);
 
     }
@@ -376,9 +378,15 @@ LRESULT CPluginsDlg::OnKickIdle(WPARAM, LPARAM)
     return 0;
     }
 
-  bool bReload = m_ctlPluginList.GetItemCount () != m_PluginIDs.GetSize ();
+  bool bReload = m_ctlPluginList.GetItemCount () != m_PluginIDs.GetSize () ||
+                 m_PluginIDs.GetSize () != m_PluginInstanceNumbers.GetSize ();
   for (int nItem = 0; !bReload && nItem < m_ctlPluginList.GetItemCount (); nItem++)
-    bReload = GetPluginForItem (nItem) == NULL;
+    {
+    CPlugin * p = GetPluginForItem (nItem);
+    // Sorting moves rows, but item data still indexes both identity arrays.
+    bReload = !p || p->m_iPluginInstanceNumber !=
+      m_PluginInstanceNumbers [(int) m_ctlPluginList.GetItemData (nItem)];
+    }
 
   if (bReload)
     LoadList ();

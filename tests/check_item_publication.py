@@ -67,10 +67,37 @@ void Check(bool condition, const char* expression, const char* file, int line) {
 #define CHECK(expression) Check(static_cast<bool>(expression), #expression, __FILE__, __LINE__)
 #define ASSERT CHECK
 const int XML_OVERWRITE=1;
-struct CException {};
+bool failNextAllocation=false;
+void* operator new(std::size_t size) {
+ if(failNextAllocation) {failNextAllocation=false;throw std::bad_alloc();}
+ if(void* p=std::malloc(size ? size : 1)) return p;
+ throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept {std::free(p);}
+struct CException {
+ inline static int deleted=0;
+ virtual ~CException() {++deleted;}
+ void Delete() {delete this;}
+};
+using INT_PTR=std::ptrdiff_t;
+class CPtrArray {
+ protected:
+ INT_PTR m_nSize=0; vector<void*> storage;
+ public:
+ INT_PTR GetSize() const {return m_nSize;}
+ void SetSize(INT_PTR size) {
+  if(!size) vector<void*>().swap(storage);
+  else if(static_cast<size_t>(size)>storage.size()) storage.resize(size);
+  m_nSize=size;
+ }
+ size_t StorageCount() const {return storage.size();}
+ void** GetData() {return storage.data();}
+};
+template<class Base,class Pointer> class CTypedPtrArray : public Base {};
 struct Counter { long long n=1; long long GetUniqueNumber() {return n++;} } App;
 void ThrowErrorException(const char*,const CString&) { throw runtime_error("duplicate label"); }
 template<int N> struct Item {
+ inline static int deleted=0; ~Item() {++deleted;}
  bool bExecutingScript=false; Item* pNextRetired=nullptr;
  long long nCreationNumber=0,nUpdateNumber=0;
  int iSequence=0; CString name,trigger,strInternalName;
@@ -90,7 +117,8 @@ template<class T> struct ItemMap {
 template<class T> struct ItemArray {
  vector<T*> items;
  bool failGrowth=false;
- void SetSize(size_t size) {if(failGrowth && size>items.size()){failGrowth=false;throw bad_alloc();}items.resize(size);}
+ void Reserve(size_t size) {items.reserve(size);}
+ void SetSize(size_t size) {if(!size){vector<T*>().swap(items);return;}if(failGrowth && size>items.capacity()){failGrowth=false;throw bad_alloc();}items.resize(size);}
  size_t GetSize() {return items.size();}
  void SetAt(size_t i,T* value) {items.at(i)=value;}
  T*& operator[](size_t i) {return items.at(i);}
@@ -103,6 +131,8 @@ struct CXMLelement { string kind,key; vector<CXMLelement*> children; bool warnin
 #define GET_VERSION_AND_DEFAULTS(node) long iVersion=0; bool bUseDefault=false
 class CMUSHclientDoc;
 '''
+types=(ROOT/'OtherTypes.h').read_text()
+program+='template <class T>\n'+block(types,'class CScriptItemArray')+';\n'
 program+=block(hdr,'struct CXMLLoadContext')+';\n'
 program+='template <class T>\n'+block(hdr,'struct CXMLLoadChange')+';\n'
 members='\n'.join(f'C{f} m_{f};' for f in fields)
@@ -139,10 +169,7 @@ for kind,plural,var in [('Alias','Aliases','a'),('Trigger','Triggers','t'),('Tim
 # Extract final set publication too. These helpers have no UI dependencies.
 evaluate=(ROOT/'evaluate.cpp').read_text()
 start=evaluate.index('template <class TObject>\nstruct CSetPublishChange');end=evaluate.index('BOOL CMUSHclientDoc::Load_Set',start)
-# Clang requires typename for this existing MSVC-dependent template statement.
 publication=evaluate[start:end]
-check(publication.count('for (vector<pair<CString, TObject *> >::iterator')==1, "publication.count('for (vector<pair<CString, TObject *> >::iterator')==1")
-publication=publication.replace('for (vector<pair<CString, TObject *> >::iterator','for (typename vector<pair<CString, TObject *> >::iterator')
 program+=publication+'\n'
 program+='int main() {\n'
 for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers')]:
@@ -204,8 +231,8 @@ for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers'
  std::cout<<"{kind}: {'rollback' if failure else 'publication'} with plugin and world warning reentry and nested imports passed\\n";
 }}
 '''
- # Exercise both rollback implementations against a replacement entry.
- for fallback in [False,True]:
+ # Exercise direct publication and the guard against a replacement entry.
+ for guarded in [False,True]:
   program+='''{ CMUSHclientDoc d; CXMLLoadContext context(&d);
 '''
   program+='\n'.join(f'C{f} staged{f}; context.p{f}=&staged{f};' for f in fs)+'\n'
@@ -214,11 +241,12 @@ for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers'
  staged{kind}Map.SetAt("x",replacement);
  vector<CXMLLoadChange<C{kind}>> changes(1);
  auto& c=changes[0]; c.strName="x"; c.pOld=old;c.pNew=replacement;c.iNewCreationNumber=replacement->nCreationNumber;c.bApplied=true;
- {'PublishXMLLoadRollbackWithoutAllocation' if fallback else 'PrepareAndPublishXMLLoadRollback'}(context,staged{kind}Map,changes);
+ ReserveXMLLoadRollback(context,staged{kind}Map);
+ {f'CXMLLoadChangeGuard<C{kind},C{kind}Map> guard(&d,staged{kind}Map,context,changes,&CMUSHclientDoc::Retire{kind}); guard.Rollback();' if guarded else 'PublishXMLLoadRollbackWithoutAllocation(context,staged'+kind+'Map,changes);'}
  CHECK(staged{kind}Map.items.at("x")==old);CHECK(c.bRollbackOwnsNew);
  CHECK(d.m_{kind}Map.GetCount()==0);
- delete old;delete replacement;
- std::cout<<"{kind}: {'allocation fallback' if fallback else 'prepared'} rollback keeps explicit targets passed\\n";
+ delete old;{'' if guarded else 'delete replacement;'}
+ std::cout<<"{kind}: {'guarded' if guarded else 'direct'} rollback keeps explicit targets passed\\n";
 }}
 '''
 
@@ -231,6 +259,7 @@ for kind,plural,match in [('Alias','Aliases','name'),('Trigger','Triggers','trig
  d.Sort{plural}(); CHECK(d.m_{kind}Array.items==vector<C{kind}*>({{&c,&b,&a}}));
  set<C{kind}*> exclude{{&b}}; d.Sort{plural}(&exclude);
  CHECK(d.m_{kind}Array.items==vector<C{kind}*>({{&c,&a}}));
+ C{kind} added; d.m_{kind}Map.SetAt("added",&added);
  d.m_{kind}Array.failGrowth=true; bool failed=false;
  try {{ d.Sort{plural}(); }} catch(const bad_alloc&) {{failed=true;}}
  CHECK(failed && d.m_{kind}Array.items==vector<C{kind}*>({{&c,&a}}));
@@ -254,6 +283,97 @@ for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers'
  }}
 '''
 
+# Exercise real source loaders with the next allocation forbidden during unwind.
+for kind,plural in [('Alias','Aliases'),('Trigger','Triggers'),('Timer','Timers')]:
+ for original_kind in ['mfc','standard','unknown']:
+  for indexed in ([False,True] if kind!='Timer' else [False]):
+   original={'mfc':'CException* original=new CException;', 'standard':'runtime_error original("load");','unknown':'int original=73;'}[original_kind]
+   caught={'mfc':'catch(CException* e) {CHECK(e==original);e->Delete();caught=true;}', 'standard':'catch(const runtime_error& e) {CHECK(string(e.what())=="load");caught=true;}','unknown':'catch(int e) {CHECK(e==original);caught=true;}'}[original_kind]
+   program+=f'''
+ {{ CMUSHclientDoc d; int before=C{kind}::deleted;
+ int exceptionsBefore=CException::deleted; {original}
+ auto* old=new C{kind}; d.m_{kind}Map.SetAt("x",old);
+ {f'd.Sort{plural}();' if indexed else ''}
+ CXMLelement x{{"{kind.lower()}","x"}},y{{"{kind.lower()}","y"}};
+ CXMLelement section{{"{plural.lower()}","",{{&x,&y}},true}};
+ CXMLelement root{{"root","",{{&section}}}};
+ d.callback=[&] {{failNextAllocation=true;throw original;}};
+ bool caught=false;
+ try {{d.Load_{plural}_XML(root,XML_OVERWRITE,0);}} {caught}
+ bool noAllocation=failNextAllocation; failNextAllocation=false;
+ CHECK(caught && noAllocation);
+ CHECK(d.m_{kind}Map.GetCount()==1 && d.m_{kind}Map.items.at("x")==old);
+ {f'CHECK(d.m_{kind}Array.items==vector<C{kind}*>({{old}}));' if kind!='Timer' else ''}
+ CHECK(C{kind}::deleted==before+2);
+ CHECK(CException::deleted==exceptionsBefore+{int(original_kind=='mfc')});
+ delete old;
+ cout<<"{kind}: {original_kind} load error survives allocation-free rollback (indexed={indexed}) passed\\n";
+ }}
+'''
+
+# Capacity allocation must fail before a loader publishes any changes.
+for kind,plural in [('Alias','Aliases'),('Trigger','Triggers')]:
+ program+=f'''
+ {{ CMUSHclientDoc d; C{kind} old; d.m_{kind}Map.SetAt("x",&old);
+ CXMLelement x{{"{kind.lower()}","x"}};
+ CXMLelement section{{"{plural.lower()}","",{{&x}},true}};
+ CXMLelement root{{"root","",{{&section}}}};
+ bool callbackRan=false;d.callback=[&]{{callbackRan=true;}};
+ int before=C{kind}::deleted;failNextAllocation=true;bool caught=false;
+ try {{d.Load_{plural}_XML(root,XML_OVERWRITE,0);}}
+ catch(const bad_alloc&) {{caught=true;}}
+ CHECK(caught && !failNextAllocation && !callbackRan);
+ CHECK(d.m_{kind}Map.GetCount()==1 && d.m_{kind}Map.items.at("x")==&old);
+ CHECK(d.m_{kind}Array.GetSize()==0 && C{kind}::deleted==before);
+ cout<<"{kind}: reservation failure leaves the load unpublished passed\\n";
+ }}
+'''
+
+# A nested loader reserves outer entries without changing their visible index.
+for kind,plural in [('Alias','Aliases'),('Trigger','Triggers')]:
+ program+=f'''
+ {{ CMUSHclientDoc d; int depth=0;int before=C{kind}::deleted;
+ CXMLelement x{{"{kind.lower()}","x"}},y{{"{kind.lower()}","y"}};
+ CXMLelement outerSection{{"{plural.lower()}","",{{&x}},true}};
+ CXMLelement outerRoot{{"root","",{{&outerSection}}}};
+ CXMLelement innerSection{{"{plural.lower()}","",{{&y}},true}};
+ CXMLelement innerRoot{{"root","",{{&innerSection}}}};
+ d.callback=[&] {{
+   CHECK(d.m_{kind}Array.GetSize()==0);
+   if(depth++) {{failNextAllocation=true;throw 19;}}
+   bool innerCaught=false;
+   try {{d.Load_{plural}_XML(innerRoot,XML_OVERWRITE,0);}}
+   catch(int e) {{CHECK(e==19);innerCaught=true;}}
+   bool innerNoAllocation=failNextAllocation;failNextAllocation=false;
+   CHECK(innerCaught && innerNoAllocation && d.m_{kind}Map.GetCount()==1);
+   CHECK(d.m_{kind}Array.GetSize()==1 && d.m_{kind}Map.items.count("x")==1);
+   failNextAllocation=true;throw 23;
+ }};
+ bool caught=false;
+ try {{d.Load_{plural}_XML(outerRoot,XML_OVERWRITE,0);}}
+ catch(int e) {{CHECK(e==23);caught=true;}}
+ bool noAllocation=failNextAllocation;failNextAllocation=false;
+ CHECK(caught && noAllocation && depth==2);
+ CHECK(d.m_{kind}Map.GetCount()==0 && d.m_{kind}Array.GetSize()==0);
+ CHECK(C{kind}::deleted==before+2);
+ cout<<"{kind}: nested unindexed loads preserve both errors without allocation passed\\n";
+ }}
+'''
+
+# Compile the actual Reserve method against a pointer-array storage model.
+program+=r'''
+{ CScriptItemArray<int> array;
+ array.Reserve(4);CHECK(array.GetSize()==0 && array.StorageCount()==4);
+ failNextAllocation=true;array.SetSize(4);
+ bool reused=failNextAllocation;failNextAllocation=false;CHECK(reused);
+ array.SetSize(2);array.Reserve(8);CHECK(array.GetSize()==2);
+ auto* data=array.GetData();failNextAllocation=true;bool failed=false;
+ try {array.Reserve(32);} catch(const bad_alloc&) {failed=true;}
+ CHECK(failed && !failNextAllocation && array.GetSize()==2 && array.GetData()==data);
+ cout<<"Pointer array reservation preserves logical size, storage, and failed growth passed\n";
+}
+'''
+
 program+='}\n'
 (OUT/'staging_integration.cpp').write_text(program)
 cmd=[*compiler_command(),'-std=c++17','-O0','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(OUT/'staging_integration.cpp'),'-o',str(OUT/'staging_integration')]
@@ -262,7 +382,7 @@ env=os.environ.copy()
 r=subprocess.run([str(OUT/'staging_integration')],env=env,text=True,capture_output=True)
 (OUT/'staging_integration.log').write_text(r.stdout+r.stderr);print(r.stdout+r.stderr,end='');r.check_returncode()
 cases = sum(line.endswith(' passed') for line in r.stdout.splitlines())
-check(cases == 20, f'cases == 20 (actual: {cases})')
+check(cases == 40, f'cases == 40 (actual: {cases})')
 # Includes retain targets, while nested callback API imports use the default.
 check('piPrinting, bPlugin ? NULL : pLoadContext);' in block(xml,'void CMUSHclientDoc::Load_One_Include_XML'), "'piPrinting, bPlugin ? NULL : pLoadContext);' in block(xml,'void CMUSHclientDoc::Load_One_Include_XML')")
 check('piPrinting, pLoadContext);' in block(xml,'void CMUSHclientDoc::Load_Includes_XML'), "'piPrinting, pLoadContext);' in block(xml,'void CMUSHclientDoc::Load_Includes_XML')")

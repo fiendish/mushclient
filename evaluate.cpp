@@ -669,7 +669,7 @@ static void PublishLoadedSet (
     throw;
     }
 
-  for (vector<pair<CString, TObject *> >::iterator it =
+  for (typename vector<pair<CString, TObject *> >::iterator it =
          removedObjects.begin ();
        it != removedObjects.end (); ++it)
     {

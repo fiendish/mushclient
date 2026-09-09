@@ -77,96 +77,6 @@ static int CompareXMLRollbackAlias (const void * pLeft,
   return pAliasLeft->name < pAliasRight->name ? -1 : 1;
   }
 
-static void PrepareAndPublishXMLLoadRollback (
-  CXMLLoadContext & context,
-  CTriggerMap & objectMap,
-  vector<CXMLLoadChange<CTrigger> > & changes)
-  {
-  for (vector<CXMLLoadChange<CTrigger> >::iterator it = changes.begin ();
-       it != changes.end (); ++it)
-    it->bRollbackOwnsNew = false;
-
-  vector<CTrigger *> triggerArray;
-  triggerArray.reserve (objectMap.GetCount ());
-  CString strName;
-  CTrigger * pTrigger;
-  for (POSITION pos = objectMap.GetStartPosition (); pos; )
-    {
-    objectMap.GetNextAssoc (pos, strName, pTrigger);
-    pTrigger = SimulateXMLLoadRollback (strName, pTrigger, changes);
-    if (!pTrigger)
-      continue;
-    triggerArray.push_back (pTrigger);
-    }
-  if (triggerArray.size () > 1)
-    qsort (&triggerArray [0], triggerArray.size (),
-           sizeof (CTrigger *), CompareXMLRollbackTrigger);
-
-  if (static_cast<int> (triggerArray.size ()) >
-      context.pTriggerArray->GetSize ())
-    context.pTriggerArray->SetSize (triggerArray.size ());
-
-  ApplyXMLLoadMapRollback (objectMap, changes);
-  context.pTriggerArray->SetSize (triggerArray.size ());
-  for (size_t i = 0; i < triggerArray.size (); i++)
-    context.pTriggerArray->SetAt (i, triggerArray [i]);
-  }
-
-static void PrepareAndPublishXMLLoadRollback (
-  CXMLLoadContext & context,
-  CAliasMap & objectMap,
-  vector<CXMLLoadChange<CAlias> > & changes)
-  {
-  for (vector<CXMLLoadChange<CAlias> >::iterator it = changes.begin ();
-       it != changes.end (); ++it)
-    it->bRollbackOwnsNew = false;
-
-  vector<CAlias *> aliasArray;
-  aliasArray.reserve (objectMap.GetCount ());
-  CString strName;
-  CAlias * pAlias;
-  for (POSITION pos = objectMap.GetStartPosition (); pos; )
-    {
-    objectMap.GetNextAssoc (pos, strName, pAlias);
-    pAlias = SimulateXMLLoadRollback (strName, pAlias, changes);
-    if (!pAlias)
-      continue;
-    aliasArray.push_back (pAlias);
-    }
-  if (aliasArray.size () > 1)
-    qsort (&aliasArray [0], aliasArray.size (),
-           sizeof (CAlias *), CompareXMLRollbackAlias);
-
-  if (static_cast<int> (aliasArray.size ()) >
-      context.pAliasArray->GetSize ())
-    context.pAliasArray->SetSize (aliasArray.size ());
-
-  ApplyXMLLoadMapRollback (objectMap, changes);
-  context.pAliasArray->SetSize (aliasArray.size ());
-  for (size_t i = 0; i < aliasArray.size (); i++)
-    context.pAliasArray->SetAt (i, aliasArray [i]);
-  }
-
-static void PrepareAndPublishXMLLoadRollback (
-  CXMLLoadContext &,
-  CTimerMap & objectMap,
-  vector<CXMLLoadChange<CTimer> > & changes)
-  {
-  for (vector<CXMLLoadChange<CTimer> >::iterator it = changes.begin ();
-       it != changes.end (); ++it)
-    it->bRollbackOwnsNew = false;
-
-  CString strName;
-  CTimer * pTimer;
-  for (POSITION pos = objectMap.GetStartPosition (); pos; )
-    {
-    objectMap.GetNextAssoc (pos, strName, pTimer);
-    SimulateXMLLoadRollback (strName, pTimer, changes);
-    }
-
-  ApplyXMLLoadMapRollback (objectMap, changes);
-  }
-
 template <class T>
 static void ResetXMLLoadRollbackDecisions (
   vector<CXMLLoadChange<T> > & changes)
@@ -175,6 +85,17 @@ static void ResetXMLLoadRollbackDecisions (
        it != changes.end (); ++it)
     it->bRollbackOwnsNew = false;
   }
+
+// A nested load can start with map entries that its outer load has not indexed.
+// Reserve their rollback capacity before this load changes any map entries.
+static void ReserveXMLLoadRollback (CXMLLoadContext & context, CAliasMap & map)
+  { context.pAliasArray->Reserve (map.GetCount ()); }
+
+static void ReserveXMLLoadRollback (CXMLLoadContext & context, CTriggerMap & map)
+  { context.pTriggerArray->Reserve (map.GetCount ()); }
+
+static void ReserveXMLLoadRollback (CXMLLoadContext &, CTimerMap &)
+  { }
 
 static void PublishXMLLoadRollbackWithoutAllocation (
   CXMLLoadContext & context,
@@ -192,8 +113,8 @@ static void PublishXMLLoadRollbackWithoutAllocation (
       iFinalCount++;
     }
 
-  // The final rollback map cannot contain more objects than the largest
-  // successfully indexed state already published during this load.
+  // Guard entry reserves existing keys, including unindexed outer entries.
+  // Surviving callback additions publish any further capacity they require.
   context.pTriggerArray->SetSize (iFinalCount);
   ResetXMLLoadRollbackDecisions (changes);
   int iTrigger = 0;
@@ -245,11 +166,19 @@ static void PublishXMLLoadRollbackWithoutAllocation (
   }
 
 static void PublishXMLLoadRollbackWithoutAllocation (
-  CXMLLoadContext & context,
+  CXMLLoadContext &,
   CTimerMap & objectMap,
   vector<CXMLLoadChange<CTimer> > & changes)
   {
-  PrepareAndPublishXMLLoadRollback (context, objectMap, changes);
+  ResetXMLLoadRollbackDecisions (changes);
+  CString strName;
+  CTimer * pTimer;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, strName, pTimer);
+    SimulateXMLLoadRollback (strName, pTimer, changes);
+    }
+  ApplyXMLLoadMapRollback (objectMap, changes);
   }
 
 template <class T, class TMap>
@@ -264,7 +193,8 @@ class CXMLLoadChangeGuard
                        RetireFunction retire) :
       m_pDoc (pDoc), m_ObjectMap (objectMap), m_Context (context),
       m_Changes (changes),
-      m_Retire (retire), m_bCommitted (false) {}
+      m_Retire (retire), m_bCommitted (false)
+    { ReserveXMLLoadRollback (m_Context, m_ObjectMap); }
 
   ~CXMLLoadChangeGuard ()
     { ASSERT (m_bCommitted); }
@@ -274,22 +204,8 @@ class CXMLLoadChangeGuard
     if (m_bCommitted)
       return;
     m_bCommitted = true;
-    try
-      {
-      PrepareAndPublishXMLLoadRollback (m_Context, m_ObjectMap, m_Changes);
-      }
-    catch (...)
-      {
-      PublishXMLLoadRollbackWithoutAllocation (
-        m_Context, m_ObjectMap, m_Changes);
-      for (typename vector<CXMLLoadChange<T> >::iterator it =
-             m_Changes.begin ();
-           it != m_Changes.end (); ++it)
-        if (it->bApplied)
-          (m_pDoc->*m_Retire)
-            (it->bRollbackOwnsNew ? it->pNew : it->pOld);
-      throw;
-      }
+    // No scratch allocation is needed while the caller holds a load exception.
+    PublishXMLLoadRollbackWithoutAllocation (m_Context, m_ObjectMap, m_Changes);
 
     for (typename vector<CXMLLoadChange<T> >::iterator it =
            m_Changes.begin ();

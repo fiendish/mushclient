@@ -47,6 +47,7 @@ public:
   CMUSHclientDoc * m_pDoc;
   __int64 m_iDocumentNumber;
   CStringArray m_PluginIDs;
+  CArray<__int64, __int64> m_PluginInstanceNumbers;
 
   // for sorting the list
 

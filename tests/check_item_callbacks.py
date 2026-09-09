@@ -1,10 +1,12 @@
 """Check extracted item warning callbacks and editor keys with MFC substitutes."""
 import argparse, json, os, shlex, shutil, subprocess
 from pathlib import Path
-OUT=Path(__file__).resolve().parents[1]/'.test-output/item-callbacks'
-OUT.mkdir(parents=True,exist_ok=True)
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(); p.add_argument('--revision'); p.add_argument('--phase',choices=['items','all'],default='items'); args=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--revision'); p.add_argument('--phase',choices=['items','all'],default='items'); p.add_argument('--output',type=Path); args=p.parse_args()
+OUT=(args.output or ROOT/'.test-output/item-callbacks').resolve()
+OUT.mkdir(parents=True,exist_ok=True)
+# Invalidate the previous report before source loading, extraction, or execution.
+(OUT/'validation.json').unlink(missing_ok=True)
 def source(path):
     if args.revision:
         return subprocess.check_output(['git','-C',str(ROOT),'show',args.revision+':'+path],text=True)

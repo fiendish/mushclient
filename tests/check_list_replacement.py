@@ -10,8 +10,9 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--revision')
+parser.add_argument('--output', type=Path)
 args = parser.parse_args()
-OUT = ROOT / '.test-output' / ('list-' + (args.revision or 'current'))
+OUT = (args.output or ROOT / '.test-output' / ('list-' + (args.revision or 'current'))).resolve()
 OUT.mkdir(parents=True, exist_ok=True)
 path = 'dialogs/world_prefs/genpropertypage.cpp'
 source = (subprocess.check_output(['git', '-C', str(ROOT), 'show', args.revision + ':' + path], text=True)
@@ -32,8 +33,12 @@ start = load.index('  CString strObjectName;')
 end = load.index('  // sort filtered items', start)
 replacement = load[start:end]
 # Count comparisons with the same pointer order and search behavior.
-replacement = replacement.replace('std::less<CString *> ()', 'CountLess ()')
-replacement = replacement.replace('if (find (', 'if (counted_find (')
+# The excerpt has two sorts and two binary searches. Reject extraction drift.
+comparator = 'std::less<CString *> ()'
+count = replacement.count(comparator)
+if count != 4:
+    raise ValueError(f'{path}: LoadList instrumentation expected 4 comparator matches; found {count}')
+replacement = replacement.replace(comparator, 'CountLess ()')
 insert = block(source, 'int CGenPropertyPage::add_list_item')
 fixture = Path(__file__).with_name('list_replacement.cpp.in').read_text()
 assert fixture.count('@INSERT@') == fixture.count('@REPLACE@') == 1

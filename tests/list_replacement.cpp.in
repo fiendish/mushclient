@@ -127,13 +127,13 @@ int main(){
     CGenPropertyPage page;page.setup(n);comparisons=0;page.Reload();
     unsigned levels=1;for(int k=n;k>1;k/=2)++levels;
     cout<<"rows="<<n<<" comparisons="<<comparisons<<endl;
-    assert(comparisons<64ULL*n*levels);
+    assert(comparisons>0 && comparisons<64ULL*n*levels);
     assert(page.control.GetItemCount()==n);
   }
   {CGenPropertyPage page;page.setup(10000);auto old=page.control.rows;
    page.failDescriptionAt=5000;comparisons=0;bool caught=false;
    try{page.Reload();}catch(const runtime_error& e){caught=string(e.what())=="description failure";}
-   assert(caught && page.control.rows==old && comparisons<64ULL*10000*14);
+   assert(caught && page.control.rows==old && comparisons>0 && comparisons<64ULL*10000*14);
    cout<<"large rollback comparisons="<<comparisons<<endl;
   }
   assert(CString::live==0);

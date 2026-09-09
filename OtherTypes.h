@@ -447,10 +447,27 @@ class CAlias : public CObject
   CString strInternalName;  // name it is stored in the alias map under
   };
 
+// Reserve pointer storage without publishing additional evaluation entries.
+// SetSize(0) frees MFC storage, so restore only the logical size after growing.
+template <class T>
+class CScriptItemArray : public CTypedPtrArray<CPtrArray, T *>
+  {
+  public:
+  void Reserve (INT_PTR count)
+    {
+    const INT_PTR oldSize = this->GetSize ();
+    if (count > oldSize)
+      {
+      this->SetSize (count);
+      this->m_nSize = oldSize;
+      }
+    }
+  };
+
 // map for lookup by name
 typedef CTypedPtrMap <CMapStringToPtr, CString, CAlias*> CAliasMap;
 // array for saving in order
-typedef CTypedPtrArray <CPtrArray, CAlias*> CAliasArray;
+typedef CScriptItemArray<CAlias> CAliasArray;
 // list for alias evaluation
 typedef CTypedPtrList <CPtrList, CAlias*> CAliasList;
 
@@ -589,7 +606,7 @@ class CTrigger : public CObject
 // map for lookup by name
 typedef CTypedPtrMap <CMapStringToPtr, CString, CTrigger*> CTriggerMap;
 // array for sequencing evaluation
-typedef CTypedPtrArray <CPtrArray, CTrigger*> CTriggerArray;
+typedef CScriptItemArray<CTrigger> CTriggerArray;
 // list for trigger evaluation
 typedef CTypedPtrList <CPtrList, CTrigger*> CTriggerList;
 
