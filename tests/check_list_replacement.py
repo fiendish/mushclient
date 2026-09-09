@@ -53,9 +53,13 @@ def block(text, start):
     raise ValueError(start)
 
 load = block(source, 'void CGenPropertyPage::LoadList')
-start = load.index('  CControlRedrawGuard listRedraw'
-                   if '  CControlRedrawGuard listRedraw' in load
-                   else '  CString strObjectName;')
+guard = '  CControlRedrawGuard listRedraw'
+if guard in load:
+    start = load.index(guard)
+elif args.revision:
+    start = load.index('  CString strObjectName;')
+else:
+    raise ValueError(f'{path}: LoadList is missing the list redraw guard')
 end = load.index('  // sort filtered items', start)
 replacement = load[start:end]
 # Count comparisons with the same pointer order and search behavior.

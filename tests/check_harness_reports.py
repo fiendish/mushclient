@@ -60,6 +60,17 @@ class HarnessReportTests(unittest.TestCase):
         self.assertFalse(self.report.exists(), 'Failed rerun retained validation.json')
         return result
 
+    def test_missing_redraw_guard_fails_current_source_extraction(self):
+        path = self.root / 'dialogs/world_prefs/genpropertypage.cpp'
+        source = path.read_text()
+        guard = '  CControlRedrawGuard listRedraw (m_ctlList->GetSafeHwnd (), m_bListRedrawDisabled);'
+        self.assertEqual(source.count(guard), 1)
+        path.write_text(source.replace(guard, ''))
+        result = self.run_harness('check_list_replacement.py')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('LoadList is missing the list redraw guard', result.stderr)
+        self.assertFalse((self.output / 'list_replacement.cpp').exists())
+
     def test_current_directory_output(self):
         for name in ('check_item_callbacks.py', 'check_list_replacement.py'):
             with self.subTest(harness=name):
