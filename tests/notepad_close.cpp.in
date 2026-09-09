@@ -31,7 +31,7 @@ enum {
     eNotepadSaveDefault, eNotepadSaveAlways, eNotepadSaveNever
 };
 enum {
-    eNotepadScript, eNotepadMXPdebug, eNotepadPacketDebug, eNotepadLineInfo,
+    eNotepadNormal, eNotepadScript, eNotepadMXPdebug, eNotepadPacketDebug, eNotepadLineInfo,
     eNotepadWorldLoadError, eNotepadXMLcomments, eNotepadPluginInfo, eNotepadRecall
 };
 
@@ -47,6 +47,12 @@ struct CString : std::string {
         return lower(*this).compare(lower(other));
     }
 };
+CString TFormat(const char *format, const char *name) {
+    CHECK(std::string(format) == "Notepad: %s");
+    CString title("Notepad: ");
+    title += name;
+    return title;
+}
 struct VARIANT { std::vector<std::string> titles; };
 struct COleVariant {
     CString title;
@@ -160,6 +166,7 @@ struct CTextView : CEditView {
     BOOL OnCmdMsg(UINT, int, void *, AFX_CMDHANDLERINFO *) override;
 };
 struct CMUSHclientDoc : CDocument {
+    CString m_mush_name = "Review World";
     __int64 m_iUniqueDocumentNumber = App.nextID++;
     int m_input_font_name = 0, m_input_font_height = 0, m_input_font_weight = 0;
     int m_input_font_charset = 0, m_input_text_colour = 0, m_input_background_colour = 0;
@@ -173,6 +180,7 @@ struct CMUSHclientDoc : CDocument {
     long CloseNotepad(LPCTSTR, BOOL);
     VARIANT GetNotepadList(BOOL);
     bool SwitchToNotepad();
+    void OnEditFliptonotepad();
     void Activate() { ++activations; }
 };
 struct CTextDocument : CDocument {
@@ -208,8 +216,10 @@ void CDocument::OnCloseDocument() {
     delete doc;
 }
 void StopMonitoringThread(__int64 &token) { token = 0; }
+int createdWindows = 0;
 template <typename... Rest>
 BOOL CreateTextWindow(LPCTSTR text, LPCTSTR title, CMUSHclientDoc *world, __int64 worldID, Rest...) {
+    ++createdWindows;
     auto *doc = new CTextDocument;
     doc->m_pRelatedWorld = world;
     doc->m_iUniqueDocumentNumber = worldID;
@@ -272,6 +282,7 @@ std::function<int(CChooseNotepadDlg &)> CChooseNotepadDlg::modal;
 @GUARD@
 @DOCUMENT@
 @COMMAND@
+@FLIP@
 @NOTEPAD@
 @CHOOSER@
 @DEFER@
@@ -539,6 +550,84 @@ void switchNotepad() {
     cleanup();
 }
 
+void flipPending(bool withLive) {
+    CMUSHclientDoc world;
+    // The registry prepends documents. The pending document must be first.
+    auto *live = withLive ? create(world, "Live", "live text") : nullptr;
+    auto *old = create(world, "Notepad: Review World");
+    const auto oldID = old->m_iTextDocumentNumber;
+    CHECK(App.docs.head->doc == old);
+    old->view.command = [&] {
+        CHECK(old->m_iActiveOperations == 1);
+        CHECK(world.CloseNotepad("Notepad: Review World", false));
+        CHECK(old->m_bClosePending && old->m_bCloseQueued);
+        CHECK(registered(oldID) == old);
+        CHECK(!App.ProcessDeferredClose());
+        world.Activate();
+    };
+    CHECK(old->view.OnCmdMsg(1, 0, nullptr, nullptr));
+    CHECK(old->m_iActiveOperations == 0 && old->m_bClosePending);
+    CHECK(old->GetFirstViewPosition() != nullptr);
+    CHECK(world.activations == 1 && registered(oldID) == old);
+    CHECK(App.destroyed.empty());
+    CHECK(App.m_DeferredTextDocumentCloses == std::deque<__int64>{oldID});
+
+    // Model a queued keyboard command dispatched after the guarded command
+    // returns and before OnIdle processes the close. Native scheduling is not run.
+    const auto before = createdWindows;
+    world.OnEditFliptonotepad();
+    CHECK(old->view.frame.activations == 0);
+    auto *survivor = live ? live : world.FindNotepad("Notepad: Review World");
+    CHECK(survivor && survivor != old);
+    const auto survivorID = survivor->m_iTextDocumentNumber;
+    CHECK(survivorID != oldID);
+    CHECK(createdWindows == before + (withLive ? 0 : 1));
+    if (withLive) CHECK(live->view.frame.activations == 1);
+    CHECK(survivor->m_pRelatedWorld == &world);
+    CHECK(survivor->m_iUniqueDocumentNumber == world.m_iUniqueDocumentNumber);
+    CHECK(survivor->view.edit.text == (withLive ? "live text" : ""));
+    CHECK(registered(oldID) == old && old->view.edit.text == "old text");
+    CHECK(App.destroyed.empty());
+    CHECK(App.m_DeferredTextDocumentCloses == std::deque<__int64>{oldID});
+
+    drain();
+    CHECK(!registered(oldID));
+    CHECK(App.destroyed.size() == 1 && App.destroyed.at(oldID) == "old text");
+    CHECK(registered(survivorID) == survivor);
+    CHECK(!survivor->m_bClosePending && !survivor->m_bCloseQueued);
+    CHECK(world.FindNotepad(withLive ? "Live" : "Notepad: Review World") == survivor);
+    CHECK(survivor->view.edit.text == (withLive ? "live text" : ""));
+    CHECK(App.m_DeferredTextDocumentCloses.empty());
+    cleanup();
+}
+
+void flipControls(bool withLive) {
+    CMUSHclientDoc world, other;
+    auto *live = withLive ? create(world, "Live", "live text") : nullptr;
+    // Both non-matches precede any live match in the registry.
+    auto *foreign = create(other, "Foreign");
+    auto *wrongIdentity = create(world, "Old world identity");
+    ++wrongIdentity->m_iUniqueDocumentNumber;
+    const auto before = createdWindows;
+    world.OnEditFliptonotepad();
+    CHECK(foreign->view.frame.activations == 0);
+    CHECK(wrongIdentity->view.frame.activations == 0);
+    CHECK(createdWindows == before + (withLive ? 0 : 1));
+    if (withLive) {
+        CHECK(live->view.frame.activations == 1);
+        CHECK(world.FindNotepad("Live") == live);
+        CHECK(live->view.edit.text == "live text");
+    } else {
+        auto *created = world.FindNotepad("Notepad: Review World");
+        CHECK(created != nullptr);
+        CHECK(created->m_pRelatedWorld == &world);
+        CHECK(created->m_iUniqueDocumentNumber == world.m_iUniqueDocumentNumber);
+        CHECK(created->view.edit.text.empty());
+    }
+    CHECK(App.m_DeferredTextDocumentCloses.empty() && App.destroyed.empty());
+    cleanup();
+}
+
 void immediateClose() {
     CMUSHclientDoc world;
     auto *old = create(world, "Review");
@@ -564,6 +653,10 @@ int main(int argc, char **argv) {
     else if (name == "enumeration") enumeration();
     else if (name == "switch") switchNotepad();
     else if (name == "immediate_close") immediateClose();
+    else if (name == "flip_pending_only") flipPending(false);
+    else if (name == "flip_pending_before_live") flipPending(true);
+    else if (name == "flip_live") flipControls(true);
+    else if (name == "flip_absent") flipControls(false);
     else CHECK(false);
     CHECK(App.docs.head == nullptr && App.worlds.head == nullptr);
     CHECK(App.m_DeferredTextDocumentCloses.empty());

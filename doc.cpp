@@ -5950,17 +5950,55 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
 
   struct CRecallLine
     {
-    CString text;
     CTime time;
+    const char * text;
+    int length;
     int flags;
     bool hardReturn;
     };
+
+  // Size the selected range before allocating its immutable snapshot.
+  // Neither pass pumps messages while it holds positions in the live list.
+  size_t lineCount = 0;
+  size_t textBytesRemaining = 0;
+  for (POSITION snapshotPos = pos; snapshotPos; )
+    {
+    const CLine * pLine = m_LineList.GetNext (snapshotPos);
+    ++lineCount;
+    textBytesRemaining += pLine->len;
+    }
+
   vector<CRecallLine> lines;
+  lines.reserve (lineCount);
+  // Keep each line contiguous without requiring one large text allocation
+  // in the 32-bit process. Moving a block owner does not move its text.
+  vector<std::unique_ptr<char []> > textBlocks;
+  char * nextText = NULL;
+  size_t blockBytesRemaining = 0;
   for (POSITION snapshotPos = pos; snapshotPos; )
     {
     const CLine * pLine = m_LineList.GetNext (snapshotPos);
     CRecallLine line;
-    line.text = CString (pLine->text, pLine->len);
+    line.text = "";
+    line.length = pLine->len;
+    if (line.length != 0)
+      {
+      const size_t length = line.length;
+      if (blockBytesRemaining < length)
+        {
+        const size_t blockSize = (std::max) (length,
+          (std::min) (textBytesRemaining, size_t (64 * 1024)));
+        std::unique_ptr<char []> block (new char [blockSize]);
+        textBlocks.push_back (std::move (block));
+        nextText = textBlocks.back ().get ();
+        blockBytesRemaining = blockSize;
+        }
+      memcpy (nextText, pLine->text, length);
+      line.text = nextText;
+      nextText += length;
+      blockBytesRemaining -= length;
+      textBytesRemaining -= length;
+      }
     line.time = pLine->m_theTime;
     line.flags = pLine->flags;
     line.hardReturn = pLine->hard_return;
@@ -6002,7 +6040,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
       while (nextLine < lines.size ())
         {
         const CRecallLine & line = lines [nextLine++];
-        strLine += line.text;
+        strLine.Append (line.text, line.length);
         theTime = line.time;
         iFlags = line.flags;
         iMilestone++;
@@ -6925,8 +6963,9 @@ CTextDocument * pTextDoc = NULL;
     {
     pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
-    // ignore unrelated worlds
-    if (pTextDoc->m_pRelatedWorld == this &&
+    // ignore unrelated worlds and notepads whose close was accepted
+    if (!pTextDoc->m_bClosePending &&
+        pTextDoc->m_pRelatedWorld == this &&
        pTextDoc->m_iUniqueDocumentNumber == m_iUniqueDocumentNumber)
       break;
 

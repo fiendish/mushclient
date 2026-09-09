@@ -77,6 +77,7 @@ def main():
             'void CTextDocument::EndOperation',
             'BOOL CTextDocument::SaveModified()']),
         'COMMAND': block(source('TextView.cpp'), 'BOOL CTextView::OnCmdMsg'),
+        'FLIP': block(source('doc.cpp'), 'void CMUSHclientDoc::OnEditFliptonotepad()'),
         'NOTEPAD': '\n'.join(block(notepad, signature) for signature in [
             'bool CMUSHclientDoc::SwitchToNotepad',
             'CTextDocument * CMUSHclientDoc::FindNotepad',
@@ -116,7 +117,8 @@ def main():
 
     environment = dict(os.environ, UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
     cases = ['close_append', 'close_replace', 'cancelled_close', 'repeated_close',
-             'stale_chooser', 'enumeration', 'switch', 'immediate_close']
+             'stale_chooser', 'enumeration', 'switch', 'immediate_close',
+             'flip_pending_only', 'flip_pending_before_live', 'flip_live', 'flip_absent']
     for mode, flags in [('release', []), ('debug', ['-D_DEBUG'])]:
         exe = compile_fixture(mode, template, flags)
         for case in cases:
@@ -128,6 +130,8 @@ def main():
 
     if args.check_mutations:
         mutations = [
+            ('flip_selection', 'void CMUSHclientDoc::OnEditFliptonotepad()',
+             '!pTextDoc->m_bClosePending &&', '', 'flip_pending_only'),
             ('title_lookup', 'CTextDocument * CMUSHclientDoc::FindNotepad',
              '!pTextDoc->m_bClosePending &&', '', 'close_append'),
             ('switch_count', 'bool CMUSHclientDoc::SwitchToNotepad',

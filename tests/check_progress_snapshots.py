@@ -9,7 +9,9 @@ Limits: portable, synchronous adapters replace MFC strings, heap-backed lists,
 dialogs, document retention, and time formatting. Regex cases use ASCII std::regex,
 not PCRE. Historical source parenthesizes MSVC-only sizeof type expressions.
 Memory totals use adapter sizes, not the Windows ABI. These checks do not
-run Windows/Wine UI, message dispatch, native close handling, locale, or UTF-8.
+run Windows/Wine UI, message dispatch, native close handling, or locale.
+The storage cases preserve raw UTF-8 bytes but do not test PCRE UTF-8 semantics.
+Allocation probes count text allocations and bytes, not native heap overhead.
 """
 import argparse
 import hashlib
@@ -29,6 +31,8 @@ FUNCTIONS = {
     'MEMORY': ('dialogs/world_prefs/prefspropertypages.cpp',
                'void CPrefsP15::CalculateMemoryUsage ()'),
 }
+STORAGE_CASES = ['recall_storage_content', 'recall_storage_cancel',
+                 'recall_storage_short', 'recall_storage_failure']
 CONTROLS = ['recall_control', 'recall_empty', 'recall_cancel',
             'memory_control', 'memory_empty', 'memory_cancel']
 REGRESSIONS = [
@@ -167,7 +171,7 @@ def main():
     # NDEBUG also checks that all fixture checks remain active in release builds.
     for mode, flags in [('debug', ['-D_DEBUG']), ('release', ['-DNDEBUG'])]:
         exe = compile_fixture(mode, program, flags)
-        for case in CONTROLS + REGRESSIONS:
+        for case in CONTROLS + REGRESSIONS + STORAGE_CASES:
             run_case(exe, case)
 
     if args.baseline:
@@ -189,7 +193,7 @@ def main():
         raise RuntimeError('Production functions changed during the run. Run the check again.')
     report['result'] = 'pass'
     report_path.write_text(json.dumps(report, indent=2) + '\n')
-    print(f'PASS: {len(CONTROLS) + len(REGRESSIONS)} cases in each candidate mode', flush=True)
+    print(f'PASS: {len(CONTROLS) + len(REGRESSIONS) + len(STORAGE_CASES)} cases in each candidate mode', flush=True)
     print(f'Report: {report_path}', flush=True)
 
 

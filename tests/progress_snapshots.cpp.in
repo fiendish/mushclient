@@ -31,14 +31,43 @@ constexpr int PCRE_CASELESS = 1, PCRE_UTF8 = 2;
 constexpr int IDC_BUFFER_LINES = 1, IDC_OUTPUT_MEMORY = 2, IDC_CALCULATE_MEMORY = 3;
 const char* const ENDLINE = "\r\n";
 
+// Count snapshot text allocations before the first message-pumping boundary.
+// This measures call counts and payload sizes, not native CString heap overhead.
+struct TextAllocationProbe {
+  bool active = false;
+  size_t arrays = 0, bytes = 0, largest = 0, strings = 0;
+  int failAfter = -1;
+} textAllocations;
+size_t liveTextArrays = 0;
+void* operator new[](size_t size) {
+  if (textAllocations.active) {
+    if (textAllocations.failAfter == 0) throw std::bad_alloc();
+    if (textAllocations.failAfter > 0) --textAllocations.failAfter;
+    ++textAllocations.arrays;
+    textAllocations.bytes += size;
+    textAllocations.largest = std::max(textAllocations.largest, size);
+  }
+  void* result = std::malloc(size ? size : 1);
+  if (!result) throw std::bad_alloc();
+  ++liveTextArrays;
+  return result;
+}
+void operator delete[](void* value) noexcept {
+  if (value) { --liveTextArrays; std::free(value); }
+}
+void operator delete[](void* value, size_t) noexcept { ::operator delete[](value); }
+
 struct CString {
   std::string value;
   CString() = default;
   CString(const char* text) : value(text) {}
   CString(std::string text) : value(std::move(text)) {}
-  CString(const char* text, int length) : value(text, static_cast<size_t>(length)) {}
+  CString(const char* text, int length) : value(text, static_cast<size_t>(length)) {
+    if (textAllocations.active && length) ++textAllocations.strings;
+  }
   operator LPCTSTR() const { return value.c_str(); }
   CString& operator+=(const CString& text) { value += text.value; return *this; }
+  void Append(const char* text, int length) { value.append(text, static_cast<size_t>(length)); }
   bool IsEmpty() const { return value.empty(); }
   void Empty() { value.clear(); }
   void MakeLower() {
@@ -513,9 +542,83 @@ void MemoryCase(const Scenario& scenario) {
   CheckCleanup(doc, scenario, mutations);
 }
 
+void RecallStorageCase(const std::string& name) {
+  harness = Harness{};
+  CMUSHclientDoc doc;
+  const bool shortRange = name == "recall_storage_short";
+  const bool fail = name == "recall_storage_failure";
+  const bool cancel = name == "recall_storage_cancel";
+  const int count = cancel ? 500000 : 5000;
+  std::string expected;
+  size_t payload = 0;
+  for (int i = 0; i < count; ++i) {
+    std::string text(80, 'x');
+    if (!cancel && !shortRange && !fail) {
+      // Empty lines and lines around the block boundary test byte preservation.
+      if (i == 0) text.clear();
+      if (i == 1) text.assign(65535, 'a');
+      if (i == 2) text.assign(65536, 'b');
+      if (i == 3) text.assign(65537, 'c');
+      if (i == 4) text = "UTF-8: \xe2\x82\xac";
+    }
+    doc.m_LineList.AddTail(new CLine(text));
+    if (!shortRange || i >= count - 2) {
+      payload += text.size();
+      if (!cancel && !fail) expected += text + "\r\n";
+    }
+  }
+  const size_t arraysBefore = liveTextArrays;
+  textAllocations = TextAllocationProbe{};
+  textAllocations.active = true;
+  textAllocations.failAfter = fail ? 1 : -1;
+  harness.cancelAt = cancel ? 1 : 0;
+  harness.callback = [&](const std::string& event) {
+    if (event != "create") return;
+    textAllocations.active = false;
+    CHECK(textAllocations.strings == 0, "snapshot storage: no per-line string allocations");
+    CHECK(textAllocations.arrays > 0 && textAllocations.arrays < size_t(count) / 8,
+          "snapshot storage: text allocation count is below line count");
+    CHECK(textAllocations.bytes >= payload && textAllocations.bytes < payload + 256 * 1024,
+          "snapshot storage: bounded text allocation overhead");
+    CHECK(textAllocations.largest <= 256 * 1024, "snapshot storage: bounded text blocks");
+    if (shortRange) CHECK(textAllocations.bytes <= 256, "short snapshot uses selected range");
+    std::cout << "Snapshot text: " << payload << " bytes in " << textAllocations.arrays
+              << " allocations, " << textAllocations.bytes << " allocated bytes\n";
+    // All source text goes away before the snapshot is read.
+    doc.m_LineList.Clear();
+  };
+  bool threw = false;
+  try {
+    const auto result = doc.RecallText(cancel ? "missing" : "", true, false,
+                                      true, true, true, shortRange ? 1 : 0, "");
+    CHECK(result.value == expected, "snapshot storage: retained exact bytes");
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  textAllocations.active = false;
+  CHECK(threw == fail, "snapshot allocation failure propagates");
+  CHECK(doc.operations == 0 && harness.live == 0 && Frame.status.value == "Ready",
+        "snapshot storage: exception and normal cleanup");
+  if (fail) {
+    CHECK(harness.creates == 0 && doc.m_LineList.GetCount() == count,
+          "snapshot failure leaves original output intact");
+    CHECK(liveTextArrays == arraysBefore, "snapshot failure releases retained blocks");
+  } else {
+    CHECK(harness.creates == 1 && doc.m_LineList.GetCount() == 0 && liveTextArrays == 0,
+          "snapshot storage releases source and copied text");
+  }
+  if (cancel) CHECK(harness.polls == 1, "snapshot storage preserves first-poll cancellation");
+  harness.callback = nullptr;
+}
+
 int main(int argc, char** argv) {
   CHECK(argc == 2, "one case argument required");
   const std::string name = argv[1];
+  if (name.rfind("recall_storage_", 0) == 0) {
+    RecallStorageCase(name);
+    std::cout << "PASS: " << name << '\n';
+    return 0;
+  }
   const Scenario scenario = Parse(name);
   if (name.rfind("recall_", 0) == 0) RecallCase(scenario);
   else if (name.rfind("memory_", 0) == 0) MemoryCase(scenario);
