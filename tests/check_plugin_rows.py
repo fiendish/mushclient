@@ -29,6 +29,7 @@ FIXTURE = r'''
 #include <cassert>
 #include <cctype>
 #include <cstdint>
+#include <functional>
 #include <cstdio>
 #include <iostream>
 #include <memory>
@@ -38,11 +39,13 @@ using namespace std;
 using __int64 = long long;
 using LPARAM = intptr_t; using WPARAM = uintptr_t; using LRESULT = intptr_t;
 using DWORD = uintptr_t; using POSITION = size_t;
+using LPCTSTR = const char*; constexpr bool TRUE=true;
 #define CALLBACK
 constexpr int IDCANCEL=2, LVIS_FOCUSED=1, LVNI_SELECTED=2;
 struct CString : string {
   using string::string;
   bool IsEmpty() const { return empty(); }
+  operator const char*() const { return c_str(); }
   int CompareNoCase(const CString& other) const {
     string a=*this, b=other;
     for (auto& c:a) c=tolower(static_cast<unsigned char>(c));
@@ -59,6 +62,9 @@ using CStringArray = CArray<CString, const CString&>;
 CString CFormat(const char* format, double value) {
   char buffer[64]; snprintf(buffer, sizeof(buffer), format, value); return buffer;
 }
+CString TFormat(const char* format, const char* name, const char* id) {
+  char text[256]; snprintf(text, sizeof(text), format, name, id); return text;
+}
 struct CPlugin {
   CString m_strID="B", m_strName="Zulu", m_strPurpose="Old purpose";
   CString m_strAuthor="Old author", m_strLanguage="Lua", m_strSource="old.xml";
@@ -69,6 +75,14 @@ using PluginListIterator = vector<CPlugin*>::iterator;
 struct CMUSHclientDoc {
   __int64 m_iUniqueDocumentNumber=1;
   vector<CPlugin*> m_PluginList;
+  function<void(CPlugin*)> onEnable;
+  void EnablePlugin(const CString& id, bool enabled) {
+    CPlugin* plugin=GetPlugin(id); assert(plugin);
+    plugin->m_bEnabled=enabled;
+    if (onEnable) onEnable(plugin);
+  }
+  void Note(const CString&) {}
+  void PluginListChanged() {}
   CPlugin* GetPlugin(const CString& id) {
     for (auto* plugin:m_PluginList) if (plugin->m_strID==id) return plugin;
     return nullptr;
@@ -118,7 +132,7 @@ struct CPluginsDlg {
   CString GetPluginIDForIndex(int) const;
   CPlugin* GetPluginForIndex(int) const;
   CPlugin* GetPluginForItem(int) const;
-  void LoadList(); LRESULT OnKickIdle(WPARAM, LPARAM); void OnEdit();
+  void LoadList(); LRESULT OnKickIdle(WPARAM, LPARAM); void OnEdit(); void OnEnable();
 };
 // PRODUCTION METHODS
 int main() {
@@ -144,8 +158,9 @@ int main() {
   replacement->m_strSource="new.xml"; replacement->m_bEnabled=false; replacement->m_dVersion=2;
   doc.m_PluginList={&other, replacement.get()}; old.reset();
   dialog.OnEdit();
-  assert((dialog.edited==vector<CString>{"other.xml", "new.xml"}));
-  assert(list.loads==1); // Selected commands resolve the live instance before idle.
+  assert((dialog.edited==vector<CString>{"other.xml"}));
+  assert(list.loads==1); // A stale selection must not act on its replacement before idle.
+  assert(dialog.GetPluginForItem(1)==nullptr);
   dialog.OnKickIdle(0, 0);
   assert((list.rows[0].text==vector<CString>{
     "Aardvark", "New purpose", "New author", "Python", "new.xml", "No", " 2.00"}));
@@ -157,7 +172,7 @@ int main() {
   assert((dialog.edited==vector<CString>{"new.xml"}));
   dialog.OnKickIdle(0, 0);
   assert(list.loads==2 && list.rows[0].selected);
-  cout << "Same-ID replacement refreshes metadata and sort order; selected edits use live IDs\n" << flush;
+  cout << "Same-ID replacement refreshes metadata and sort order; stale selected edits are rejected\n" << flush;
 
   auto different=make_unique<CPlugin>(*replacement);
   different->m_strID="C"; ++different->m_iPluginInstanceNumber; different->m_dVersion=3;
@@ -172,10 +187,39 @@ int main() {
   assert(list.loads==4 && dialog.GetPluginForItem(0)==different.get());
   list.rows.pop_back(); dialog.OnKickIdle(0, 0);
   assert(list.loads==5 && list.GetItemCount()==2);
+  assert(dialog.GetPluginForIndex(-1)==nullptr);
+  assert(dialog.GetPluginForIndex(dialog.m_PluginIDs.GetSize())==nullptr);
+  dialog.m_PluginInstanceNumbers.pop_back();
+  assert(dialog.GetPluginForIndex(1)==nullptr);
+  dialog.OnKickIdle(0, 0);
+  assert(list.loads==6 && dialog.GetPluginForIndex(1)==different.get());
+  cout << "Missing instance metadata rejects lookup and is rebuilt at idle\n";
+
+  // The first selected plugin's callback replaces the second selected plugin.
+  // This occurs inside one command handler, without an intervening idle refresh.
+  CPlugin first; first.m_strID="first"; first.m_strName="Alpha"; first.m_bEnabled=false;
+  auto second=make_unique<CPlugin>(); second->m_strID="second";
+  second->m_strName="Zulu"; second->m_bEnabled=false;
+  auto next=make_unique<CPlugin>(*second); ++next->m_iPluginInstanceNumber;
+  doc.m_PluginList={&first,second.get()}; dialog.LoadList();
+  list.rows[0].selected=list.rows[1].selected=true;
+  int calls=0;
+  doc.onEnable=[&](CPlugin* plugin) {
+    ++calls; assert(plugin==&first);
+    doc.m_PluginList[1]=next.get(); second.reset();
+  };
+  dialog.OnEnable();
+  assert(calls==1 && first.m_bEnabled && !next->m_bEnabled);
+  assert(dialog.GetPluginForItem(1)==next.get());
+  doc.onEnable=nullptr;
+  list.rows[1].selected=true; dialog.OnEnable();
+  assert(next->m_bEnabled); // A fresh selection still acts on the new instance.
+  cout << "Enable callback replacement cannot retarget another selected row\n";
+  const int loadsBeforeClosing=list.loads;
   ++doc.m_iUniqueDocumentNumber;
   assert(dialog.GetPluginForItem(0)==nullptr);
   dialog.OnKickIdle(0, 0);
-  assert(dialog.closed && list.loads==5);
+  assert(dialog.closed && list.loads==loadsBeforeClosing);
   cout << "Invalid row data, row count, and document identity retain their checks\n";
 }
 '''
@@ -195,7 +239,8 @@ def run(args, output):
         'static int CALLBACK CompareFunc', 'CMUSHclientDoc * CPluginsDlg::GetLiveDocument',
         'CString CPluginsDlg::GetPluginIDForIndex', 'CPlugin * CPluginsDlg::GetPluginForIndex',
         'CPlugin * CPluginsDlg::GetPluginForItem', 'void CPluginsDlg::LoadList',
-        'LRESULT CPluginsDlg::OnKickIdle', 'void CPluginsDlg::OnEdit()')]
+        'LRESULT CPluginsDlg::OnKickIdle', 'void CPluginsDlg::OnEdit()',
+        'void CPluginsDlg::OnEnable()')]
     program = FIXTURE.replace('// PRODUCTION COLUMNS', block(header, '  enum ') + ';')
     program = program.replace('// PRODUCTION ROW MEMBERS', members)
     program = program.replace('// PRODUCTION METHODS', '\n'.join(methods))

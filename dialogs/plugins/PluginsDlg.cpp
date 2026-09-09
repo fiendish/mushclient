@@ -217,7 +217,15 @@ CPlugin * CPluginsDlg::GetPluginForIndex (const int iIndex) const
   CString strPluginID = GetPluginIDForIndex (iIndex);
   if (!pDoc || strPluginID.IsEmpty ())
     return NULL;
-  return pDoc->GetPlugin (strPluginID);
+  if (iIndex < 0 || iIndex >= m_PluginInstanceNumbers.GetSize ())
+    return NULL;
+
+  // A row refers to the instance that supplied its displayed metadata.
+  CPlugin * pPlugin = pDoc->GetPlugin (strPluginID);
+  if (!pPlugin ||
+      pPlugin->m_iPluginInstanceNumber != m_PluginInstanceNumbers [iIndex])
+    return NULL;
+  return pPlugin;
   }
 
 CPlugin * CPluginsDlg::GetPluginForItem (const int nItem) const
