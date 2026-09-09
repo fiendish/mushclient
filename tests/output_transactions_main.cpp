@@ -157,4 +157,62 @@ static void ownerCases() {
  }
  cout<<"Complete transaction ownership, nested commit/rollback, moved/split styles, callbacks, pruning, and failures passed\n";
 }
-int main(){performanceCases();ownerCases();unseenLineCases();}
+static void restorationCases() {
+ // A partial-line callback can shrink the old line before wrap publication.
+ for(bool failCallback:{false,true}) {
+  CMUSHclientDoc d;
+  const string before=string(72,'A')+" "+string(7,'B');
+  assert(d.AddToLine(before.c_str(),0));
+  auto old=d.m_pCurrentLine;
+  COutputAppendTransaction tx(&d,1);tx.MarkCurrentLineStyles();tx.PrepareAppendStyle();
+  bool called=false;
+  d.callback=[&]{if(called)return;called=true;
+   d.m_nWrapColumn=20;old->ResizeText(old->len);
+   if(failCallback){fail_text_resize=true;throw 37;}};
+  bool caught=false;
+  try {assert(d.AddToLineInternal("Z",0,&tx));}
+  catch(int error){assert(error==37);caught=true;}
+  assert(called && caught==failCallback);
+  // Rollback must also work when another resize allocation cannot succeed.
+  fail_text_resize=true;tx.Rollback();fail_text_resize=false;
+  assert(txText(d)==before && d.m_pCurrentLine==old);txCheck(d);
+ }
+ // Restore a nontransactional append before rethrowing the original callback error.
+ {
+  CMUSHclientDoc d;const string before=string(72,'A')+" "+string(7,'B');
+  assert(d.AddToLine(before.c_str(),0));
+  d.callback=[&]{d.m_pCurrentLine->ResizeText(d.m_pCurrentLine->len);
+   fail_text_resize=true;throw 41;};
+  bool caught=false;
+  try{d.AddToLine("Z",0);}catch(int error){assert(error==41);caught=true;}
+  fail_text_resize=false;assert(caught && txText(d)==before);txCheck(d);
+ }
+ // The callback can make the continuation narrower than the saved word.
+ for(bool failContinuation:{false,true}) {
+  CMUSHclientDoc d;const string before=string(20,'A')+" "+string(59,'B');
+  assert(d.AddToLine(before.c_str(),0));
+  COutputAppendTransaction tx(&d,1);tx.MarkCurrentLineStyles();tx.PrepareAppendStyle();
+  bool called=false;
+  d.callback=[&]{if(called)return;called=true;d.m_nWrapColumn=20;
+   d.m_pCurrentLine->ResizeText(d.m_pCurrentLine->len);
+   fail_text_resize=failContinuation;};
+  bool caught=false;
+  try{assert(d.AddToLineInternal("Z",0,&tx));}
+  catch(CMemoryException* error){caught=true;error->Delete();}
+  assert(caught==failContinuation);txCheck(d);
+  tx.Rollback();fail_text_resize=false;assert(txText(d)==before);txCheck(d);
+ }
+ // Allocation cleanup can delete every buffered line at exactly JUMP_SIZE.
+ for(int count:{JUMP_SIZE-1,JUMP_SIZE,JUMP_SIZE+1}) {
+  CMUSHclientDoc d;history(d,count);fail_next_line=true;
+  assert(!d.FinishNewLine(0,true,nullptr));
+  assert(d.disconnects==1);
+  assert(d.m_pCurrentLine==(d.m_LineList.IsEmpty()?nullptr:d.m_LineList.GetTail()));
+  if(d.m_pCurrentLine)assert(d.AddToLine("after failure",0));
+  else {assert(!d.AddToLine("after failure",0));assert(d.StartNewLine(false,0));
+   assert(d.AddToLine("after recovery",0));}
+  txCheck(d);
+ }
+ cout<<"Shrunk-buffer restoration, original exceptions, narrow continuation, and empty-buffer allocation cleanup passed\n";
+}
+int main(){performanceCases();ownerCases();unseenLineCases();restorationCases();}

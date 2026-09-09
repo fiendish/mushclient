@@ -1941,9 +1941,11 @@ size_t COutputAppendTransaction::PrepareWrap (
 
 void COutputAppendTransaction::PublishWrap (
   const size_t iWrap,
-  const __int64 iNewLineCreationNumber)
+  const __int64 iNewLineCreationNumber,
+  std::unique_ptr<COutputLineBuffer> pTextBuffer)
   {
   ASSERT (iWrap < m_Wraps.size ());
+  m_Wraps [iWrap].pTextBuffer = std::move (pTextBuffer);
   m_Wraps [iWrap].iNewLineCreationNumber = iNewLineCreationNumber;
   m_Wraps [iWrap].bPublished = true;
   }
@@ -1958,6 +1960,8 @@ void COutputAppendTransaction::RestoreWrap (const CWrapMove & wrap)
   if (!pPreviousLine || !pNewLine ||
       pPreviousLine->len != wrap.iSplitLength)
     return;
+
+  wrap.pTextBuffer->RestoreCapacity (pPreviousLine);
 
   const __int64 iPreservedOwner = -m_iAppendCreationNumber;
   int iSourceOffset = 0;
@@ -2365,6 +2369,27 @@ Unicode range              UTF-8 bytes
             m_pCurrentLine->nCreationNumber;
           const size_t iPreparedWrap = iAppendCreationNumber ?
             pTransaction->PrepareWrap (m_pCurrentLine, last_space) : 0;
+          std::unique_ptr<COutputLineBuffer> pTextBuffer
+            (new COutputLineBuffer (iOldLineLength));
+          const auto RestoreShortenedLine = [&] ()
+            {
+            for (POSITION linepos = m_LineList.GetTailPosition (); linepos; )
+              {
+              CLine * pLine = m_LineList.GetPrev (linepos);
+              if (pLine->nCreationNumber == iPreviousLineCreationNumber)
+                {
+                if (pLine->len == last_space)
+                  {
+                  pTextBuffer->RestoreCapacity (pLine);
+                  memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
+                  pLine->len = iOldLineLength;
+                  }
+                break;
+                }
+              if (pLine->nCreationNumber < iPreviousLineCreationNumber)
+                break;
+              }
+            };
           m_pCurrentLine->len = last_space;
 
           bool bStartedNewLine = false;
@@ -2377,39 +2402,13 @@ Unicode range              UTF-8 bytes
             }
           catch (...)
             {
-            for (POSITION linepos = m_LineList.GetHeadPosition (); linepos; )
-              {
-              CLine * pLine = m_LineList.GetNext (linepos);
-              if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
-                  pLine->len == last_space)
-                {
-                // The callback may have shrunk the temporarily shortened line.
-                if (pLine->iMemoryAllocated < iOldLineLength)
-                  pLine->ResizeText (iOldLineLength);
-                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
-                pLine->len = iOldLineLength;
-                break;
-                }
-              }
+            RestoreShortenedLine ();
             throw;
             }
 
           if (!bStartedNewLine)
             {
-            for (POSITION linepos = m_LineList.GetHeadPosition (); linepos; )
-              {
-              CLine * pLine = m_LineList.GetNext (linepos);
-              if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
-                  pLine->len == last_space)
-                {
-                // The callback may have shrunk the temporarily shortened line.
-                if (pLine->iMemoryAllocated < iOldLineLength)
-                  pLine->ResizeText (iOldLineLength);
-                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
-                pLine->len = iOldLineLength;
-                break;
-                }
-            }
+            RestoreShortenedLine ();
             return false;
             }
 
@@ -2417,20 +2416,7 @@ Unicode range              UTF-8 bytes
             {
             // The callback supplied the continuation line. Keep the complete
             // old line and append the pending character to callback state.
-            for (POSITION linepos = m_LineList.GetHeadPosition (); linepos; )
-              {
-              CLine * pLine = m_LineList.GetNext (linepos);
-              if (pLine->nCreationNumber == iPreviousLineCreationNumber &&
-                  pLine->len == last_space)
-                {
-                // The callback may have shrunk the temporarily shortened line.
-                if (pLine->iMemoryAllocated < iOldLineLength)
-                  pLine->ResizeText (iOldLineLength);
-                memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
-                pLine->len = iOldLineLength;
-                break;
-                }
-              }
+            RestoreShortenedLine ();
             bFinishTransition = true;
             goto retry_character;
             }
@@ -2438,8 +2424,6 @@ Unicode range              UTF-8 bytes
           if (iAppendCreationNumber)
             {
             pTransaction->RecordCreatedLine ();
-            pTransaction->PublishWrap (
-              iPreparedWrap, m_pCurrentLine->nCreationNumber);
             }
 
           CLine * pPreviousLine = NULL;
@@ -2482,6 +2466,9 @@ Unicode range              UTF-8 bytes
           int iPublishedStyles = 0;
           try
             {
+            // A callback can reduce the wrap width before this line exists.
+            if (m_pCurrentLine->iMemoryAllocated <= saved_count)
+              m_pCurrentLine->ResizeText (saved_count + 1);
             pos = firstMovedPosition;
             for (int i = 0; i < iCount; i++)
               {
@@ -2512,7 +2499,7 @@ Unicode range              UTF-8 bytes
             while (iPublishedStyles-- > 0)
               DELETESTYLE (m_pCurrentLine->styleList.RemoveTail ());
 
-            pPreviousLine->len = iOldLineLength;
+            RestoreShortenedLine ();
             CLine * pFailedLine = m_pCurrentLine;
             const int iFailedLineCount = m_LineList.GetCount ();
             if (iFailedLineCount % JUMP_SIZE == 1)
@@ -2581,6 +2568,10 @@ Unicode range              UTF-8 bytes
                 }
               }
             }
+          if (iAppendCreationNumber)
+            pTransaction->PublishWrap (
+              iPreparedWrap, m_pCurrentLine->nCreationNumber,
+              std::move (pTextBuffer));
           }  // end of having something to move to the next line
         else  
           {   // saved_count == 0
@@ -3473,6 +3464,8 @@ POSITION pos;
 
     if (m_LineList.GetCount () >= JUMP_SIZE)
       RemoveChunk ();   // get rid of JUMP_SIZE lines
+    m_pCurrentLine = m_LineList.IsEmpty () ?
+      NULL : m_LineList.GetTail ();
     OnConnectionDisconnect ();    // close the world
     TMessageBox ("Ran out of memory. The world has been closed.");
 

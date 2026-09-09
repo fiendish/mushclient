@@ -826,11 +826,14 @@ assemble the full text of the original line.
     list<CPaneStyle> stagedOutstandingLines;
     int iRecentLinesToRemove = 0;
     CLine * pSurvivingCurrentLine = NULL;
+    const int iOldLineCount = m_LineList.GetCount ();
+    int iFirstAffectedLine = iOldLineCount;
     POSITION scan = m_LineList.GetTailPosition ();
     while (scan)
       {
       POSITION current = scan;
       CLine * pLine = m_LineList.GetPrev (scan);
+      --iFirstAffectedLine;
       if (!paragraphLengths.count (pLine->nCreationNumber))
         {
         // Later callback output keeps its text, styles, actions, and identity.
@@ -918,10 +921,21 @@ assemble the full text of the original line.
       m_total_lines++;
       }
 
-    for (int i = 0; i <= m_maxlines / JUMP_SIZE; i++)
+    // Earlier lines keep their numbers and jump positions. Clear only entries
+    // whose old line is at or after the first deletion, including removed tails.
+    for (int i = (iFirstAffectedLine + JUMP_SIZE - 1) / JUMP_SIZE;
+         i <= (iOldLineCount - 1) / JUMP_SIZE; i++)
       m_pLinePositions [i] = NULL;
-    int iLine = 0;
-    for (pos = m_LineList.GetHeadPosition (); pos; iLine++)
+
+    // scan is the surviving position immediately before the first deletion.
+    // Do not use the old jump index to locate a line after removing its nodes.
+    pos = scan;
+    if (pos)
+      m_LineList.GetNext (pos);
+    else
+      pos = m_LineList.GetHeadPosition ();
+    int iLine = iFirstAffectedLine;
+    for (; pos; iLine++)
       {
       POSITION current = pos;
       CLine * pLine = m_LineList.GetNext (pos);

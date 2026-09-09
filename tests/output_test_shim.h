@@ -86,7 +86,7 @@ CString FixHTMLString(CString s){s.Replace("&","&amp;");s.Replace("<","&lt;");s.
 CString FormatTime(int,const CString&s,bool){return s;}
 struct CPaneStyle {string m_sText;COLORREF m_cText,m_cBack;int m_iStyle;
  CPaneStyle(const char*s,COLORREF a,COLORREF b,int f):m_sText(s),m_cText(a),m_cBack(b),m_iStyle(f){}};
-long long seq=0; bool fail_next_line=false;
+long long seq=0; bool fail_next_line=false; bool fail_text_resize=false;
 struct CAction {int refs=1;void AddRef(){++refs;} void Release(){if(!--refs)delete this;}};
 struct CStyle {unsigned short iFlags=0,iLength=0;COLORREF iForeColour=7,iBackColour=0;CAction*pAction=nullptr;long long nCreationNumber=++seq,nRangeCreationNumber=nCreationNumber,nOutputAppendCreationNumber=0;~CStyle(){if(pAction)pAction->Release();}};
 #define NEWSTYLE new CStyle
@@ -97,10 +97,11 @@ int MultiByteToWideChar(int,int,char* p,int n,void*,int){int count=0;for(int i=0
 struct CLine {bool hard_return=false;int len=0,iMemoryAllocated,m_nLineNumber,m_theTime=0,m_lineHighPerformanceTime=0;long long nCreationNumber=++seq;char*text;unsigned char flags=0;List<CStyle*>styleList;
  CLine(int number,int wrap,unsigned short f,COLORREF a,COLORREF b,bool utf){m_nLineNumber=number;if(fail_next_line){fail_next_line=false;throw new CMemoryException;}iMemoryAllocated=wrap*(utf?4:1);text=new char[iMemoryAllocated];auto s=new CStyle;s->iFlags=f;s->iForeColour=a;s->iBackColour=b;styleList.AddTail(s);}
  ~CLine(){delete[]text;while(!styleList.IsEmpty())delete styleList.RemoveHead();}
- void ResizeText(int n){assert(n>=len);auto p=new char[n];memcpy(p,text,len);delete[]text;text=p;iMemoryAllocated=n;}
+ void ResizeText(int n){assert(n>=len);if(fail_text_resize)throw new CMemoryException;auto p=new char[n];memcpy(p,text,len);delete[]text;text=p;iMemoryAllocated=n;}
 };
 struct CActiveTag{long long nOpeningStyleCreationNumber=0,nOpeningLineCreationNumber=0;};
-struct COutputAppendTransaction {int created=0,wraps=0;long long Identity(){return 4242;}void TrackLine(const CLine*){}void RecordCreatedLine(){++created;}size_t PrepareWrap(CLine*,int){return 0;}void PublishWrap(size_t,long long){++wraps;}};
+class COutputLineBuffer;
+struct COutputAppendTransaction {int created=0,wraps=0;long long Identity(){return 4242;}void TrackLine(const CLine*){}void RecordCreatedLine(){++created;}size_t PrepareWrap(CLine*,int){return 0;}void PublishWrap(size_t,long long,std::unique_ptr<COutputLineBuffer>){++wraps;}};
 struct CView {bool IsKindOf(int){return false;}};struct CMUSHView:CView {void did_jump(){}};
 struct AppType {bool m_bUpdateActivity=false;} App;
 void TMessageBox(const char*s){cerr<<s<<'\n';}

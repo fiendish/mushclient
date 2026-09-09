@@ -108,7 +108,11 @@ struct CMUSHclientDoc {
   CElement element;
   struct Map {
     CElement *element;
-    bool Lookup(const CString &, CElement *&result) { result = element; return result != nullptr; }
+    CString name = "custom";
+    bool Lookup(const CString &key, CElement *&result) {
+      if (key != name) return false;
+      result = element; return result != nullptr;
+    }
   } m_CustomElementMap{&element};
   vector<string> events;
   vector<long> warnings;
@@ -117,7 +121,7 @@ struct CMUSHclientDoc {
   function<void()> finishHook;
   string prepareFailure, reject, finishFailure;
   bool warningFailure = false, formatFailure = false;
-  int buildMode = 0;
+  int buildMode = 0, buildCalls = 0;
   CMUSHclientDoc() {
     formatHook = [this] {
       events.push_back("format");
@@ -153,6 +157,7 @@ struct CMUSHclientDoc {
     if (warningFailure) throw runtime_error("warning failure");
   }
   bool BuildArgumentList(CArgumentList &list, const CString &) {
+    ++buildCalls;
     list.AddTail(new CArgument(1)); list.AddTail(new CArgument(2));
     if (buildMode == 2) throw runtime_error("build failure");
     return buildMode == 1;
@@ -239,6 +244,22 @@ void discardChecks() {
   cout << "PASS discard predicates, missing or reused markers and action ownership\n";
 }
 void attlistChecks() {
+  for (bool format : {false, true}) for (bool warning : {false, true}) {
+    {
+      CMUSHclientDoc d;
+      auto old = new CArgument(0); d.element.AttributeList.AddTail(old);
+      d.formatFailure = format; d.warningFailure = warning;
+      string error;
+      try { d.MXP_Attlist("Unknown", "a=1 b=2"); } catch (const runtime_error &e) { error = e.what(); }
+      assert(error == (format ? "format failure" : warning ? "warning failure" : ""));
+      assert(d.buildCalls == 0 && argumentsAlive == 1);
+      assert(d.element.AttributeList.GetHead() == old && d.element.AttributeList.GetTail() == old);
+      assert((d.events == (format ? vector<string>{"format"} : vector<string>{"format", "warning"})));
+      assert((d.warnings == (format ? vector<long>{} : vector<long>{errMXP_UnknownElementInAttlist})));
+      if (!format) assert(d.messages.front() == "Cannot add attributes to undefined MXP element: <unknown>");
+    }
+    assert(argumentsAlive == 0);
+  }
   for (int build : {0,1,2}) for (int failAt : {0,1,2}) {
     CMUSHclientDoc d;
     auto old = new CArgument(0); d.element.AttributeList.AddTail(old);
@@ -250,11 +271,12 @@ void attlistChecks() {
     for (POSITION p = d.element.AttributeList.GetHeadPosition(); p;) values.push_back(d.element.AttributeList.GetNext(p)->value);
     vector<int> expected{0};
     if (!build) for (int n = 1; n <= 2 && (!failAt || n < failAt); ++n) expected.push_back(n);
+    assert(d.buildCalls == 1);
     assert(values == expected && d.element.AttributeList.GetHead() == old);
     assert(argumentsAlive == static_cast<int>(values.size()));
   }
   assert(argumentsAlive == 0);
-  cout << "PASS attribute ownership, parse rejection, build exceptions and each insertion failure\n";
+  cout << "PASS undefined elements, diagnostic failures, attribute ownership, parse rejection, build exceptions and each insertion failure\n";
 }
 int main(int argc, char **argv) {
   string check = argc > 1 ? argv[1] : "all";

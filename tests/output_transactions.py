@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
-from output_callbacks import section, replace_once
+from output_callbacks import line_buffer_header, section, replace_once
 
 
 def run(source, output, revision):
@@ -42,18 +42,18 @@ template<class T> struct List''')
     patch(' long long m_iOutputGeneration=0;',
                         ' int m_iListMode=0,m_iListCount=0;long long m_iMXPListOwner=0;\n long long m_iOutputGeneration=0;')
     declaration = section(header, 'class COutputAppendTransaction\n',
-                          '/////////////////////////////////////////////////////////////////////////////\n\nclass CAliasExecutionGuard')
+                          '/////////////////////////////////////////////////////////////////////////////\n\nclass CAliasExecutionGuard', 'doc.h')
     body = '\n'.join([
         section(doc, 'bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle',
-                '// called when starting a new line to get colours right'),
+                '// called when starting a new line to get colours right', 'doc.cpp'),
         section(doc, 'bool CMUSHclientDoc::StartNewLine (',
-                'const bool CMUSHclientDoc::CheckScriptingAvailable'),
+                'const bool CMUSHclientDoc::CheckScriptingAvailable', 'doc.cpp'),
         section(doc, ' void CMUSHclientDoc::RemoveChunk (void)',
-                'void CMUSHclientDoc::ShowStatusLine'),
+                'void CMUSHclientDoc::ShowStatusLine', 'doc.cpp'),
     ])
     main = (Path(__file__).parent / 'output_transactions_main.cpp').read_text()
     cpp = output / 'output_transactions.cpp'
-    cpp.write_text(('#define EXPECT_HISTORY_SCAN\n' if revision else '') + shim + declaration + body + main)
+    cpp.write_text(('#define EXPECT_HISTORY_SCAN\n' if revision else '') + shim + line_buffer_header(source, revision) + declaration + body + main)
     binary = output / 'output_transactions'
     subprocess.run(['clang++', '-std=c++17', '-fsanitize=address,undefined',
                     '-fno-sanitize-recover=all', '-g', '-O1', str(cpp), '-o', str(binary)], check=True)

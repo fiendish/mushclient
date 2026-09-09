@@ -10,6 +10,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from output_callbacks import line_buffer_header, replace_once
+
 
 def block(text, start):
     begin = text.index(start)
@@ -27,17 +29,23 @@ def section(text, start, end):
     return text[begin:text.index(end, begin)]
 
 
-def utf8_program(read):
+def utf8_program(read, line_buffer):
     source = read('scriptingoptions.cpp')
     doc = read('doc.cpp')
-    shim = read('tests/output_test_shim.h')
+    shim_path = 'tests/output_test_shim.h'
+    shim = read(shim_path)
+
+    def patch(expected, replacement):
+        nonlocal shim
+        shim = replace_once(shim, expected, replacement, shim_path)
+
     # Use the actual option field size and the Windows MAX macro semantics.
-    shim = shim.replace('#define MAX std::max', '#define MAX(a,b) ((a)>(b)?(a):(b))')
-    shim = shim.replace('bool m_bUTF_8=false,m_wrap=true,',
-                        'unsigned short m_bUTF_8=false;bool m_wrap=true,')
+    patch('#define MAX std::max', '#define MAX(a,b) ((a)>(b)?(a):(b))')
+    patch('bool m_bUTF_8=false,m_wrap=true,',
+          'unsigned short m_bUTF_8=false;bool m_wrap=true,')
     resize = block(shim, ' void ResizeText(int n)')
-    shim = shim.replace(resize, ' void ResizeText(int);')
-    shim = shim.replace('struct CMUSHView:CView {', '''
+    patch(resize, ' void ResizeText(int);')
+    patch('struct CMUSHView:CView {', '''
 struct CMUSHView:CView {
  struct {bool m_hWnd=false;void SendMessage(int,int,int){assert(false);}} m_ToolTip;
 ''')
@@ -60,7 +68,7 @@ struct CMUSHView:CView {
  void UpdateAllViews(void*){assert(false);}
  long SetOptionItem(int,long,bool,bool);
 '''
-    shim = shim.replace(' struct CTriggerLineSnapshot', declarations + '\n struct CTriggerLineSnapshot')
+    patch(' struct CTriggerLineSnapshot', declarations + '\n struct CTriggerLineSnapshot')
     header = read('doc.h')
     flags = section(header, '#define OPT_CUSTOM_COLOUR', '// for debug.options')
     options = r'''
@@ -145,7 +153,7 @@ int main() {
  cout<<"UTF-8: 2/3/4-byte boundary appends, allocation failure/retry, option validation, disable/repeat, missing line, existing capacity, and wrap change passed\n";
 }
 '''
-    return shim + flags + options + resize + body + main
+    return shim + flags + options + line_buffer + resize + body + main
 
 
 def plugin_program(read):
@@ -264,7 +272,8 @@ def run(args, output):
         if args.case and args.case != name:
             continue
         cpp = output / (name + '.cpp')
-        cpp.write_text(make(read))
+        program = make(read, line_buffer_header(args.source, args.baseline_ref, memory_exception_defined=True)) if name == 'utf8' else make(read)
+        cpp.write_text(program)
         command = ['clang++', '-std=c++17', '-fsanitize=address,undefined',
                    '-fno-sanitize-recover=all', '-g', '-O1',
                    str(cpp), '-o', str(output / name)]

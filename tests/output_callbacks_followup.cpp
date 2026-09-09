@@ -1,3 +1,4 @@
+#include <chrono>
 // The ASCII fixture retains DisplayMsg's newline and final partial-line delivery.
 // Packet transformations, MXP, and unrelated triggers are disabled in these tests.
 static void simulateASCII(CMUSHclientDoc& d,const string& input) {
@@ -140,6 +141,7 @@ static void omissionCases() {
  // The previous unterminated note remains the continuation, as before.
  {
   CMUSHclientDoc d;assert(d.AddToLine("note",COMMENT));auto note=d.m_pCurrentLine;note->flags=COMMENT;
+  d.m_pLinePositions[0]=d.m_LineList.GetHeadPosition();
   assert(d.StartNewLine(false,0));assert(d.AddToLine("matched",0));auto original=d.m_pCurrentLine;
   auto first=d.m_LineList.GetTailPosition();auto saved=snapshot({original});original->hard_return=true;
   d.m_OutstandingLines.push_back(CPaneStyle(" deferred",13,0,HILITE));
@@ -154,6 +156,90 @@ static void omissionCases() {
   assert(d.replayedText=="note\r\n");checkPositions(d);
  }
  cout<<"Omission: 24 callback/pruning cases, current lines, positions, history, failures, and deferred replay passed\n";
+}
+static void omissionTailContinuationCases() {
+ for(int kind:{0,COMMENT,USER_INPUT})for(bool ended:{false,true}) {
+  CMUSHclientDoc d;assert(d.AddToLine("matched",0));
+  auto original=d.m_pCurrentLine;auto first=d.m_LineList.GetTailPosition();
+  auto saved=snapshot({original});original->hard_return=true;
+  assert(d.StartNewLine(false,kind));assert(d.AddToLine("callback",kind));
+  auto callback=d.m_pCurrentLine;
+  // Use the production line transition to complete callback output.
+  if(ended)assert(d.StartNewLine(true,kind));
+  auto continuation=d.m_pCurrentLine;
+  assert(!continuation->hard_return);
+  d.Finalize(saved,d.m_iOutputGeneration,first,true,true,"matched");
+  assert(d.m_pCurrentLine==continuation && continuation==d.m_LineList.GetTail());
+  assert(d.AddToLine(" next",kind));
+  assert(text(callback)==(ended?"callback":"callback next"));
+  assert(text(continuation)==(ended?" next":"callback next"));
+  assert(callback->hard_return==ended && !continuation->hard_return);
+  checkPositions(d);
+ }
+ cout<<"Omission continuation: output, note, and command callbacks with production line transitions passed\n";
+}
+// Build indexed history without running unrelated trigger callbacks.
+static void seedOmissionHistory(CMUSHclientDoc& d,int count) {
+ d.m_pCurrentLine->flags=COMMENT;
+ d.m_pLinePositions[0]=d.m_LineList.GetHeadPosition();
+ while(d.m_LineList.GetCount()<count)assert(d.StartNewLine(false,COMMENT));
+}
+static void omissionIndexBoundaryCases() {
+ for(int prefix:{0,1,98,99,100,101,198,199,200,249})
+  for(int omitted:{1,2,101})for(int later:{0,1,2,101}) {
+   CMUSHclientDoc d;seedOmissionHistory(d,prefix+1);
+   auto first=d.m_LineList.GetTailPosition();d.m_pCurrentLine->flags=0;
+   vector<CLine*> originals={d.m_pCurrentLine};
+   for(int i=1;i<omitted;++i) {
+    assert(d.StartNewLine(false,0));originals.push_back(d.m_pCurrentLine);
+   }
+   auto saved=snapshot(originals);d.m_pCurrentLine->hard_return=true;
+   vector<CLine*> callbacks;
+   for(int i=0;i<later;++i) {
+    assert(d.StartNewLine(false,COMMENT));assert(d.AddToLine("callback",COMMENT));
+    callbacks.push_back(d.m_pCurrentLine);
+   }
+   auto before=lines(d);vector<POSITION> prefixPositions;
+   for(int i=0;i*JUMP_SIZE<prefix;++i)prefixPositions.push_back(d.m_pLinePositions[i]);
+   auto oldTotal=d.m_total_lines;
+   d.Finalize(saved,d.m_iOutputGeneration,first,true,true,"");
+   auto after=lines(d);
+   // The old partial note remains current only when there is no later output.
+   const bool reuseNote=prefix>0 && later==0;
+   assert(d.m_LineList.GetCount()==prefix+later+(!reuseNote && later==0?1:0));
+   assert(d.m_total_lines==oldTotal-omitted+(!reuseNote && later==0?1:0));
+   for(int i=0;i<prefix;++i)assert(after[i]==before[i]);
+   for(size_t i=0;i<prefixPositions.size();++i)assert(d.m_pLinePositions[i]==prefixPositions[i]);
+   for(int i=0;i<later;++i)assert(after[prefix+i]==callbacks[i] && text(callbacks[i])=="callback");
+   checkPositions(d);
+  }
+ cout<<"Omission index boundaries: 120 prefix, paragraph, and callback suffix cases passed\n";
+}
+static void omissionBufferScalingCases() {
+ for(int history:{1000,100000}) {
+  CMUSHclientDoc d;d.m_maxlines=200000;seedOmissionHistory(d,history+1);
+  d.m_pCurrentLine->flags=0;
+  // Close the history so each omission supplies an empty output continuation.
+  auto previous=d.m_LineList.GetTailPosition();d.m_LineList.GetPrev(previous);
+  d.m_LineList.GetAt(previous)->hard_return=true;
+  size_t reads=0;constexpr int repetitions=256;
+  const auto start=chrono::steady_clock::now();
+  for(int i=0;i<repetitions;++i) {
+   assert(d.AddToLine("omitted",0));auto original=d.m_pCurrentLine;
+   auto saved=snapshot({original});original->hard_return=true;
+   auto first=d.m_LineList.GetTailPosition();
+   listReadCount=0;
+   d.Finalize(saved,d.m_iOutputGeneration,first,true,true,"omitted");
+   reads+=listReadCount;
+   assert(d.m_pCurrentLine!=original && !d.m_pCurrentLine->hard_return);
+   assert(d.m_pCurrentLine->len==0 && d.m_LineList.GetCount()==history+1);
+  }
+  auto elapsed=chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now()-start).count();
+  cout<<"Omission buffer scaling: history="<<history<<", repetitions="<<repetitions
+      <<", list reads="<<reads<<", microseconds="<<elapsed<<endl;
+  assert(reads<=static_cast<size_t>(repetitions)*4);
+  checkPositions(d);
+ }
 }
 static void loggingCases() {
  for(int mode:{0,1,2}) {
@@ -207,5 +293,7 @@ static void loggingBoundaryCases() {
  cout<<"Colour logging stops at the captured paragraph boundary\n";
 }
 static void followupCases() {
- callbackProgressCases();matchingCases();omissionCases();loggingCases();loggingBoundaryCases();
+ callbackProgressCases();matchingCases();omissionCases();omissionTailContinuationCases();
+ omissionIndexBoundaryCases();
+ omissionBufferScalingCases();loggingCases();loggingBoundaryCases();
 }

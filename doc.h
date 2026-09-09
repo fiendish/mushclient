@@ -15,6 +15,7 @@
 #include "miniwindow.h"
 #include "plugins.h"
 #include "version.h"
+#include "output_line_buffer.h"
 
 #define COMPRESS_BUFFER_LENGTH 10000   // size of decompression buffer
 extern CString MUSHCLIENT_VERSION;
@@ -2978,7 +2979,8 @@ class COutputAppendTransaction
     void SetListCount (const int iListCount);
     size_t PrepareWrap (CLine * pPreviousLine, const int iSplitLength);
     void PublishWrap (const size_t iWrap,
-                      const __int64 iNewLineCreationNumber);
+                      const __int64 iNewLineCreationNumber,
+                      std::unique_ptr<COutputLineBuffer> pTextBuffer);
     void Commit ();
     void Rollback ();
 
@@ -3010,6 +3012,7 @@ class COutputAppendTransaction
       __int64 iNewLineCreationNumber;
       int iSplitLength;
       vector<CWrapStyleBackup> styleBackups;
+      std::unique_ptr<COutputLineBuffer> pTextBuffer;
       bool bPublished;
       };
 

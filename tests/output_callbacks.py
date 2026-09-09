@@ -10,9 +10,14 @@ import subprocess
 import tempfile
 
 
-def section(source, start, end):
-    begin = source.index(start)
-    return source[begin:source.index(end, begin)]
+def section(source, start, end, context='section'):
+    begin = source.find(start)
+    if begin < 0:
+        raise ValueError(f'{context}: start anchor not found: {start!r}')
+    finish = source.find(end, begin)
+    if finish < 0:
+        raise ValueError(f'{context}: end anchor not found: {end!r}')
+    return source[begin:finish]
 
 
 def replace_once(source, expected, replacement, context):
@@ -20,6 +25,23 @@ def replace_once(source, expected, replacement, context):
     if count != 1:
         raise ValueError(f'{context}: expected one occurrence of {expected!r}, found {count}')
     return source.replace(expected, replacement)
+
+
+def line_buffer_header(source_root, revision=None, *, memory_exception_defined=False):
+    path = 'output_line_buffer.h'
+    if revision:
+        names = subprocess.check_output(
+            ['git', '-C', str(source_root), 'ls-tree', '--name-only', revision, '--', path],
+            text=True).splitlines()
+        if not names:
+            return ''
+        contents = subprocess.check_output(
+            ['git', '-C', str(source_root), 'show', revision + ':' + path], text=True)
+    else:
+        contents = (source_root / path).read_text()
+    if not memory_exception_defined:
+        contents = 'void AfxThrowMemoryException(){throw new CMemoryException;}\n' + contents
+    return contents + '\n'
 
 
 def run(source_root, output, append_only):
@@ -30,33 +52,38 @@ def run(source_root, output, append_only):
     header = (source_root / 'doc.h').read_text()
     if not append_only:
         snapshot_type = section(header, '  struct CTriggerLineSnapshot',
-                                '  void ProcessOneTriggerSequence')
+                                '  void ProcessOneTriggerSequence', 'doc.h')
         shim = replace_once(shim, ' struct CTriggerLineSnapshot {long long iCreationNumber;int iColumn,iLength;};',
                             snapshot_type, shim_path)
     shim = replace_once(shim, 'template<class T> struct List',
                         'size_t listReadCount=0;\ntemplate<class T> struct List', shim_path)
     shim = replace_once(shim, 'T GetNext(POSITION& p)const{',
                         'T GetNext(POSITION& p)const{++listReadCount;', shim_path)
+    shim = replace_once(shim, 'T GetPrev(POSITION& p){',
+                        'T GetPrev(POSITION& p){++listReadCount;', shim_path)
+    shim = replace_once(shim, 'POSITION m_pLinePositions[11]={};',
+                        'vector<POSITION> positionStorage=vector<POSITION>(200000 / JUMP_SIZE + 1);'
+                        'POSITION* m_pLinePositions=positionStorage.data();', shim_path)
     body = '\n'.join([
         section(doc, 'bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle',
-                'COutputAppendTransaction::COutputAppendTransaction'),
+                'COutputAppendTransaction::COutputAppendTransaction', 'doc.cpp'),
         section(doc, 'bool CMUSHclientDoc::AddToLine (',
-                '// called when starting a new line to get colours right'),
+                '// called when starting a new line to get colours right', 'doc.cpp'),
         section(doc, 'bool CMUSHclientDoc::StartNewLine (',
-                'const bool CMUSHclientDoc::CheckScriptingAvailable'),
+                'const bool CMUSHclientDoc::CheckScriptingAvailable', 'doc.cpp'),
         section(doc, ' void CMUSHclientDoc::RemoveChunk (void)',
-                'void CMUSHclientDoc::ShowStatusLine'),
+                'void CMUSHclientDoc::ShowStatusLine', 'doc.cpp'),
     ])
     if not append_only:
         body += section(doc, 'bool CMUSHclientDoc::FindStyle (',
-                        '// find RGB equivalents for a particular style of text')
+                        '// find RGB equivalents for a particular style of text', 'doc.cpp')
         body += section(trigger, 'static vector<CLine *> ResolveTriggerLines (',
-                        '// here when a newline is reached')
+                        '// here when a newline is reached', 'ProcessPreviousLine.cpp')
         # Include the production generation refresh, colour predicate, and full
         # output style-splitting loop. Pane copies and regex dispatch are outside
         # this fixture; repeated match ranges are supplied by the test.
         colour = section(trigger, '      // Pruning can remove old lines',
-                         '          // cool new feature in version 4.43')
+                         '          // cool new feature in version 4.43', 'ProcessPreviousLine.cpp')
         body += r'''
 void CMUSHclientDoc::Colour(const vector<CTriggerLineSnapshot>& triggerLines,
  const CString& strCurrentLine,int iStartCol,int iEndCol,function<void()> send,
@@ -71,10 +98,10 @@ void CMUSHclientDoc::Colour(const vector<CTriggerLineSnapshot>& triggerLines,
 ''' + colour + '\n break;\n }\n }\n }\n'
     if not append_only:
         body += section(trigger, 'static inline unsigned short get_foreground',
-                        '// Resolve the original paragraph')
+                        '// Resolve the original paragraph', 'ProcessPreviousLine.cpp')
         # Compile the actual matching block, including its local POSITION scope.
         matching = section(trigger, '      if (trigger_item->iMatch && !trigger_item->bMultiLine)',
-                           '    // copy the wildcard contents to the clipboard')
+                           '    // copy the wildcard contents to the clipboard', 'ProcessPreviousLine.cpp')
         body += r'''
 bool CMUSHclientDoc::Match(const vector<CTriggerLineSnapshot>& triggerLines,
  const CString& strCurrentLine,int iStartCol,int condition,function<void()> send) {
@@ -84,7 +111,7 @@ bool CMUSHclientDoc::Match(const vector<CTriggerLineSnapshot>& triggerLines,
  auto iOutputGeneration=m_iOutputGeneration;
  send();
 ''' + section(trigger, '      if (iOutputGeneration != m_iOutputGeneration)',
-                '      if (trigger_item->iMatch && !trigger_item->bMultiLine)') + \
+                '      if (trigger_item->iMatch && !trigger_item->bMultiLine)', 'ProcessPreviousLine.cpp') + \
             '\nfor(int fixture=0;fixture<1;++fixture) {\n' + matching + \
             '\nreturn true;\n}\nreturn false;\n}\n'
         # Keep the full logging and omission paths. View invalidation is outside
@@ -96,15 +123,15 @@ void CMUSHclientDoc::Finalize(const vector<CTriggerLineSnapshot>& triggerLines,
  POSITION pos;
  m_bLineOmittedFromOutput=omit;
 ''' + section(trigger, '  // Keep the original identity boundary',
-                '// if we have changed the colour of this trigger') + \
+                '// if we have changed the colour of this trigger', 'ProcessPreviousLine.cpp') + \
             section(trigger, '  // logging wanted?',
-                    '  // display any stuff sent to output window') + '\n}\n'
+                    '  // display any stuff sent to output window', 'ProcessPreviousLine.cpp') + '\n}\n'
     main = (Path(__file__).parent / 'output_callbacks_main.cpp').read_text()
     if not append_only:
         main += (Path(__file__).parent / 'output_callbacks_followup.cpp').read_text()
     defines = '#define APPEND_ONLY\n' if append_only else ''
     cpp = output / 'output_callbacks.cpp'
-    cpp.write_text(defines + shim + body + main)
+    cpp.write_text(defines + shim + line_buffer_header(source_root) + body + main)
     binary = output / 'output_callbacks'
     subprocess.run(['clang++', '-std=c++17', '-fsanitize=address,undefined',
                     '-fno-sanitize-recover=all', '-g', '-O1', str(cpp),

@@ -26,11 +26,12 @@ def main():
 
     close = source('mxp/mxpClose.cpp')
     close_start = 'struct CTagToClose' if '\nstruct CTagToClose' in close else 'void CMUSHclientDoc::MXP_CloseOpenTags'
+    close_end = '// end of CMUSHclientDoc::MXP_CloseAllTags'
     discard = source('mxp/mxpOnOff.cpp')
     definitions = source('mxp/mxpDefs.cpp')
     guard_end = '  };' if '\nclass CElementArgumentListGuard' in definitions[:definitions.index('void CMUSHclientDoc::MXP_Definition')] else '  } argumentListGuard (ArgumentList);'
     pieces = {
-        'CLOSE': close[close.index(close_start):],
+        'CLOSE': between(close, close_start, close_end, 'mxp/mxpClose.cpp') + close_end + '\n',
         'DISCARD': between(discard, 'static CStyle * FindMXPStyle', 'static void RebaseMXPResetState', 'mxp/mxpOnOff.cpp'),
         'GUARD': between(definitions, 'class CElementArgumentListGuard', guard_end, 'mxp/mxpDefs.cpp') + '  };\n',
         'ATTLIST': between(definitions, 'void CMUSHclientDoc::MXP_Attlist', '// here for <!ENTITY', 'mxp/mxpDefs.cpp'),

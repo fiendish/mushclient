@@ -10,7 +10,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from output_callbacks import replace_once, section
+from output_callbacks import line_buffer_header, replace_once, section
 
 
 def run(source, output, revision):
@@ -62,7 +62,7 @@ def run(source, output, revision):
                     'void CMUSHclientDoc::Interpret256ANSIcode')
     fixture = Path(__file__).with_suffix('.cpp.in').read_text()
     cpp = output / 'wrap_callback_style.cpp'
-    cpp.write_text(defines + shim + body + fixture)
+    cpp.write_text(defines + shim + line_buffer_header(source, revision) + body + fixture)
     binary = output / 'wrap_callback_style'
     subprocess.run(['clang++', '-std=c++17', '-fsanitize=address,undefined',
                     '-fno-sanitize-recover=all', '-g', '-O1', str(cpp),

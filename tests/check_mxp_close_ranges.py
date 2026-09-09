@@ -120,9 +120,15 @@ cout<<"PASS close range capture, split/move, pruning, callback exclusion, staged
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path);p.add_argument('--baseline-ref');a=p.parse_args()
  out=a.output or Path(tempfile.mkdtemp(prefix='mxp-close-'));out.mkdir(parents=True,exist_ok=True)
- source=(subprocess.check_output(['git','show',a.baseline_ref+':mxp/mxpCloseAtomic.cpp'],cwd=ROOT,text=True) if a.baseline_ref else (ROOT/'mxp/mxpCloseAtomic.cpp').read_text())
- prepare=(ROOT/'mxp/mxpClose.cpp').read_text();header=(ROOT/'OtherTypes.h').read_text()
- assert 'iFirstContentLineCreationNumber (0)' in header and 'preparedClose = CPreparedMXPClose ();' in prepare
+ def read(path):
+  if a.baseline_ref:
+   return subprocess.check_output(['git','show',a.baseline_ref+':'+path],cwd=ROOT,text=True)
+  return (ROOT/path).read_text()
+ source=read('mxp/mxpCloseAtomic.cpp')
+ prepare=read('mxp/mxpClose.cpp');header=read('OtherTypes.h')
+ for path,text,marker in [('OtherTypes.h',header,'iFirstContentLineCreationNumber (0)'),('mxp/mxpClose.cpp',prepare,'preparedClose = CPreparedMXPClose ();')]:
+  if marker not in text:
+   raise ValueError(f'{a.baseline_ref or "working tree"}:{path}: required close-range marker not found: {marker!r}')
  start=prepare.index('        if (contentStyleRangeNumbers.empty ())')
  end=prepare.index('contentStyleRangeNumbers.insert (pStyle2->nRangeCreationNumber);',start)+len('contentStyleRangeNumbers.insert (pStyle2->nRangeCreationNumber);')
  capture=prepare[start:end]

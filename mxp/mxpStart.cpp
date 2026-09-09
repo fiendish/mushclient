@@ -122,8 +122,10 @@ static CString BuildAtomicCallbackArguments (CArgumentList & arguments)
   }
 
 static bool ExpandAtomicArgumentEntities (CMUSHclientDoc * pDoc,
-                                          CArgumentList & arguments)
+                                          CArgumentList & arguments,
+                                          bool & bExpandedEntities)
   {
+  bExpandedEntities = false;
   for (POSITION pos = arguments.GetHeadPosition (); pos; )
     {
     CArgument * pArgument = arguments.GetNext (pos);
@@ -159,7 +161,11 @@ static bool ExpandAtomicArgumentEntities (CMUSHclientDoc * pDoc,
         if (strEntity == "text")
           strFixedValue += "&text;";
         else
+          {
+          // Entity diagnostics can call scripts even if expansion fails.
+          bExpandedEntities = true;
           strFixedValue += pDoc->MXP_GetEntity (strEntity);
+          }
         pStart = p + 1;
         }
 
@@ -750,8 +756,9 @@ CString strTagVariable;
   const __int64 iOpeningMXPGeneration = m_iMXPGeneration;
   vector<__int64> activeTagsBeforePreparation;
   SnapshotActiveTags (m_ActiveTagList, activeTagsBeforePreparation);
-  const bool bExpandedAtomicArguments = pAtomicElement != NULL;
-  if (pAtomicElement && !ExpandAtomicArgumentEntities (this, ArgumentList))
+  bool bExpandedAtomicArguments = false;
+  if (pAtomicElement &&
+      !ExpandAtomicArgumentEntities (this, ArgumentList, bExpandedAtomicArguments))
     return;
 
   // Run the open callback before publishing this tag. A callback-created tag

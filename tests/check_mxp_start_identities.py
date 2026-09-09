@@ -38,7 +38,8 @@ def main():
     packet_names = ['VERSION', 'AFK', 'SUPPORT', 'OPTION', 'USER', 'PASSWORD']
     packet_cases = []
     for name in packet_names:
-        case = between(atomic, '    case MXP_ACTION_' + name + ':', '          break;', 'mxp/mxpOpenAtomic.cpp') if name in ['VERSION', 'AFK', 'SUPPORT'] else atomic[atomic.index('    case MXP_ACTION_' + name + ':'):]
+        case = between(atomic, '    case MXP_ACTION_' + name + ':',
+                       '          break;', 'mxp/mxpOpenAtomic.cpp: ' + name)
         # Keep the exact packet call and its deferred diagnostic. Packet building
         # and option/credential gates are outside this lifetime reproduction.
         match = re.search(r'            SendPacket \((\w+),.*?\);[^\n]*\n(.*?);', case, re.S)
