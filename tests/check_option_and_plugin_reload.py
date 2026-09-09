@@ -10,7 +10,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from output_callbacks import line_buffer_header, replace_once
+from output_callbacks import line_buffer_header, replace_once, section
 
 
 def block(text, start):
@@ -23,10 +23,6 @@ def block(text, start):
             return text[begin:end + 1]
     raise ValueError(start)
 
-
-def section(text, start, end):
-    begin = text.index(start)
-    return text[begin:text.index(end, begin)]
 
 
 def utf8_program(read, line_buffer):
@@ -70,7 +66,7 @@ struct CMUSHView:CView {
 '''
     patch(' struct CTriggerLineSnapshot', declarations + '\n struct CTriggerLineSnapshot')
     header = read('doc.h')
-    flags = section(header, '#define OPT_CUSTOM_COLOUR', '// for debug.options')
+    flags = section(header, '#define OPT_CUSTOM_COLOUR', '// for debug.options', 'doc.h')
     options = r'''
 #define NUMITEMS(x) (sizeof(x)/sizeof((x)[0]))
 enum {eOK,eUnknownOption,eOptionOutOfRange};
@@ -104,7 +100,7 @@ void AfxThrowMemoryException(){throw new CMemoryException;}
         ('bool CMUSHclientDoc::StartNewLine (', 'const bool CMUSHclientDoc::CheckScriptingAvailable'),
         (' void CMUSHclientDoc::RemoveChunk (void)', 'void CMUSHclientDoc::ShowStatusLine'),
     ]:
-        body += section(doc, start, end)
+        body += section(doc, start, end, 'doc.cpp')
     main = r'''
 int main() {
  // At byte 79, each multibyte character must stay on the first line.
