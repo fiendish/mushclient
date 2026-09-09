@@ -1,4 +1,4 @@
-"""Check compiler selection for both item harnesses without running source extraction."""
+"""Check compiler selection for item and plugin timer harnesses without running source extraction."""
 import ast
 import os
 from pathlib import Path
@@ -13,7 +13,8 @@ class CompilerSelectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.compilers = []
-        for name in ['check_item_callbacks.py', 'check_item_publication.py']:
+        for name in ['check_item_callbacks.py', 'check_item_publication.py',
+                     'check_plugin_timer_contracts.py']:
             path = Path(__file__).with_name(name)
             tree = ast.parse(path.read_text(), filename=str(path))
             functions = [node for node in tree.body
@@ -81,9 +82,16 @@ class CompilerSelectionTests(unittest.TestCase):
     def test_missing_compiler_fails(self):
         self.check_failure('No C[+][+] compiler found')
 
-    def test_empty_override_uses_path(self):
+    def test_empty_override_preserves_each_harness_contract(self):
         os.environ['CXX'] = ''
-        self.check_commands([self.executable('c++')])
+        compiler = self.executable('c++')
+        for name, resolve in self.compilers:
+            with self.subTest(harness=name):
+                if name == 'check_plugin_timer_contracts.py':
+                    with self.assertRaisesRegex(SystemExit, 'CXX must name a C[+][+] compiler'):
+                        resolve()
+                else:
+                    self.assertEqual(resolve(), [compiler])
 
     def test_whitespace_override_fails(self):
         os.environ['CXX'] = '   '

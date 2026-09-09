@@ -30,6 +30,25 @@ def block(text, marker):
     raise ValueError(f'Unterminated source block: {marker}')
 
 
+def compiler_command():
+    override = os.environ.get('CXX')
+    if override is not None:
+        try:
+            command = shlex.split(override)
+        except ValueError as error:
+            raise SystemExit(f'Invalid CXX command: {error}') from error
+        if not command:
+            raise SystemExit('CXX must name a C++ compiler.')
+        executable = shutil.which(command[0])
+        if executable is None:
+            raise SystemExit(f'CXX compiler not found or not executable: {command[0]}')
+        return [executable, *command[1:]]
+    executable = shutil.which('clang++') or shutil.which('c++')
+    if executable is None:
+        raise SystemExit('No C++ compiler found. Set CXX or install clang++ or c++ on PATH.')
+    return [executable]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--revision')
@@ -40,9 +59,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     report = output / 'result.json'
     report.unlink(missing_ok=True)
-    command = shlex.split(os.environ['CXX']) if 'CXX' in os.environ else ['clang++']
-    if not command or shutil.which(command[0]) is None:
-        raise ValueError('CXX must name an available C++ compiler.')
+    command = compiler_command()
     inputs = {}
 
     def source(path):
