@@ -23,6 +23,16 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 #define DEFINITIONS_MUST_BE_SECURE true
 
+class CElementArgumentListGuard
+  {
+  public:
+    CElementArgumentListGuard (CArgumentList & list) : m_list (list) { }
+    ~CElementArgumentListGuard () { DELETE_LIST (m_list); }
+
+  private:
+    CArgumentList & m_list;
+  };
+
 // handle definition-style tag, eg. <!ELEMENT blah> or <!ENTITY blah>
 
 void CMUSHclientDoc::MXP_Definition (CString strTag)
@@ -111,16 +121,14 @@ CString strName;
 // here for <!ELEMENT blah>
 void CMUSHclientDoc::MXP_Element (CString strName, CString strTag)
   {
-static CArgumentList ArgumentList;
+CArgumentList ArgumentList;
+CElementArgumentListGuard argumentListGuard (ArgumentList);
 
   // get arguments to !ELEMENT definition
   if (BuildArgumentList (ArgumentList, strTag))
-    {
-    DELETE_LIST (ArgumentList);
     return;
-    }
 
-CElement * pElement;
+CElement * pElement = NULL;
 bool bDelete = GetKeyword (ArgumentList, "delete");
 
   strName.MakeLower (); // case-insensitive?
@@ -137,23 +145,31 @@ bool bDelete = GetKeyword (ArgumentList, "delete");
     return;
     }
 
-// if element already defined, delete old one
-  if (m_CustomElementMap.Lookup (strName, pElement))
+// if element already exists, remember it until the replacement is ready
+  CElement * pOldElement = NULL;
+  if (m_CustomElementMap.Lookup (strName, pOldElement))
     {
     if (!bDelete)
       MXP_error (DBG_WARNING, wrnMXP_ReplacingElement, 
                  TFormat ("Replacing previously-defined MXP element: <%s>", 
                 (LPCTSTR) strName)); 
-    DELETE_LIST (pElement->ElementItemList);
-    DELETE_LIST (pElement->AttributeList);
-    delete pElement;
+    pOldElement = NULL;
+    m_CustomElementMap.Lookup (strName, pOldElement);
     } // end of existing element
 
   if (bDelete)
+    {
+    if (pOldElement)
+      {
+      m_CustomElementMap.RemoveKey (strName);
+      delete pOldElement;
+      }
     return; // all done!
+    }
 
-// add new element to map
-m_CustomElementMap.SetAt (strName, pElement = new CElement);
+// build the complete replacement before changing the live map
+std::unique_ptr<CElement> newElement (new CElement);
+pElement = newElement.get ();
 
   pElement->strName = strName;
 
@@ -275,17 +291,17 @@ CString strArgument;
 
     // yes?  add to list
 
-    CElementItem * pElementItem = new CElementItem;
+    std::unique_ptr<CElementItem> pElementItem (new CElementItem);
 
     if (BuildArgumentList (pElementItem->ArgumentList, strAtom))  // add arguments
       {     // bad arguments
       DELETE_LIST (pElementItem->ArgumentList);
-      delete pElementItem;
       return;
       }
 
-    pElement->ElementItemList.AddTail (pElementItem );
     pElementItem->pAtomicElement = element_item;    // which atomic element
+    pElement->ElementItemList.AddTail (pElementItem.get ());
+    pElementItem.release ();
 
     p++; // skip >
 
@@ -352,7 +368,12 @@ CString strArgument;
 
     } // end of having a flag
 
-  DELETE_LIST (ArgumentList);
+  // A warning or error callback can redefine the element while this one builds.
+  pOldElement = NULL;
+  m_CustomElementMap.Lookup (strName, pOldElement);
+  m_CustomElementMap.SetAt (strName, pElement);
+  newElement.release ();
+  delete pOldElement;
 
   } // end of CMUSHclientDoc::MXP_Element
 
@@ -375,23 +396,25 @@ CElement * pElement;
     } // end of no element matching
 
 CArgumentList ArgumentList;
+CElementArgumentListGuard argumentListGuard (ArgumentList);
 
   // build into an argument list
   if (BuildArgumentList (ArgumentList, strTag))
-    {
-    DELETE_LIST (ArgumentList);
     return;
+
+  // Transfer ownership after each successful insertion. If AddTail throws,
+  // the guard deletes only the arguments that have not been transferred.
+  while (!ArgumentList.IsEmpty ())
+    {
+    pElement->AttributeList.AddTail (ArgumentList.GetHead ());
+    ArgumentList.RemoveHead ();
     }
-
-  // add to any existing arguments - is this wise? :)
-  pElement->AttributeList.AddTail (&ArgumentList);
-
-  // nb - arguments get moved to argument list - no need to delete them
   } // end of CMUSHclientDoc::MXP_Attlist
 
 // here for <!ENTITY blah>
 void CMUSHclientDoc::MXP_Entity (CString strName, CString strTag)
   {
+  CPluginContextGuard pluginContextGuard (this, NULL);
 
   // case insensitive
   strName.MakeLower ();
@@ -457,8 +480,6 @@ void CMUSHclientDoc::MXP_Entity (CString strName, CString strTag)
                                 CFormat ("%s=%s",
                                 (LPCTSTR) strName,
                                 (LPCTSTR) strFixedValue));
-
-    m_CurrentPlugin = NULL;
 
     }
 

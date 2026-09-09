@@ -32,22 +32,39 @@ static inline unsigned short get_style (int style)
 
 // shared stuff for logging in colour
 
-void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos)
+void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos,
+                                        const map<__int64, int> * pLineLengths)
   {
    COLORREF prevcolour = NO_COLOUR;
    bool bInSpan = false;
    COLORREF lastforecolour = 0;
    COLORREF lastbackcolour = 0;
 
+   if (pLineLengths && pLineLengths->empty ())
+     return;
+
    for (POSITION pos = startpos; pos; )
    {
    CLine * pLine = m_LineList.GetNext (pos);
+   // Callback output after the captured paragraph is outside this log entry.
+   if (pLineLengths &&
+       pLine->nCreationNumber > pLineLengths->rbegin ()->first)
+     break;
+   int iLineLength = pLine->len;
+   if (pLineLengths)
+     {
+     map<__int64, int>::const_iterator saved =
+       pLineLengths->find (pLine->nCreationNumber);
+     if (saved == pLineLengths->end ())
+       continue;
+     iLineLength = MIN (iLineLength, saved->second);
+     }
 
    if (!pLine->styleList.IsEmpty ())
      {
 
       int iCol = 0;
-      CString strLine = CString (pLine->text, pLine->len);
+      CString strLine = CString (pLine->text, iLineLength);
 
       for (POSITION style_pos = pLine->styleList.GetHeadPosition(); style_pos; )
         {
@@ -56,7 +73,9 @@ void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos)
 
         CStyle * pStyle = pLine->styleList.GetNext (style_pos);
 
-        int iLength = pStyle->iLength;
+        if (iCol >= iLineLength)
+          break;
+        int iLength = MIN (static_cast<int> (pStyle->iLength), iLineLength - iCol);
 
         // ignore zero length styles
         if (iLength <= 0)
@@ -134,6 +153,29 @@ void CMUSHclientDoc::LogLineInHTMLcolour (POSITION startpos)
   } // end of  CMUSHclientDoc::LogLineInHTMLcolour
 
 
+// Resolve the original paragraph without keeping list positions across callbacks.
+static vector<CLine *> ResolveTriggerLines (
+  CMUSHclientDoc * pDoc,
+  const vector<CMUSHclientDoc::CTriggerLineSnapshot> & triggerLines)
+  {
+  vector<CLine *> lines (triggerLines.size (), NULL);
+  map<__int64, size_t> remaining;
+  for (size_t i = 0; i < triggerLines.size (); ++i)
+    remaining [triggerLines [i].iCreationNumber] = i;
+  for (POSITION pos = pDoc->m_LineList.GetTailPosition ();
+       pos && !remaining.empty (); )
+    {
+    CLine * pLine = pDoc->m_LineList.GetPrev (pos);
+    map<__int64, size_t>::iterator it = remaining.find (pLine->nCreationNumber);
+    if (it != remaining.end ())
+      {
+      lines [it->second] = pLine;
+      remaining.erase (it);
+      }
+    }
+  return lines;
+  }
+
 // here when a newline is reached - process triggers etc. for the previous line
 // (ie. the current one, the one just ended)
 // returns true if omitting from output
@@ -147,6 +189,8 @@ int iLineCount = 0;
 
 CString strCurrentLine;   // we will assemble the full line here
 CPaneLine StyledLine;     // and here, with style information
+vector<CTriggerLineSnapshot> triggerLines;
+const __int64 iParagraphGeneration = m_iOutputGeneration;
 /*
 
 New technique - we are going to scan *completed* lines for triggers. We know
@@ -207,6 +251,11 @@ assemble the full text of the original line.
   for (pos = prevpos; pos; )
    {
    CLine * pLine = m_LineList.GetNext (pos);
+   CTriggerLineSnapshot snapshot;
+   snapshot.iCreationNumber = pLine->nCreationNumber;
+   snapshot.iColumn = strCurrentLine.GetLength ();
+   snapshot.iLength = pLine->len;
+   triggerLines.push_back (snapshot);
    CString strLine = CString (pLine->text, pLine->len);
    strCurrentLine += strLine;
 
@@ -543,6 +592,7 @@ assemble the full text of the original line.
 
   m_sRecentLines.push_back ((const char *) strCurrentLine);
   m_newlines_received++;
+  const long iParagraphReceivedNumber = m_newlines_received;
 
   // too many? remove oldest one
   if (m_sRecentLines.size () > MAX_RECENT_LINES)
@@ -612,7 +662,7 @@ assemble the full text of the original line.
         ProcessOneTriggerSequence (strCurrentLine, 
                                    StyledLine, 
                                    strResponse, 
-                                   prevpos, 
+                                   triggerLines,
                                    bNoLog, 
                                    m_bLineOmittedFromOutput,
                                    bChangedColour, 
@@ -631,7 +681,7 @@ assemble the full text of the original line.
       ProcessOneTriggerSequence (strCurrentLine, 
                              StyledLine, 
                              strResponse, 
-                             prevpos, 
+                             triggerLines,
                              bNoLog, 
                              m_bLineOmittedFromOutput,
                              bChangedColour, 
@@ -658,7 +708,7 @@ assemble the full text of the original line.
         ProcessOneTriggerSequence (strCurrentLine, 
                                    StyledLine, 
                                    strResponse, 
-                                   prevpos, 
+                                   triggerLines,
                                    bNoLog, 
                                    m_bLineOmittedFromOutput,
                                    bChangedColour, 
@@ -670,6 +720,29 @@ assemble the full text of the original line.
 
     m_CurrentPlugin = NULL; // not in a plugin any more
     } // if iBad <= 0
+
+  // Keep the original identity boundary for all post-trigger consumers.
+  map<__int64, int> paragraphLengths;
+  for (size_t i = 0; i < triggerLines.size (); ++i)
+    paragraphLengths [triggerLines [i].iCreationNumber] = triggerLines [i].iLength;
+
+  // Find the first surviving paragraph line for logging and omission as well.
+  // Callback-created lines are not a replacement for a deleted paragraph.
+  if (iParagraphGeneration != m_iOutputGeneration)
+    {
+    set<__int64> remaining;
+    for (size_t i = 0; i < triggerLines.size (); ++i)
+      remaining.insert (triggerLines [i].iCreationNumber);
+    prevpos = NULL;
+    for (POSITION scan = m_LineList.GetTailPosition ();
+         scan && !remaining.empty (); )
+      {
+      POSITION current = scan;
+      CLine * pLine = m_LineList.GetPrev (scan);
+      if (remaining.erase (pLine->nCreationNumber))
+        prevpos = current;
+      }
+    }
 
 // if we have changed the colour of this trigger, or omitted it from output,
 //        we must force an update or they won't see it
@@ -697,7 +770,11 @@ assemble the full text of the original line.
     {
     // remember that we want to log it (them), for retrospective logging
     for (pos = prevpos; pos; )
-      (m_LineList.GetNext (pos))->flags |= LOG_LINE;
+      {
+      CLine * pLine = m_LineList.GetNext (pos);
+      if (paragraphLengths.count (pLine->nCreationNumber))
+        pLine->flags |= LOG_LINE;
+      }
 
     // log it now?
     if (m_logfile && !m_bLogRaw) 
@@ -726,7 +803,7 @@ assemble the full text of the original line.
       CString strMessage = strCurrentLine;
       // fix up HTML sequences
       if (m_bLogHTML && m_bLogInColour)
-        LogLineInHTMLcolour (prevpos);
+        LogLineInHTMLcolour (prevpos, &paragraphLengths);
       // not colour - just straight HTML?
       else if (m_bLogHTML)
         WriteToLog (FixHTMLString (strMessage));
@@ -743,96 +820,120 @@ assemble the full text of the original line.
 
 // if omitting from output do that now
 
-  if (m_bLineOmittedFromOutput)
+  if (m_bLineOmittedFromOutput && prevpos)
     {
-
-  // delete all lines in this set
-    for (pos = m_LineList.GetTailPosition (); pos; )
-     {
-     // if this particular line was added to the line positions array, then make it null
-      if (m_LineList.GetCount () % JUMP_SIZE == 1)
-            m_pLinePositions [m_LineList.GetCount () / JUMP_SIZE] = NULL;
-
-      // version 4.54 - keep notes, even if omitted from output ;)
-      // version 4.72 - also player input
-
-      // we have to push_front because we are going through the lines backwards
-      // this means the newline goes first. Also we process the styles in reverse order.
-
-      CLine* pLine = m_LineList.GetTail ();
+    vector<POSITION> linesToDelete;
+    list<CPaneStyle> stagedOutstandingLines;
+    int iRecentLinesToRemove = 0;
+    CLine * pSurvivingCurrentLine = NULL;
+    POSITION scan = m_LineList.GetTailPosition ();
+    while (scan)
+      {
+      POSITION current = scan;
+      CLine * pLine = m_LineList.GetPrev (scan);
+      if (!paragraphLengths.count (pLine->nCreationNumber))
+        {
+        // Later callback output keeps its text, styles, actions, and identity.
+        if (!pSurvivingCurrentLine)
+          pSurvivingCurrentLine = pLine;
+        continue;
+        }
+      linesToDelete.push_back (current);
 
       if (pLine->flags & NOTE_OR_COMMAND)
         {
-       CString strLine = CString (pLine->text, pLine->len);
-       int iCol = 0;
+        CString strLine (pLine->text, pLine->len);
+        int iCol = 0;
+        if (pLine->hard_return)
+          stagedOutstandingLines.push_front (CPaneStyle (ENDLINE, 0, 0, 0));
 
-       // throw in the newline if required
-       if (pLine->hard_return)
-         m_OutstandingLines.push_front (CPaneStyle (ENDLINE, 0, 0, 0));
-
-       for (POSITION stylepos = pLine->styleList.GetTailPosition(); stylepos; )
-         {
-         CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
-
-         COLORREF cText,
-                  cBack;
-
-         // find actual RGB colour of style
-         GetStyleRGB (pStyle, cText, cBack); 
-                          
-         m_OutstandingLines.push_front (CPaneStyle ((const char *)
-                              strLine.Mid (pLine->len -  pStyle->iLength - iCol, pStyle->iLength), 
-                              cText, cBack, pStyle->iFlags & 7));
-         iCol += pStyle->iLength; // new column
-         }     // end of each style
-
-
-        }  // end of coming across a note or command line
-      else
-        {  // must be an output line
-        // consider that this line is no longer a "recent line"
-        // if a trigger stopped all trigger evaluation.
-        // Suggested by Fiendish - version 5.06
-        if (m_iStopTriggerEvaluation == eStopEvaluatingTriggersInAllPlugins)
-          if (!m_sRecentLines.empty ())  // if sane to do so
-            m_sRecentLines.pop_back ();
+        for (POSITION stylepos = pLine->styleList.GetTailPosition ();
+             stylepos; )
+          {
+          CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
+          COLORREF cText,
+                   cBack;
+          GetStyleRGB (pStyle, cText, cBack);
+          stagedOutstandingLines.push_front (
+            CPaneStyle ((const char *)
+              strLine.Mid (pLine->len - pStyle->iLength - iCol,
+                           pStyle->iLength),
+              cText,
+              cBack,
+              pStyle->iFlags & 7));
+          iCol += pStyle->iLength;
+          }
         }
+      else if (m_iStopTriggerEvaluation ==
+               eStopEvaluatingTriggersInAllPlugins)
+        iRecentLinesToRemove++;
 
-      delete pLine; // delete contents of tail iten -- version 3.85
-      m_LineList.RemoveTail ();   // get rid of the line
-      m_total_lines--;            // don't count as received
-
-      // if this was the first line, we have done enough
-      if (pos == prevpos)
-        break;    
-     m_LineList.GetPrev (pos);
-     }
-
-    // try to allow world.tells to span omitted lines
-    if (!m_LineList.IsEmpty ())
-      {
-      m_pCurrentLine = m_LineList.GetTail ();
-      if (((m_pCurrentLine->flags & COMMENT) == 0) ||
-          m_pCurrentLine->hard_return)
-          m_pCurrentLine = NULL;
+      if (current == prevpos)
+        break;
       }
+
+    if (!pSurvivingCurrentLine)
+      {
+      pSurvivingCurrentLine = scan ? m_LineList.GetAt (scan) : NULL;
+      if (pSurvivingCurrentLine &&
+          (((pSurvivingCurrentLine->flags & COMMENT) == 0) ||
+           pSurvivingCurrentLine->hard_return))
+        pSurvivingCurrentLine = NULL;
+      }
+
+    std::unique_ptr<CLine> pNewLine;
+    if (!pSurvivingCurrentLine)
+      {
+      pNewLine.reset (new CLine (m_total_lines -
+                                 static_cast<long> (linesToDelete.size ()) + 1,
+                                 m_nWrapColumn,
+                                 m_iFlags,
+                                 m_iForeColour,
+                                 m_iBackColour,
+                                 m_bUTF_8));
+      m_LineList.AddTail (pNewLine.get ());
+      }
+
+    m_iOutputGeneration++;
+    for (vector<POSITION>::const_iterator it = linesToDelete.begin ();
+         it != linesToDelete.end (); ++it)
+      {
+      CLine * pLine = m_LineList.GetAt (*it);
+      m_LineList.RemoveAt (*it);
+      delete pLine;
+      m_total_lines--;
+      }
+
+    const unsigned long iLaterLines =
+      static_cast<unsigned long> (m_newlines_received) -
+      static_cast<unsigned long> (iParagraphReceivedNumber);
+    while (iRecentLinesToRemove-- > 0 && m_sRecentLines.size () > iLaterLines)
+      m_sRecentLines.erase (m_sRecentLines.end () - iLaterLines - 1);
+
+    if (pSurvivingCurrentLine)
+      m_pCurrentLine = pSurvivingCurrentLine;
     else
-      m_pCurrentLine = NULL;
-
-    if (!m_pCurrentLine)
       {
-      // restart with a blank line at the end of the list
-      m_pCurrentLine = new CLine (++m_total_lines, 
-                                  m_nWrapColumn,
-                                  m_iFlags,
-                                  m_iForeColour,
-                                  m_iBackColour,
-                                  m_bUTF_8);
-      pos = m_LineList.AddTail (m_pCurrentLine);
-
-      if (m_LineList.GetCount () % JUMP_SIZE == 1)
-        m_pLinePositions [m_LineList.GetCount () / JUMP_SIZE] = pos;
+      m_pCurrentLine = pNewLine.release ();
+      m_total_lines++;
       }
+
+    for (int i = 0; i <= m_maxlines / JUMP_SIZE; i++)
+      m_pLinePositions [i] = NULL;
+    int iLine = 0;
+    for (pos = m_LineList.GetHeadPosition (); pos; iLine++)
+      {
+      POSITION current = pos;
+      CLine * pLine = m_LineList.GetNext (pos);
+      pLine->m_nLineNumber = m_total_lines - m_LineList.GetCount () + iLine + 1;
+      if (iLine % JUMP_SIZE == 0)
+        m_pLinePositions [iLine / JUMP_SIZE] = current;
+      }
+
+    m_OutstandingLines.splice (m_OutstandingLines.begin (),
+                               stagedOutstandingLines);
+
+    RefreshMXPMissingTagAnchors ();
 
     }
   else
@@ -1067,7 +1168,7 @@ assemble the full text of the original line.
 void CMUSHclientDoc::ProcessOneTriggerSequence (CString & strCurrentLine,
                                           CPaneLine & StyledLine,
                                           CString & strResponse,
-                                          const POSITION prevpos,
+                                          const vector<CTriggerLineSnapshot> & triggerLines,
                                           bool & bNoLog,
                                           bool & bNoOutput,
                                           bool & bChangedColour,
@@ -1082,7 +1183,8 @@ int iItem;
 CTrigger * trigger_item;
 int iStartCol,
     iEndCol;
-POSITION pos;
+vector<CLine *> outputLines = ResolveTriggerLines (this, triggerLines);
+__int64 iOutputGeneration = m_iOutputGeneration;
 
   for (iItem = 0; iItem < GetTriggerArray ().GetSize (); iItem++)
     {
@@ -1106,27 +1208,33 @@ POSITION pos;
 
     */
 
+      if (iOutputGeneration != m_iOutputGeneration)
+        {
+        outputLines = ResolveTriggerLines (this, triggerLines);
+        iOutputGeneration = m_iOutputGeneration;
+        }
+
       if (trigger_item->iMatch && !trigger_item->bMultiLine)
         {
         int iFlags = 0;
         COLORREF iForeColour = NO_COLOUR; 
         COLORREF iBackColour = NO_COLOUR; 
-        int iCurrentCol = 0;
-        for (pos = prevpos; pos; )  // scan to end of buffer
+        for (size_t line = 0; line < triggerLines.size (); ++line)
          {
-         CLine * pLine = m_LineList.GetNext (pos);
-         int iThisEnd = iCurrentCol + pLine->len;  // column this line ends at
-         if (iStartCol < iThisEnd)  // starting col is in this line
+         CLine * pLine = outputLines [line];
+         const CTriggerLineSnapshot & snapshot = triggerLines [line];
+         if (!pLine)
+           continue;
+         const int i = iStartCol - snapshot.iColumn;
+         if (i >= 0 && i < snapshot.iLength && i < pLine->len &&
+             pLine->text [i] == strCurrentLine [iStartCol])
            {
-           int i = iStartCol - iCurrentCol;
-           if (i < 0)
-             i = 0;
 
            CStyle * pStyle = NULL;
            int iStyleCol = 0;
      
            // find style run
-           for (pos = pLine->styleList.GetHeadPosition(); pos; )
+           for (POSITION pos = pLine->styleList.GetHeadPosition(); pos; )
              {
              pStyle = pLine->styleList.GetNext (pos);
              iStyleCol += pStyle->iLength;
@@ -1142,7 +1250,6 @@ POSITION pos;
              }
            break;                      // done
            }
-         iCurrentCol += pLine->len;   // next line starts where this left off
          }    // end of doing each line
 
 
@@ -1168,7 +1275,6 @@ POSITION pos;
             continue;   // wrong inverse
 
         } // end of some matching wanted
-
 
     // copy the wildcard contents to the clipboard, if required
 
@@ -1258,8 +1364,15 @@ POSITION pos;
           }
         }    // not doing after the omitting
 
-      // if colouring wanted, work our way through all lines to do it
-      if ((trigger_item->colour != SAMECOLOUR || 
+      // Pruning can remove old lines while the matched paragraph survives.
+      if (iOutputGeneration != m_iOutputGeneration)
+        {
+        outputLines = ResolveTriggerLines (this, triggerLines);
+        iOutputGeneration = m_iOutputGeneration;
+        }
+
+      // if colouring wanted, work our way through surviving matched spans
+      if ((trigger_item->colour != SAMECOLOUR ||
           trigger_item->iStyle != NORMAL) &&
           !trigger_item->bMultiLine)  // multi-line won't change colours
         {
@@ -1280,27 +1393,25 @@ POSITION pos;
     */
         while (true)    // repeat until we break (for repeated regexps)
           {
-          int iCurrentCol = 0;   // how far through paragraph
-          int iCount = iEndCol - iStartCol;   // how many columns to colour
-          if (iCount <= 0)
+          if (iEndCol <= iStartCol)
             break;    // can't exactly colour zero columns
 
-          //
-          // Do each line (in the paragraph)
-          //
-          for (pos = prevpos; iCount > 0 && pos; )   // work way to end of buffer
+          for (size_t line = 0; line < triggerLines.size (); ++line)
            {
-           CLine * pLine = m_LineList.GetNext (pos);
-           int iThisEnd = iCurrentCol + pLine->len;   // where this line ends, in para
-           if (iStartCol < iThisEnd)  // does trigger start on this line?
+           CLine * pLine = outputLines [line];
+           const CTriggerLineSnapshot & snapshot = triggerLines [line];
+           if (!pLine)
+             continue;
+           const int ThisCol = MAX (iStartCol - snapshot.iColumn, 0);
+           const int iEnd = MIN (iEndCol - snapshot.iColumn,
+                                MIN (snapshot.iLength, pLine->len));
+           int iCount = iEnd - ThisCol;
+           if (iCount > 0 &&
+               memcmp (pLine->text + ThisCol,
+                       (LPCTSTR) strCurrentLine + snapshot.iColumn + ThisCol,
+                       iCount) == 0)
              {
-             //
-             // Trigger matching part is on *this* line
-             //
-             int ThisCol = iStartCol - iCurrentCol;   // start column on line
-             if (ThisCol < 0)
-               ThisCol = 0;
-
+             // Only the original matched bytes belong to this colour change.
              CStyle * pStyle;
              int iCol;
              POSITION oldpos, pos;
@@ -1323,18 +1434,23 @@ POSITION pos;
                else
                  {
                  int iDiff = iCol - ThisCol;  // amount we overshot
-                 CStyle * pNewStyle = NEWSTYLE;  // make another
+                 std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);  // make another
                  pNewStyle->iLength = iDiff;
                  pNewStyle->iFlags = pStyle->iFlags & STYLE_BITS;
                  pNewStyle->iForeColour = pStyle->iForeColour;
                  pNewStyle->iBackColour = pStyle->iBackColour ;
                  pNewStyle->pAction = pStyle->pAction;
+                 pNewStyle->nRangeCreationNumber =
+                   pStyle->nRangeCreationNumber;
+                 pNewStyle->nOutputAppendCreationNumber =
+                   pStyle->nOutputAppendCreationNumber;
                  if (pNewStyle->pAction)
                    pNewStyle->pAction->AddRef ();
 
-                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  // add to list
-                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle); // insert
+                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle.get ()); // insert
+                 pNewStyle.release ();
+                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  }
                } // end of shared style
 
@@ -1349,17 +1465,22 @@ POSITION pos;
                if (pStyle->iLength > iCount)
                  {
                  int iDiff = pStyle->iLength - iCount;  // amount we overshot
-                 CStyle * pNewStyle = NEWSTYLE;  // make another
+                 std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);  // make another
                  pNewStyle->iLength = iDiff;
                  pNewStyle->iFlags = pStyle->iFlags & STYLE_BITS;
                  pNewStyle->iForeColour = pStyle->iForeColour;
                  pNewStyle->iBackColour = pStyle->iBackColour ;
                  pNewStyle->pAction = pStyle->pAction;
+                 pNewStyle->nRangeCreationNumber =
+                   pStyle->nRangeCreationNumber;
+                 pNewStyle->nOutputAppendCreationNumber =
+                   pStyle->nOutputAppendCreationNumber;
                  if (pNewStyle->pAction)
                    pNewStyle->pAction->AddRef ();
-                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  // add to list
-                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle); // insert
+                 pos = pLine->styleList.InsertAfter (oldpos, pNewStyle.get ()); // insert
+                 pNewStyle.release ();
+                 pStyle->iLength -= iDiff;  // old one is that much smaller
                  }
 
                // colour change wanted? switch to custom colour specified
@@ -1428,7 +1549,6 @@ POSITION pos;
                }
 
              }  // end of being on this line
-           iCurrentCol += pLine->len;   // next line starts where this left off
            }    // end of doing each line
 
 
@@ -1450,21 +1570,27 @@ POSITION pos;
                    // if the change starts past the first column of the style we need to split into before and after
                    if (iStartCol > iStyleCol)
                      {
-                     CPaneStyle * pNewStyle = new CPaneStyle (*pStyle);   // make a new style
-                     pNewStyle->m_sText = sText.substr (0, iStartCol - iStyleCol);    // put front part in new style run
-                     pStyle->m_sText = pStyle->m_sText.substr (iStartCol - iStyleCol);  // trim front of original style run
-                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle);   // add new style run before this one
+                     string sBefore = sText.substr (0, iStartCol - iStyleCol);
+                     string sAfter = pStyle->m_sText.substr (iStartCol - iStyleCol);
+                     std::unique_ptr<CPaneStyle> pNewStyle (new CPaneStyle (*pStyle));
+                     pNewStyle->m_sText.swap (sBefore);    // put front part in new style run
+                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle.get ());   // add new style run before this one
+                     pNewStyle.release ();
                      style_it++;  // advance past newly inserted item
+                     pStyle->m_sText.swap (sAfter);  // trim front of original style run
                      }  // end if we need to split before the matching text
 
                    // if the change ends before the last column of the style we need to split into before and after
                    if (iEndCol < (iStyleEndCol - 1))
                      {
-                     CPaneStyle * pNewStyle = new CPaneStyle (*pStyle);  // make a new style
-                     pNewStyle->m_sText = sText.substr (iStyleLength - (iStyleEndCol - iEndCol));    // put back part in new style run
-                     pStyle->m_sText = pStyle->m_sText.substr (0, pStyle->m_sText.size () - (iStyleEndCol - iEndCol)); // trim back part
+                     string sAfter = sText.substr (iStyleLength - (iStyleEndCol - iEndCol));
+                     string sBefore = pStyle->m_sText.substr (0, pStyle->m_sText.size () - (iStyleEndCol - iEndCol));
+                     std::unique_ptr<CPaneStyle> pNewStyle (new CPaneStyle (*pStyle));
+                     pNewStyle->m_sText.swap (sAfter);    // put back part in new style run
                      style_it++;  // add new style run after this one
-                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle);  // insert it
+                     style_it = StyledLine.m_vStyles.insert (style_it, pNewStyle.get ());  // insert it
+                     pNewStyle.release ();
+                     pStyle->m_sText.swap (sBefore); // trim back part
                      }  // end if we need to split after the matching text
 
                    // Right, we have now split up the style if necessary into another two pieces

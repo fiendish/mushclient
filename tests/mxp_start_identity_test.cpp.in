@@ -1,0 +1,368 @@
+// Portable substitutes surround exact source excerpts inserted by the runner.
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <functional>
+#include <list>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <vector>
+using __int64 = long long;
+using COLORREF = unsigned;
+using POSITION = void*;
+using std::vector;
+#define ASSERT assert
+#define COLOURTYPE 0x0300
+#define COLOUR_CUSTOM 0x0100
+#define COLOUR_ANSI 0
+#define MAX_CUSTOM 16
+#define STYLE_BITS 0x0FFF
+#define START_TAG 0x1000
+#define HILITE 1
+#define HORIZ_RULE 8
+#define DBG_WARNING 1
+#define DBG_INFO 2
+#define DELETE_LIST(x) (x).clear()
+#define NEWSTYLE new CStyle
+#define DELETESTYLE(x) delete (x)
+#define LPCTSTR const char*
+@ENUMS@
+struct CString : std::string {
+  using std::string::string;
+  CString(const std::string& s) : std::string(s) {}
+  operator const char*() const { return c_str(); }
+  int GetLength() const { return size(); }
+  CString Mid(size_t n) const { return substr(n); }
+  void Format(const char* fmt, int n) { char b[100]; std::snprintf(b, sizeof(b), fmt, n); assign(b); }
+};
+template<class... T> CString TFormat(const char* s, T...) { return s; }
+static __int64 serial = 100;
+struct CAction {
+  int refs = 1;
+  CString value;
+  explicit CAction(CString s) : value(s) {}
+  void AddRef() { ++refs; }
+  void Release() { if (!--refs) delete this; }
+};
+struct CStyle {
+  unsigned short iFlags=0, iLength=0;
+  COLORREF iForeColour=7, iBackColour=0;
+  __int64 nCreationNumber=++serial, nRangeCreationNumber=++serial;
+  __int64 nOutputAppendCreationNumber=0;
+  CAction* pAction=nullptr;
+  ~CStyle() { if (pAction) pAction->Release(); }
+};
+static std::uint64_t styleVisits=0, lineVisits=0;
+template<class T> class List {
+  struct Node { T* value; Node* prev; Node* next; };
+  Node* head=nullptr; Node* tail=nullptr; size_t count=0;
+  T* visit(Node* n) {
+    if constexpr (std::is_same_v<T,CStyle>) ++styleVisits;
+    else ++lineVisits;
+    return n->value;
+  }
+public:
+  ~List() { while (head) RemoveAt(head); }
+  POSITION GetHeadPosition() { return head; }
+  POSITION GetTailPosition() { return tail; }
+  T* GetNext(POSITION& p) { Node* n=static_cast<Node*>(p); p=n->next; return visit(n); }
+  T* GetPrev(POSITION& p) { Node* n=static_cast<Node*>(p); p=n->prev; return visit(n); }
+  T* GetTail() { assert(tail); return tail->value; }
+  T* GetHead() { assert(head); return head->value; }
+  bool IsEmpty() { return !head; }
+  size_t GetCount() { return count; }
+  void AddTail(T* p) { Node* n=new Node{p,tail,nullptr}; if(tail) tail->next=n; else head=n; tail=n; ++count; }
+  void RemoveAt(POSITION p) { Node* n=static_cast<Node*>(p); if(n->prev) n->prev->next=n->next; else head=n->next; if(n->next) n->next->prev=n->prev; else tail=n->prev; delete n; --count; }
+  T* RemoveTail() { T* p=GetTail(); RemoveAt(tail); return p; }
+};
+struct CLine {
+  List<CStyle> styleList;
+  __int64 nCreationNumber=++serial;
+  int len=0, flags=0;
+  CString text;
+  ~CLine() { while(!styleList.IsEmpty()) delete styleList.RemoveTail(); }
+};
+struct CActiveTag {
+  __int64 nCreationNumber=++serial;
+  __int64 iOpeningParagraphOwner=0, iOpeningPreOwner=0, iOpeningScriptOwner=0, iOpeningListOwner=0;
+  bool bOpeningInParagraph=false, bOpeningPreMode=false, bOpeningMXPScript=false;
+  int iOpeningListMode=0, iOpeningListCount=0;
+  CString strVariable;
+};
+struct CDeferredMXPMessage { int iLevel, iMessageNumber; CString strMessage; CDeferredMXPMessage(int l,int n,CString s):iLevel(l),iMessageNumber(n),strMessage(s){} };
+using CArgumentList=vector<int>;
+struct CAtomicElement { int iAction; CString strName="test"; };
+struct CElementItem { CAtomicElement* pAtomicElement; CArgumentList ArgumentList; };
+struct Socket { std::string m_outstanding_data; int sends=0; void OnSend(int) { ++sends; } };
+struct CMUSHclientDoc;
+struct COutputAppendTransaction {
+  CMUSHclientDoc* m_pDoc;
+  __int64 m_iAppendCreationNumber=++serial;
+  __int64 m_iFirstAffectedLineCreationNumber=m_iAppendCreationNumber;
+  bool committed=false;
+  COutputAppendTransaction(CMUSHclientDoc* d,int);
+  void Reserve(size_t) {}
+  void TrackLine(const CLine*);
+  void MarkCurrentLineStyles();
+  CStyle* PrepareAppendStyle();
+  void OwnStyle(CStyle*);
+  void Rollback() {} // PR #25 output rollback is outside this focused check.
+  void Commit() { committed=true; }
+  bool StartNewLine(bool,int,bool,bool*);
+  void SetLineFlags(CLine* l,int f) { l->flags=f; }
+  void SetListCount(int);
+};
+struct CMUSHclientDoc {
+  List<CLine> m_LineList;
+  List<CActiveTag> m_ActiveTagList;
+  CLine* m_pCurrentLine=nullptr;
+  bool m_bInParagraph=false, m_bPreMode=false, m_bMXP_script=false, m_bMXP=true;
+  int m_iListMode=0, m_iListCount=0, m_iLastOutstandingTagCount=0;
+  __int64 m_iMXPParagraphOwner=0, m_iMXPPreOwner=0, m_iMXPScriptOwner=0, m_iMXPListOwner=0;
+  __int64 m_iMXPGeneration=1, m_iOutputGeneration=1;
+  unsigned short m_iFlags=0;
+  unsigned m_iForeColour=7, m_iBackColour=0;
+  bool m_bDebugIncomingPackets=true;
+  int m_iOutputPacketCount=0, m_nBytesOut=0, diagnostics=0, argumentChecks=0;
+  Socket socket;
+  Socket* m_pSocket=&socket;
+  std::function<void()> callback;
+  bool outputCreatesLine=true;
+  CString m_name="fixture-user";
+  static constexpr int eOrderedList=1;
+  CMUSHclientDoc() { newLine(); }
+  ~CMUSHclientDoc() { while(!m_LineList.IsEmpty()) delete m_LineList.RemoveTail(); while(!m_ActiveTagList.IsEmpty()) delete m_ActiveTagList.RemoveTail(); }
+  CStyle* tail() { return m_pCurrentLine->styleList.GetTail(); }
+  void newLine() { auto* l=new CLine; l->styleList.AddTail(new CStyle); m_LineList.AddTail(l); m_pCurrentLine=l; }
+  CStyle* AddStyle(int f,int fore,int back,int len,CString action,CString,CString) { auto* s=new CStyle; s->iFlags=f; s->iForeColour=fore; s->iBackColour=back; s->iLength=len; s->pAction=new CAction(action); m_pCurrentLine->styleList.AddTail(s); return s; }
+  CAction* GetAction(CString a,CString,CString) { return new CAction(a); }
+  void RememberStyle(const CStyle*);
+  void SendPacket(const char*,int);
+  void Debug_Packets(const char*,const char*,int,__int64) { if(callback) callback(); }
+  void SetNewLineColour(int) {}
+  bool AddToLineInternal(CString s,int,COutputAppendTransaction*) { tail()->iLength+=s.size(); m_pCurrentLine->len+=s.size(); m_pCurrentLine->text+=s; if(callback) callback(); return true; }
+  void MXP_error(int,int,CString) { ++diagnostics; }
+  void CheckArgumentsUsed(CString,CArgumentList&) { ++argumentChecks; }
+  bool MXP_OpenAtomicTag(CString,int,CStyle*,__int64&,CString&,CString&,CString&,CArgumentList&,__int64,COutputAppendTransaction*,vector<CDeferredMXPMessage>&);
+  void Run(bool custom,bool paired,int action,bool followBold=false);
+};
+COutputAppendTransaction::COutputAppendTransaction(CMUSHclientDoc* d,int):m_pDoc(d) { TrackLine(d->m_pCurrentLine); }
+bool COutputAppendTransaction::StartNewLine(bool,int,bool,bool* created) { if(m_pDoc->callback) m_pDoc->callback(); *created=m_pDoc->outputCreatesLine; if(*created) m_pDoc->newLine(); return true; }
+void COutputAppendTransaction::SetListCount(int n) { m_pDoc->m_iListCount=n; }
+@PREPARE_STYLE@
+@SEND_PACKET@
+@REMEMBER_STYLE@
+@TRANSACTION@
+static void ReportDeferredMXPMessages(CMUSHclientDoc* d,vector<CDeferredMXPMessage>& ms) { for(auto& m:ms) d->MXP_error(m.iLevel,m.iMessageNumber,m.strMessage); ms.clear(); }
+static void QueueMXPMessage(vector<CDeferredMXPMessage>& ms,int l,int n,CString s) { ms.emplace_back(l,n,s); }
+bool CMUSHclientDoc::MXP_OpenAtomicTag(CString,int iAction,CStyle* pStyle,__int64& iResultStyleCreationNumber,CString& strAction,CString& strHint,CString& strVariable,CArgumentList&,__int64,COutputAppendTransaction* pOutputTransaction,vector<CDeferredMXPMessage>& deferredMessages) {
+  @RESULT_INIT@
+  bool bIgnoreUnusedArgs=false;
+  switch(iAction) {
+    @PACKET_CASES@
+    @BR_CASE@
+    @HR_CASE@
+    @LI_CASE@
+    case MXP_ACTION_BOLD: pStyle->iFlags|=HILITE; break;
+    case MXP_ACTION_IMG:
+    case MXP_ACTION_IMAGE: {
+      CString strOldAction=strAction, strOldHint=strHint, strOldVariable=strVariable;
+      @IMAGE_RESULT@
+      break;
+    }
+    default: throw std::runtime_error("Unexpected fixture action");
+  }
+  return true;
+}
+void CMUSHclientDoc::Run(bool custom,bool paired,int action,bool followBold) {
+  CString strName="fixture", strAction="outer", strHint="", strVariable="";
+  CAtomicElement element{action}, bold{MXP_ACTION_BOLD};
+  CAtomicElement* pAtomicElement=custom?nullptr:&element;
+  vector<std::unique_ptr<CElementItem>> expandedItems;
+  vector<bool> expandedItemsWanted;
+  if(custom) { expandedItems.emplace_back(new CElementItem{&element}); expandedItemsWanted.push_back(true); if(followBold) { expandedItems.emplace_back(new CElementItem{&bold}); expandedItemsWanted.push_back(true); } }
+  vector<CDeferredMXPMessage> deferredMessages;
+  CArgumentList ArgumentList;
+  __int64 iStateOwner=++serial, iOpeningMXPGeneration=m_iMXPGeneration;
+  CMXPStartTransaction transaction(this,iStateOwner);
+  transaction.PreserveStyle(tail());
+  CActiveTag* pPublishedTag=nullptr;
+  if(paired) { pPublishedTag=new CActiveTag; pPublishedTag->nCreationNumber=iStateOwner; m_ActiveTagList.AddTail(pPublishedTag); transaction.SetActiveTag(pPublishedTag); auto* marker=AddStyle(START_TAG,7,0,0,"marker","",""); transaction.SetMarker(marker); }
+  CStyle* pNewStyle=AddStyle(0,7,0,0,strAction,strHint,strVariable);
+  transaction.SetStyle(pNewStyle);
+  bool bWarnOutstandingTags=false;
+  @FINALIZATION@
+}
+static void deleteOutput(CMUSHclientDoc& d) {
+  // Same lifetime boundary as DeleteLines: replace current line and styles,
+  // advance output generation, and retain MXP generation.
+  while(!d.m_LineList.IsEmpty()) delete d.m_LineList.RemoveTail();
+  d.newLine(); ++d.m_iOutputGeneration;
+}
+static void callbackText(CMUSHclientDoc& d,bool nested) {
+  if(nested) { auto* tag=new CActiveTag; d.m_ActiveTagList.AddTail(tag); }
+  auto* s=d.AddStyle(4,2,3,8,"callback","","");
+  d.m_pCurrentLine->text="callback"; d.m_pCurrentLine->len=8;
+  d.RememberStyle(s);
+}
+static void packetChecks() {
+  int cases=0;
+  for(int action:{MXP_ACTION_VERSION,MXP_ACTION_AFK,MXP_ACTION_SUPPORT,MXP_ACTION_OPTION,MXP_ACTION_USER,MXP_ACTION_PASSWORD})
+    for(bool custom:{false,true}) for(bool paired:{false,true}) for(int mode=0;mode<6;++mode) {
+      CMUSHclientDoc d;
+      CStyle* callbackStyle=nullptr; CLine* callbackLine=nullptr;
+      __int64 styleIdentity=0, rangeIdentity=0, lineIdentity=0, nestedTagIdentity=0;
+      int callbacks=0;
+      d.callback=[&] {
+        ++callbacks;
+        if(mode==1||mode==3||mode==4) deleteOutput(d);
+        if(mode>=2) callbackText(d,mode>=3);
+        if(mode==4) ++d.m_iMXPGeneration;
+        if(mode>=3) nestedTagIdentity=d.m_ActiveTagList.GetTail()->nCreationNumber;
+        callbackStyle=d.tail(); callbackLine=d.m_pCurrentLine;
+        styleIdentity=callbackStyle->nCreationNumber; rangeIdentity=callbackStyle->nRangeCreationNumber; lineIdentity=callbackLine->nCreationNumber;
+      };
+      d.Run(custom,paired,action,custom);
+      assert(callbacks==1 && d.m_iOutputPacketCount==1 && d.socket.sends==1);
+      assert(d.m_nBytesOut==static_cast<int>(d.socket.m_outstanding_data.size()));
+      assert(d.socket.m_outstanding_data.find("response-")==0);
+      assert(d.diagnostics==1); // Deferred packet message is retained on rollback.
+      assert(d.m_pCurrentLine==callbackLine && callbackLine->nCreationNumber==lineIdentity);
+      if(mode>=2) {
+        assert(d.m_pCurrentLine->text=="callback");
+        assert(callbackStyle->nCreationNumber==styleIdentity && callbackStyle->nRangeCreationNumber==rangeIdentity);
+        assert(callbackStyle->iFlags==4 && callbackStyle->iForeColour==2 && callbackStyle->iBackColour==3);
+        assert(callbackStyle->pAction->value=="callback");
+        if(mode>=3) {
+          bool found=false;
+          for(POSITION pos=d.m_ActiveTagList.GetHeadPosition();pos;)
+            if(d.m_ActiveTagList.GetNext(pos)->nCreationNumber==nestedTagIdentity) found=true;
+          assert(found);
+        }
+      }
+      if(custom&&!paired&&(mode==1||mode==3)) {
+        assert(d.tail()!=callbackStyle && (d.tail()->iFlags&HILITE));
+        assert(d.tail()->pAction->value=="outer");
+      }
+      if(!custom&&(mode==1||mode==3)) assert(d.tail()==callbackStyle);
+      ++cases;
+    }
+  // No socket and disabled packet debugging retain their existing behavior.
+  for(int mode=0;mode<2;++mode) {
+    CMUSHclientDoc d; int calls=0; d.callback=[&]{++calls;};
+    if(mode==0) d.m_pSocket=nullptr; else d.m_bDebugIncomingPackets=false;
+    d.Run(false,false,MXP_ACTION_VERSION);
+    assert(calls==0 && d.diagnostics==1);
+    assert(d.m_iOutputPacketCount==(mode==0?0:1));
+  }
+  // Disabling MXP in a callback retains output and its response diagnostic.
+  {
+    CMUSHclientDoc d;
+    d.callback=[&]{deleteOutput(d); callbackText(d,true); d.m_bMXP=false;};
+    d.Run(false,true,MXP_ACTION_VERSION);
+    assert(!d.m_bMXP && d.diagnostics==1 && d.m_ActiveTagList.GetCount()==1);
+    assert(d.m_pCurrentLine->text=="callback" && d.tail()->pAction->value=="callback");
+  }
+  // Callback failure must propagate. Opening rollback must preserve its output.
+  CMUSHclientDoc d;
+  d.callback=[&]{callbackText(d,true); throw std::runtime_error("callback failure");};
+  bool threw=false;
+  try { d.Run(false,true,MXP_ACTION_VERSION); } catch(const std::runtime_error& e) { threw=std::string(e.what())=="callback failure"; }
+  assert(threw && d.m_ActiveTagList.GetCount()==1 && d.m_pCurrentLine->text=="callback");
+  assert(d.tail()->pAction->value=="callback");
+  std::printf("packet callback contracts: %d variants plus socket/debug/error cases passed\n",cases);
+}
+static void outputChecks() {
+  for(int action:{MXP_ACTION_BR,MXP_ACTION_HR,MXP_ACTION_LI,MXP_ACTION_IMG,MXP_ACTION_IMAGE}) {
+    for(bool custom:{false,true}) for(bool created:{false,true}) {
+      CMUSHclientDoc d; d.outputCreatesLine=created;
+      // Force HR and LI through the newline path.
+      d.m_pCurrentLine->len=1;
+      d.Run(custom,false,action,custom);
+      assert(d.tail());
+      if(custom) assert(d.tail()->iFlags&HILITE);
+    }
+  }
+  // A callback-supplied continuation is not an action-owned result.
+  for(int action:{MXP_ACTION_BR,MXP_ACTION_HR,MXP_ACTION_LI})
+    for(bool custom:{false,true}) {
+      CMUSHclientDoc d; d.outputCreatesLine=false; d.m_pCurrentLine->len=1;
+      CStyle* callbackStyle=nullptr;
+      d.callback=[&]{callbackText(d,true); callbackStyle=d.tail();};
+      d.Run(custom,false,action,custom);
+      assert(callbackStyle && callbackStyle->pAction->value=="callback");
+      assert(callbackStyle->iFlags==4 && d.m_pCurrentLine->text=="callback");
+      assert(d.m_ActiveTagList.GetCount()==1);
+      if(custom) assert(d.tail()!=callbackStyle && (d.tail()->iFlags&HILITE));
+      else assert(d.tail()==callbackStyle);
+    }
+  std::puts("output result contracts: new line, absent result, list and image identities passed");
+}
+static void lookupChecks() {
+  for(int count:{5000,500000}) {
+    CMUSHclientDoc d;
+    for(int i=1;i<count;++i) d.newLine();
+    auto* marker=d.AddStyle(START_TAG,7,0,0,"marker","","");
+    auto* result=d.AddStyle(0,7,0,0,"result","","");
+    CMXPStartTransaction tx(&d,++serial); tx.SetMarker(marker);
+    styleVisits=lineVisits=0;
+    assert(tx.IsPublishedStatePresent()); assert(tx.IsPublishedStatePresent());
+    assert(tx.ResolveStyle(result->nCreationNumber)==result);
+    assert(styleVisits==5 && lineVisits==3);
+    auto recentVisits=styleVisits;
+    styleVisits=lineVisits=0;
+    assert(tx.ResolveStyle(0)==nullptr && styleVisits==0 && lineVisits==0);
+    auto* oldest=d.m_LineList.GetHead()->styleList.GetHead();
+    assert(tx.ResolveStyle(oldest->nCreationNumber)==oldest);
+    assert(lineVisits==static_cast<unsigned>(count));
+    assert(tx.ResolveStyle(-1)==nullptr);
+    tx.Commit();
+    std::printf("lines=%d, styles visited for two marker checks and result=%llu\n",count,static_cast<unsigned long long>(recentVisits));
+  }
+}
+static void rollbackChecks() {
+  // Restore an empty preserved style via the opening marker. Retain identities.
+  for(bool repurposed:{false,true}) {
+    CMUSHclientDoc d;
+    auto* preserved=d.tail();
+    preserved->pAction=new CAction("preserved");
+    auto id=preserved->nCreationNumber, range=preserved->nRangeCreationNumber;
+    preserved->nOutputAppendCreationNumber=77;
+    CMXPStartTransaction tx(&d,++serial); tx.PreserveStyle(preserved);
+    delete d.m_pCurrentLine->styleList.RemoveTail();
+    auto* marker=d.AddStyle(START_TAG,1,2,0,"marker","",""); tx.SetMarker(marker);
+    auto* result=d.AddStyle(1,1,2,0,"result","",""); tx.SetStyle(result);
+    if(repurposed) { marker->iFlags=0; marker->iLength=4; d.m_pCurrentLine->text="kept"; }
+    tx.Rollback();
+    assert(d.tail()==marker && marker->nCreationNumber==id && marker->nRangeCreationNumber==range);
+    assert(marker->nOutputAppendCreationNumber==77 && marker->pAction->value=="preserved");
+    assert(marker->pAction->refs==1);
+    if(repurposed) assert(marker->iLength==4 && d.m_pCurrentLine->text=="kept");
+  }
+  // The same address with a new creation number is a different style.
+  {
+    CMUSHclientDoc d; CMXPStartTransaction tx(&d,++serial);
+    CStyle* s=d.tail(); auto oldIdentity=s->nCreationNumber;
+    tx.SetStyle(s); s->nCreationNumber=++serial;
+    assert(tx.ResolveStyle(oldIdentity)==nullptr);
+    assert(tx.ResolveStyle(s->nCreationNumber)==s);
+    tx.Rollback(); assert(d.tail()==s);
+  }
+  // Missing marker with surviving result, and a missing result after pruning.
+  for(bool pruneResult:{false,true}) {
+    CMUSHclientDoc d; CMXPStartTransaction tx(&d,++serial);
+    auto* s=d.tail(); auto id=s->nCreationNumber, range=s->nRangeCreationNumber;
+    tx.PreserveStyle(s); delete d.m_pCurrentLine->styleList.RemoveTail();
+    auto* marker=d.AddStyle(START_TAG,7,0,0,"marker","",""); tx.SetMarker(marker);
+    delete d.m_pCurrentLine->styleList.RemoveTail();
+    auto* result=d.AddStyle(0,7,0,0,"result","",""); tx.SetStyle(result);
+    if(pruneResult) deleteOutput(d);
+    tx.Rollback();
+    assert(d.tail());
+    if(!pruneResult) assert(d.tail()->nCreationNumber==id && d.tail()->nRangeCreationNumber==range);
+  }
+  std::puts("MXP rollback contracts: restored identities, repurposed marker, pruned styles passed");
+}
+int main() { packetChecks(); outputChecks(); rollbackChecks(); lookupChecks(); }

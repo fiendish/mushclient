@@ -93,6 +93,7 @@
 #include <iterator>
 #include <sstream>
 #include <memory>
+#include <exception>
 #pragma warning (pop)
 
 #ifdef LUA_52
@@ -676,16 +677,15 @@ enum
               _CrtSetDbgFlag((a) | _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
   #define  CLEAR_CRT_DEBUG_FIELD(a) \
               _CrtSetDbgFlag(~(a) & _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
-//  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
 //  #define DELETESTYLE(arg) DeleteStyle (arg, __FILE__, __LINE__)
-  #define NEWSTYLE new CStyle
+  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
   #define DELETESTYLE(arg) delete arg
 
 #else
   #define  SET_CRT_DEBUG_FIELD(a)   ((void) 0)
   #define  CLEAR_CRT_DEBUG_FIELD(a) ((void) 0)
 
-  #define NEWSTYLE new CStyle
+  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
   #define DELETESTYLE(arg) delete arg
 #endif
 
