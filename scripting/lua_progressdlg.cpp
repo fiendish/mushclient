@@ -14,6 +14,7 @@
 
 
 #include "stdafx.h"
+#include <new>
 #include "..\MUSHclient.h"
 #include "..\mainfrm.h"
 
@@ -135,6 +136,11 @@ static int Lprogress_new(lua_State *L)
     if (!e->GetErrorMessage (errorMessage, sizeof errorMessage))
       errorMessage [0] = '\0';
     e->Delete ();
+    }
+  catch (const std::bad_alloc &)
+    {
+    // Use the fallback message after allocation failure and C++ cleanup.
+    errorMessage [0] = '\0';
     }
 
   // Lua can longjmp here, after the C++ objects and exception are released.

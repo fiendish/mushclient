@@ -341,6 +341,7 @@ void CMUSHclientDoc::OnScriptFileChanged(const bool bForce)
   if (!bForce && m_nReloadOption == eReloadNever)
     return;
 
+  CWorldDocumentOperationGuard operationGuard (this);
   CBoolStateGuard scriptFileChangedGuard (m_bInScriptFileChanged, true);
 
 	// Check if this script file has changed

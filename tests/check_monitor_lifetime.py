@@ -6,17 +6,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+from cpp_blocks import block
 
-def block(text, signature):
-    start = text.index(signature)
-    brace = text.index('{', start)
-    depth = 0
-    for end in range(brace, len(text)):
-        depth += (text[end] == '{') - (text[end] == '}')
-        if depth == 0:
-            return text[start:end + 1]
-    raise ValueError(signature)
+ROOT = Path(__file__).resolve().parents[1]
 
 text = (ROOT / 'TextDocument.cpp').read_text()
 start = text.index('// ------------------- file change monitoring thread')

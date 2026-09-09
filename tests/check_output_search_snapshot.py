@@ -10,18 +10,9 @@ import shutil
 import subprocess
 import tempfile
 
+from cpp_blocks import block
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def block(text, signature):
-    start = text.index(signature)
-    brace = text.index('{', start)
-    depth = 0
-    for end in range(brace, len(text)):
-        depth += (text[end] == '{') - (text[end] == '}')
-        if depth == 0:
-            return text[start:end + 1]
-    raise ValueError(f'Unclosed production block: {signature}')
 
 
 def compiler_command():
@@ -65,13 +56,15 @@ def main():
     print(f'Artifacts: {out}', flush=True)
     compiler = compiler_command()
     flags = ['-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
-             '-fno-omit-frame-pointer']
+             '-fno-sanitize-recover=all', '-fno-omit-frame-pointer']
+    environment = dict(os.environ, ASAN_OPTIONS='halt_on_error=1',
+                       UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
     cpp = out / 'output_search_snapshot.cpp'
     cpp.write_text(template)
     for mode, extra in [('release', []), ('debug', ['-D_DEBUG'])]:
         exe = out / mode
         subprocess.run([*compiler, *flags, *extra, str(cpp), '-o', str(exe)], check=True)
-        subprocess.run([str(exe)], check=True, timeout=30)
+        subprocess.run([str(exe)], check=True, timeout=30, env=environment)
 
     # Prove that neither the oracle nor the key callback guards can be removed.
     disabled = subprocess.run([*compiler, *flags, '-DNDEBUG', str(cpp), '-o', str(out / 'ndebug')],
@@ -90,7 +83,8 @@ def main():
         mutant.write_text(template.replace(before, after))
         exe = out / name
         subprocess.run([*compiler, *flags, str(mutant), '-o', str(exe)], check=True)
-        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
+                                env=environment)
         (out / (name + '.log')).write_text(result.stdout + result.stderr)
         if result.returncode == 0 or 'Assertion failed' not in result.stderr and 'Assertion ' not in result.stderr:
             raise RuntimeError(f'Mutation did not fail an assertion: {name}\n{result.stderr}')

@@ -12,18 +12,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from cpp_blocks import block
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def block(text, signature):
-    start = text.index(signature)
-    brace = text.index('{', start)
-    depth = 0
-    for end in range(brace, len(text)):
-        depth += (text[end] == '{') - (text[end] == '}')
-        if depth == 0:
-            return text[start:end + 1]
-    raise ValueError(f'Unclosed source block: {signature}')
 
 
 def main():
@@ -60,15 +51,17 @@ def main():
     assert template.count('@FUNCTIONS@') == template.count('@DISPATCH@') == 1
     cpp = out / 'hostname_lookup.cpp'
     cpp.write_text(template.replace('@FUNCTIONS@', functions).replace('@DISPATCH@', dispatch))
-    exe = out / 'hostname_lookup'
-    subprocess.run(['clang++', '-std=c++17', '-O1', '-g',
-                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
-                    str(cpp), '-o', str(exe)], check=True)
-    result = subprocess.run([str(exe)], capture_output=True, text=True)
-    (out / 'result.log').write_text(result.stdout + result.stderr)
-    print(result.stdout + result.stderr, end='')
-    print(f'Artifacts: {out}')
-    result.check_returncode()
+    print(f'Artifacts: {out}', flush=True)
+    for mode, flags in [('hostname_lookup', []), ('hostname_lookup_ndebug', ['-DNDEBUG'])]:
+        exe = out / mode
+        subprocess.run(['clang++', '-std=c++17', '-O1', '-g',
+                        '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                        *flags, str(cpp), '-o', str(exe)], check=True)
+        result = subprocess.run([str(exe)], capture_output=True, text=True)
+        log = 'result.log' if not flags else 'result-ndebug.log'
+        (out / log).write_text(result.stdout + result.stderr)
+        print(result.stdout + result.stderr, end='')
+        result.check_returncode()
 
 
 if __name__ == '__main__':

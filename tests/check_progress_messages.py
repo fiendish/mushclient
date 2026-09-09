@@ -19,22 +19,9 @@ import shutil
 import subprocess
 import tempfile
 
+from cpp_blocks import block
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def block(source, signature):
-    start = source.index(signature)
-    depth = 0
-    # Ignore braces in comments, strings and character literals.
-    tokens = r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\{|\}'
-    for token in re.finditer(tokens, source[start:]):
-        if token.group() == '{':
-            depth += 1
-        elif token.group() == '}':
-            depth -= 1
-            if depth == 0:
-                return source[start:start + token.end()]
-    raise ValueError(f'Unclosed production block: {signature}')
 
 
 def compiler_command(native):

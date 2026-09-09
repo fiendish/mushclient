@@ -2,7 +2,7 @@
 """Check the exact Lprogress_new body with the official Lua 5.1.4 C runtime.
 
 Example: python3 tests/check_lua_progress_errors.py --lua-source /tmp/lua-5.1.4/src
-Add --revision a72eea4 to test the faulty baseline (must return nonzero).
+Add --revision ce793ca to test the allocation-failure baseline (must return nonzero).
 CC and CXX select GCC-compatible C and C++17 compilers. No download is made.
 Lua sources are copied and compiled as C in the output directory. Foreign C++
 exceptions can unwind through these C frames; Lua errors still use longjmp.
@@ -10,7 +10,11 @@ Checks run with NDEBUG, then with ASan/UBSan if the compilers support them.
 
 Limits: MFC dialogs and exceptions are substitutes. The fixture supplies its own
 userdata finalizer. This does not test native MFC, Windows UI, production close
-handling, or Lua allocation failure. C++ allocation counters check string cleanup
+handling, or Lua allocation failure. C++ allocation failures are injected once
+into the real string allocation and the substitute dialog allocation. Later
+bad_alloc failures check partial construction and owned-dialog cleanup. Two
+unrelated exception types must propagate to a fixture wrapper before Lua's C
+frames; only that wrapper converts them to errors. C++ counters check cleanup
 even on platforms without LeakSanitizer. Lua and std::string are not substitutes.
 """
 import argparse
@@ -28,7 +32,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = 'scripting/lua_progressdlg.cpp'
 CASES = ['success', 'create_false', 'create_exception', 'title_exception',
-         'constructor_exception', 'message_failure', 'message_empty']
+         'constructor_exception', 'message_failure', 'message_empty',
+         'string_allocation', 'dialog_allocation', 'constructor_bad_alloc',
+         'create_bad_alloc', 'title_bad_alloc', 'unknown_std_exception',
+         'unknown_exception']
 LUA_UNITS = '''lapi lcode ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes
               lparser lstate lstring ltable ltm lundump lvm lzio lauxlib lbaselib
               ldblib liolib lmathlib loslib ltablib lstrlib loadlib linit'''.split()

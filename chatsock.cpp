@@ -169,6 +169,7 @@ void CChatSocket::StopFileTransfer (const bool bAbort)
 
 void CChatSocket::OnReceive(int nErrorCode)
 {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
 
 char buff [1000];
 int count = Receive (buff, sizeof (buff) - 1);
