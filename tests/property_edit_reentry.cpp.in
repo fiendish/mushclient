@@ -40,12 +40,13 @@ void StringToVector(const char* input,vector<string>& v,const char* delim,bool){
 }
 struct AppType{long long n=100;long long GetUniqueNumber(){return ++n;}CString GetUniqueString(){return to_string(++n);}}App;
 enum Kind{Object,Alias,Trigger,Timer,Variable};
+struct Stamp{long long value=0;Stamp(long long n=0):value(n){} Stamp& operator=(long long n){value=n;return *this;}double GetTime()const{return value;}};
 struct Regexp{long long iTimeTaken=0;};
 struct CObject{
  static constexpr Kind type=Object;
  Kind kind=Object; bool bEnabled=true,bIncluded=false,bSelected=false,bExecutingScript=false;
  int dispid=1,iSendTo=0,iUserOption=0,nInvocationCount=2,nMatched=3,nCreateSequence=1;
- long long nUpdateNumber=7,nCreationNumber=99,tWhenMatched=10,tFireTime=20,tWhenFired=15;
+ long long nUpdateNumber=7,nCreationNumber=99,tWhenMatched=10;Stamp tFireTime=20,tWhenFired=15;
  CString strLabel="example",strProcedure="handlers.callback",contents="old",strInternalName="example",strVariable;
  vector<string>wildcards;Regexp* regexp=nullptr;
  virtual ~CObject(){} bool IsKindOf(Kind k)const{return k==Object || k==kind;}
@@ -105,7 +106,7 @@ struct CDialog{
 };
 struct CGenPropertyPage{
  CMUSHclientDoc* m_doc;ObjectMap* m_ObjectMap;List list;List* m_ctlList=&list;Tree m_cTreeCtrl;
- bool m_bWantTreeControl=false,m_bReloadList=false;long long m_nUpdateNumber=7;
+ bool timer=false,m_bWantTreeControl=false,m_bReloadList=false;long long m_nUpdateNumber=7;
  CString m_strObjectType="alias";int closes=0;
  explicit CGenPropertyPage(CMUSHclientDoc* d):m_doc(d),m_ObjectMap(&d->objects){}
  void LoadDialog(CDialog* d,CObject* p){d->label=p->strLabel;d->script=p->strProcedure;d->contents=p->contents;d->enabled=p->bEnabled;}
@@ -117,7 +118,7 @@ struct CGenPropertyPage{
  bool CheckIfTemporary(CObject*){return false;}
  long long GetModificationNumber(CObject* p){return p->nUpdateNumber;}
  bool CheckIfChanged(CDialog* d,CObject* p){return d->contents!=p->contents || d->enabled!=p->bEnabled || d->label!=p->strLabel;}
- CObject* MakeNewObject(){return new CAlias;}
+ CObject* MakeNewObject(){return timer?static_cast<CObject*>(new CTimer):new CAlias;}
  void SetInternalName(CObject* p,const CString& s){p->strInternalName=s;}
  void SetDispatchID(CObject* p,DISPID id){p->dispid=id;}
  int add_list_item(CObject* p,CString* s,int n,int insert){p->nUpdateNumber=m_nUpdateNumber;if(insert){list.rows.push_back({s});return list.rows.size()-1;}list.rows.at(n).name=s;return n;}
@@ -129,11 +130,11 @@ void SortPropertyObjects(CMUSHclientDoc*,CObject*,const set<CObject*>* =nullptr)
 @EXACT@
 
 int main(){
- for(bool tree:{false,true}) for(int mode=0;mode<9;++mode){
+ for(bool tree:{false,true}) for(int mode=0;mode<11;++mode){
   probeMessages.clear();
-  CMUSHclientDoc doc;auto* initial=new CAlias;doc.objects.SetAt("example",initial);
+  CMUSHclientDoc doc;CObject* initial=mode==10?static_cast<CObject*>(new CTimer):new CAlias;doc.objects.SetAt("example",initial);
   CScriptEngine engine;doc.m_ScriptEngine=&engine;
-  CGenPropertyPage page(&doc);page.m_bWantTreeControl=tree;
+  CGenPropertyPage page(&doc);page.timer=mode==10;page.m_bWantTreeControl=tree;
   auto* name=new CString("example");HTREEITEM h=0;
   if(tree)h=page.add_tree_item(initial,name);else page.add_list_item(initial,name,0,TRUE);
   int callbacks=0;
@@ -144,14 +145,16 @@ int main(){
    if(mode==5){doc.objects.SetAt("example",new CAlias);delete initial;}
    if(mode==6) ++initial->nCreationNumber; // same pointer and update number
    if(mode==7) doc.objects.SetAt("renamed",new CAlias);
+   if(mode==9) ++initial->nMatched;
+   if(mode==10) initial->tFireTime=9999;
   };
   CDialog dialog;dialog.cancel=mode==0;dialog.edit=mode>=2;
   dialog.rename=mode==7 || mode==8;
   bool changed=page.ChangeOneItem(dialog,name,0,h);
-  CAlias* final=nullptr;
-  bool conflict=mode>=3 && mode<=7;
+  CObject* final=nullptr;
+  bool conflict=(mode>=3 && mode<=7) || mode==10;
   assert(!changed);
-  assert(page.closes==(mode==2 || mode==8?1:0));
+  assert(page.closes==(mode==2 || mode==8 || mode==9?1:0));
   assert(callbacks==(mode==0?0:1));
   assert(page.m_bReloadList==conflict);
   assert(probeMessages.empty()!=conflict);
@@ -162,8 +165,10 @@ int main(){
    assert(final->contents=="UI send" && final->bEnabled);
   } else {
    assert(doc.objects.Lookup("example",final));
-   assert(final->contents==(mode==2?"UI send":"old"));
+   assert(final->contents==(mode==2 || mode==9?"UI send":"old"));
    assert(final->bEnabled!=(mode==1 || mode==3));
+   if(mode==9) assert(final->nMatched==4);
+   if(mode==10) assert(final->tFireTime.GetTime()==9999);
    if(mode==7){CAlias* destination=nullptr;assert(doc.objects.Lookup("renamed",destination));assert(destination->contents=="old");}
   }
   cout<<(tree?"tree":"list")<<" mode="<<mode<<" PASS"<<endl;

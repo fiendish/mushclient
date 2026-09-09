@@ -76,6 +76,12 @@ def main():
     start = change.index('  std::unique_ptr<CObject> pReplacement')
     end = change.index('  CString strDispatchMessage;', start)
     preparation = change[start:end]
+    # This fixture omits script lookup. Include the later runtime transfer.
+    transfer = '  CopyPropertyRuntimeState (pItem, pUpdatedItem, bChanged);'
+    if change.count(transfer) != 1:
+        raise ValueError('Expected one property runtime-state transfer')
+    if transfer not in preparation:
+        preparation += change[change.index(transfer):change.index(transfer) + len(transfer)]
 
     load = block(prefs, 'void CPrefsP8::LoadDialog')
     unload = block(prefs, 'void CPrefsP8::UnloadDialog')

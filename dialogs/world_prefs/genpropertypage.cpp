@@ -687,6 +687,9 @@ CString strMsg;
 
   const __int64 nOriginalCreationNumber = GetPropertyCreationNumber (pItem);
   const __int64 nOriginalUpdateNumber = GetModificationNumber (pItem);
+  const bool bTimer = pItem->IsKindOf (RUNTIME_CLASS (CTimer)) != FALSE;
+  const double dOriginalFireTime = bTimer ? ((CTimer *) pItem)->tFireTime.GetTime () : 0;
+  const double dOriginalWhenFired = bTimer ? ((CTimer *) pItem)->tWhenFired.GetTime () : 0;
 
   CString strMapOldName = *pstrObjectName;
   strMapOldName.MakeLower ();
@@ -696,7 +699,6 @@ CString strMsg;
   CObject * pUpdatedItem = pReplacement.get ();
   SetPropertyCreationNumber (pUpdatedItem);
   UnloadDialog (&dlg, pUpdatedItem);
-  CopyPropertyRuntimeState (pItem, pUpdatedItem, bChanged);
   SetInternalName (pUpdatedItem, strMapName);
 
   CString strDispatchMessage;
@@ -713,7 +715,9 @@ CString strMsg;
   if (!m_ObjectMap->Lookup (strMapOldName, pLiveItem) ||
       pLiveItem != pItem ||
       GetPropertyCreationNumber (pLiveItem) != nOriginalCreationNumber ||
-      GetModificationNumber (pLiveItem) != nOriginalUpdateNumber)
+      GetModificationNumber (pLiveItem) != nOriginalUpdateNumber ||
+      (bTimer && (((CTimer *) pLiveItem)->tFireTime.GetTime () != dOriginalFireTime ||
+                  ((CTimer *) pLiveItem)->tWhenFired.GetTime () != dOriginalWhenFired)))
     {
     m_bReloadList = true;
     strMsg = TFormat ("The %s named \"%s\" has already been modified by a script subroutine",
@@ -733,6 +737,9 @@ CString strMsg;
     ::UMessageBox (strMsg);
     return false;
     }
+
+  // Callback activity can update counters without changing nUpdateNumber.
+  CopyPropertyRuntimeState (pItem, pUpdatedItem, bChanged);
 
   std::unique_ptr<CString> pRowName (new CString (strMapName));
 
