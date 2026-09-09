@@ -1,6 +1,7 @@
 """Check stored trigger destinations across preferences replacement.
 
-Run with Python 3 and clang++. --revision reads production code from Git.
+Run with Python 3 and a C++ compiler. Set CXX to select a compiler.
+--revision reads production code from Git.
 The fixture compiles the destination handling, runtime copy, and replacement
 preparation from production source. MFC types and unrelated UI work are substitutes.
 Both the normal build and the PANE branch must preserve stored names while
@@ -8,9 +9,31 @@ accepting explicit edits to the selected destination.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
+
+
+def compiler_command():
+    override = os.environ.get('CXX')
+    if override:
+        try:
+            command = shlex.split(override)
+        except ValueError as error:
+            raise SystemExit(f'Invalid CXX command: {error}') from error
+        if not command:
+            raise SystemExit('CXX must name a C++ compiler.')
+        executable = shutil.which(command[0])
+        if executable is None:
+            raise SystemExit(f'CXX compiler not found or not executable: {command[0]}')
+        return [executable, *command[1:]]
+    executable = shutil.which('clang++') or shutil.which('c++')
+    if executable is None:
+        raise SystemExit('No C++ compiler found. Set CXX or install clang++ or c++ on PATH.')
+    return [executable]
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,10 +111,11 @@ def main():
     cpp = out / 'trigger_variable_preservation.cpp'
     cpp.write_text(fixture)
     results = []
+    compiler = compiler_command()
     for pane in (False, True):
         label = 'pane' if pane else 'normal'
         exe = out / ('trigger_variable_preservation_' + label)
-        command = ['clang++', '-std=c++17', '-O1', '-g',
+        command = compiler + ['-std=c++17', '-O1', '-g',
                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                    '-fno-omit-frame-pointer']
         if pane:

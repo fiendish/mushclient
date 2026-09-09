@@ -1,6 +1,9 @@
 // Portable collection and UI substitutes surround exact production excerpts.
 #include <algorithm>
 #include <cassert>
+#ifdef NDEBUG
+#error List replacement checks require assertions.
+#endif
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -41,7 +44,24 @@ struct ObjectMap {
   void GetNextAssoc(POSITION& p,CString& key,CObject*& value){auto i=items.begin();advance(i,p-1);key=i->first;value=i->second;p=p<items.size()?p+1:0;}
   bool Lookup(const CString& key,CObject*& value){auto i=items.find(key);if(i==items.end())return false;value=i->second;return true;}
 };
-struct Control {
+// Exercise the real redraw guard with Win32 message substitutes. The
+// substitute models DefWindowProc changing WS_VISIBLE on WM_SETREDRAW.
+struct WindowState {
+  bool visible=true,redraw=true,externalDisable=false;
+  int disables=0,enables=0,invalidations=0;
+  WindowState* GetSafeHwnd(){return this;}
+};
+using HWND=WindowState*;
+constexpr int GWL_STYLE=1,WS_VISIBLE=2,WM_SETREDRAW=3,SW_HIDE=4;
+constexpr int RDW_INVALIDATE=1,RDW_ERASE=2,RDW_FRAME=4,RDW_ALLCHILDREN=8;
+constexpr bool FALSE=false;
+void* GetPropA(HWND w,const char*){return w->externalDisable?w:nullptr;}
+int GetWindowLong(HWND w,int){return w->visible?WS_VISIBLE:0;}
+void SendMessage(HWND w,int,bool on,int){w->redraw=on;w->visible=on;if(on)++w->enables;else ++w->disables;}
+void ShowWindow(HWND w,int){w->visible=false;}
+void RedrawWindow(HWND w,void*,void*,int){++w->invalidations;}
+#include "control_redraw.h"
+struct Control:WindowState {
   vector<CString*> rows;
   int failDataAt=-1,dataCalls=0;
   CString* failDeletion=nullptr;
@@ -56,7 +76,7 @@ struct Control {
   void SetSelectionMark(int){}
 };
 // Tree paths are compiled but not exercised by these list tests.
-struct Tree {
+struct Tree:WindowState {
   HTREEITEM GetRootItem(){return nullptr;}
   HTREEITEM GetNextSiblingItem(HTREEITEM){abort();}
   HTREEITEM GetChildItem(HTREEITEM){abort();}
@@ -78,6 +98,8 @@ struct CGenPropertyPage {
   Tree m_cTreeCtrl; bool m_bWantTreeControl=false; int m_nUpdateNumber=0;
   int failInsertAt=-1,failDescriptionAt=-1,insertions=0;
   bool filterEven=false;
+  bool m_bListRedrawDisabled=false,m_bTreeRedrawDisabled=false;
+  ~CGenPropertyPage(){assert(!m_bListRedrawDisabled && !m_bTreeRedrawDisabled);assert(control.redraw && m_cTreeCtrl.redraw);}
   lua_State state;
   vector<CObject> items;
   void setup(int n){items.resize(n);for(int i=0;i<n;++i){items[i].value=i;string key=to_string(i);objects.items[key]=&items[i];control.rows.push_back(new CString(key));}}
@@ -94,6 +116,26 @@ struct CGenPropertyPage {
 };
 @INSERT@
 int main(){
+  for(bool visible:{false,true})for(bool fail:{false,true}){
+    WindowState w;w.visible=visible;bool disabled=false;
+    try{CControlRedrawGuard outer(&w,disabled);
+      assert(disabled && !w.redraw);
+      {CControlRedrawGuard nested(&w,disabled);assert(w.disables==1);}
+      assert(disabled && !w.redraw && !w.enables);
+      if(fail)throw runtime_error("batch failure");
+      outer.Restore();outer.Restore();
+    }catch(const runtime_error& e){assert(string(e.what())=="batch failure");}
+    assert(!disabled && w.redraw && w.visible==visible);
+    assert(w.disables==1 && w.enables==1 && w.invalidations==1);
+  }
+  for(bool external:{false,true}){
+    WindowState w;w.redraw=false;w.visible=false;w.externalDisable=external;
+    bool disabled=!external;
+    {CControlRedrawGuard batch(&w,disabled);}
+    assert(disabled==!external && !w.redraw && !w.visible);
+    assert(w.disables==0 && w.enables==0 && w.invalidations==0);
+  }
+  cout<<"Redraw: visibility, nested batches, prior disables, and exception restoration passed\n";
   for(int n:{0,1,20})for(bool filtered:{false,true}){
     int live=CString::live;
     {CGenPropertyPage page;page.setup(n);auto old=page.control.rows;page.filterEven=filtered;page.Reload();

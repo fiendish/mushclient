@@ -1,0 +1,171 @@
+#include <algorithm>
+#include <cassert>
+#ifdef NDEBUG
+#error Property edit checks require assertions.
+#endif
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using namespace std;
+using LPCTSTR=const char*; using DWORD=uintptr_t; using UINT=unsigned;
+using __int64=long long; using BOOL=int; using DISPID=int; using HTREEITEM=uintptr_t;
+const int TRUE=1,FALSE=0,IDOK=1,DISPID_UNKNOWN=-1,MB_ICONINFORMATION=64,MB_ICONEXCLAMATION=48;
+const int LVIS_FOCUSED=1,LVIS_SELECTED=2,TVIS_EXPANDED=4,eSendToVariable=9;
+const int eOK=0,eAliasNotFound=30003;
+struct CString:string {
+ using string::string; CString()=default; CString(const string& s):string(s){}
+ operator LPCTSTR()const{return c_str();}
+ bool IsEmpty()const{return empty();}
+ void Empty(){clear();}
+ CString Left(int n)const{return substr(0,n);}
+ void MakeLower(){transform(begin(),end(),begin(),[](unsigned char c){return tolower(c);});}
+ template<class... A> void Format(const char* f,A... a){char b[1024];int n=snprintf(b,sizeof b,f,a...);assert(n>=0 && n<int(sizeof b));assign(b);}
+};
+template<class... A> CString TFormat(const char* f,A... a){CString s;s.Format(f,a...);return s;}
+CString Translate(const char* s){return s;}
+const char* ENDLINE="\r\n";
+vector<CString> probeMessages;
+void UMessageBox(const CString& s,int=0){probeMessages.push_back(s);}
+void AfxThrowResourceException(){throw runtime_error("resource failure");}
+void StringToVector(const char* input,vector<string>& v,const char* delim,bool){
+ string s=input;size_t p=0;for(;;){size_t n=s.find(delim,p);v.push_back(s.substr(p,n==string::npos?n:n-p));if(n==string::npos)break;p=n+1;}
+}
+struct AppType{long long n=100;long long GetUniqueNumber(){return ++n;}CString GetUniqueString(){return to_string(++n);}}App;
+enum Kind{Object,Alias,Trigger,Timer,Variable};
+struct Regexp{long long iTimeTaken=0;};
+struct CObject{
+ static constexpr Kind type=Object;
+ Kind kind=Object; bool bEnabled=true,bIncluded=false,bSelected=false,bExecutingScript=false;
+ int dispid=1,iSendTo=0,iUserOption=0,nInvocationCount=2,nMatched=3,nCreateSequence=1;
+ long long nUpdateNumber=7,nCreationNumber=99,tWhenMatched=10,tFireTime=20,tWhenFired=15;
+ CString strLabel="example",strProcedure="handlers.callback",contents="old",strInternalName="example",strVariable;
+ vector<string>wildcards;Regexp* regexp=nullptr;
+ virtual ~CObject(){} bool IsKindOf(Kind k)const{return k==Object || k==kind;}
+};
+struct CAlias:CObject{static constexpr Kind type=Alias;CAlias* pNextRetired=nullptr;CAlias(){kind=Alias;}};
+struct CTrigger:CObject{static constexpr Kind type=Trigger;CTrigger(){kind=Trigger;}};
+struct CTimer:CObject{static constexpr Kind type=Timer;CTimer(){kind=Timer;}};
+struct CVariable:CObject{static constexpr Kind type=Variable;CVariable(){kind=Variable;}};
+#define RUNTIME_CLASS(T) T::type
+#define ASSERT assert
+#define ASSERT_VALID(p) assert(p)
+struct ObjectMap{
+ map<CString,CObject*> entries;
+ template<class T>bool Lookup(const CString& k,T*& p){auto i=entries.find(k);if(i==entries.end())return false;p=static_cast<T*>(i->second);return true;}
+ void SetAt(const CString& k,CObject* p){entries[k]=p;}
+ void RemoveKey(const CString& k){entries.erase(k);}
+};
+struct CScriptEngine {};
+struct CMUSHclientDoc{
+ ObjectMap objects; CScriptEngine* m_ScriptEngine=nullptr;void* m_CurrentPlugin=nullptr;
+ CString m_strScriptFilename="probe.lua";CAlias* m_pRetiredAliases=nullptr;int modifications=0,enableCalls=0;
+ CScriptEngine* GetScriptEngine(){return m_ScriptEngine;}
+ ObjectMap& GetAliasMap(){return objects;}
+ void CheckObjectName(CString& s,bool){s.MakeLower();}
+ void SetModifiedFlag(int){++modifications;}
+ function<void()> onLookup;
+ DISPID GetProcedureDispid(const CString&,const CString&,const CString&,CString&){if(onLookup)onLookup();return 42;}
+ long EnableAlias(LPCTSTR,BOOL);
+ void RetireAlias(CAlias*);
+ void RetireTrigger(CTrigger* p){delete p;}
+ void RetireTimer(CTimer* p){delete p;}
+ ~CMUSHclientDoc(){for(auto& kv:objects.entries)delete kv.second;}
+};
+struct Row{CString* name;UINT state=3;};
+struct List{
+ vector<Row> rows;int mark=0;
+ ~List(){for(auto& r:rows)delete r.name;}
+ int DeleteItem(int i){rows.erase(rows.begin()+i);return TRUE;}
+ int GetItemCount(){return rows.size();}
+ int GetSelectionMark(){return mark;}
+ void SetSelectionMark(int n){mark=n;}
+ void SetItemState(int i,UINT s,UINT){rows.at(i).state=s;}
+ int SetItemData(int i,DWORD d){rows.at(i).name=(CString*)d;return TRUE;}
+ void EnsureVisible(int,int){} void RedrawItems(int,int){}
+};
+struct Tree{
+ map<HTREEITEM,Row> rows;HTREEITEM next=2;
+ ~Tree(){for(auto& kv:rows)delete kv.second.name;}
+ HTREEITEM GetParentItem(HTREEITEM){return 1;}
+ int DeleteItem(HTREEITEM h){assert(rows.erase(h)==1);return TRUE;}
+ int SetItemData(HTREEITEM h,DWORD d){rows.at(h).name=(CString*)d;return TRUE;}
+ void SetItemState(HTREEITEM,int,int){}void SelectItem(HTREEITEM){}void EnsureVisible(HTREEITEM){}
+};
+struct CDialog{
+ CString label,script,contents;bool enabled=true,edit=false,cancel=false,rename=false;
+ int DoModal(){if(edit)contents="UI send";if(rename)label="renamed";return cancel?0:IDOK;}
+};
+struct CGenPropertyPage{
+ CMUSHclientDoc* m_doc;ObjectMap* m_ObjectMap;List list;List* m_ctlList=&list;Tree m_cTreeCtrl;
+ bool m_bWantTreeControl=false,m_bReloadList=false;long long m_nUpdateNumber=7;
+ CString m_strObjectType="alias";int closes=0;
+ explicit CGenPropertyPage(CMUSHclientDoc* d):m_doc(d),m_ObjectMap(&d->objects){}
+ void LoadDialog(CDialog* d,CObject* p){d->label=p->strLabel;d->script=p->strProcedure;d->contents=p->contents;d->enabled=p->bEnabled;}
+ void UnloadDialog(CDialog* d,CObject* p){p->strLabel=d->label;p->strProcedure=d->script;p->contents=d->contents;p->bEnabled=d->enabled;}
+ CString GetObjectName(CDialog* d){return d->label;}
+ CString GetScriptName(CObject* p){return p->strProcedure;}
+ CString GetLabel(CObject* p){return p->strLabel;}
+ bool CheckIfIncluded(CObject* p){return p->bIncluded;}
+ bool CheckIfTemporary(CObject*){return false;}
+ long long GetModificationNumber(CObject* p){return p->nUpdateNumber;}
+ bool CheckIfChanged(CDialog* d,CObject* p){return d->contents!=p->contents || d->enabled!=p->bEnabled || d->label!=p->strLabel;}
+ CObject* MakeNewObject(){return new CAlias;}
+ void SetInternalName(CObject* p,const CString& s){p->strInternalName=s;}
+ void SetDispatchID(CObject* p,DISPID id){p->dispid=id;}
+ int add_list_item(CObject* p,CString* s,int n,int insert){p->nUpdateNumber=m_nUpdateNumber;if(insert){list.rows.push_back({s});return list.rows.size()-1;}list.rows.at(n).name=s;return n;}
+ HTREEITEM add_tree_item(CObject* p,CString* s){p->nUpdateNumber=m_nUpdateNumber;auto h=m_cTreeCtrl.next++;m_cTreeCtrl.rows.emplace(h,Row{s});return h;}
+ void CheckParentHasChildren(HTREEITEM){}void CancelToClose(){++closes;}
+ bool ChangeOneItem(CDialog&,CString*,int,HTREEITEM);
+};
+void SortPropertyObjects(CMUSHclientDoc*,CObject*,const set<CObject*>* =nullptr){}
+@EXACT@
+
+int main(){
+ for(bool tree:{false,true}) for(int mode=0;mode<9;++mode){
+  probeMessages.clear();
+  CMUSHclientDoc doc;auto* initial=new CAlias;doc.objects.SetAt("example",initial);
+  CScriptEngine engine;doc.m_ScriptEngine=&engine;
+  CGenPropertyPage page(&doc);page.m_bWantTreeControl=tree;
+  auto* name=new CString("example");HTREEITEM h=0;
+  if(tree)h=page.add_tree_item(initial,name);else page.add_list_item(initial,name,0,TRUE);
+  int callbacks=0;
+  doc.onLookup=[&]{
+   ++callbacks;
+   if(mode==1 || mode==3) assert(doc.EnableAlias("example",FALSE)==eOK);
+   if(mode==4){doc.objects.RemoveKey("example");delete initial;}
+   if(mode==5){doc.objects.SetAt("example",new CAlias);delete initial;}
+   if(mode==6) ++initial->nCreationNumber; // same pointer and update number
+   if(mode==7) doc.objects.SetAt("renamed",new CAlias);
+  };
+  CDialog dialog;dialog.cancel=mode==0;dialog.edit=mode>=2;
+  dialog.rename=mode==7 || mode==8;
+  bool changed=page.ChangeOneItem(dialog,name,0,h);
+  CAlias* final=nullptr;
+  bool conflict=mode>=3 && mode<=7;
+  assert(!changed);
+  assert(page.closes==(mode==2 || mode==8?1:0));
+  assert(callbacks==(mode==0?0:1));
+  assert(page.m_bReloadList==conflict);
+  assert(probeMessages.empty()!=conflict);
+  if(mode==4) assert(!doc.objects.Lookup("example",final));
+  else if(mode==8){
+   assert(!doc.objects.Lookup("example",final));
+   assert(doc.objects.Lookup("renamed",final));
+   assert(final->contents=="UI send" && final->bEnabled);
+  } else {
+   assert(doc.objects.Lookup("example",final));
+   assert(final->contents==(mode==2?"UI send":"old"));
+   assert(final->bEnabled!=(mode==1 || mode==3));
+   if(mode==7){CAlias* destination=nullptr;assert(doc.objects.Lookup("renamed",destination));assert(destination->contents=="old");}
+  }
+  cout<<(tree?"tree":"list")<<" mode="<<mode<<" PASS"<<endl;
+ }
+}

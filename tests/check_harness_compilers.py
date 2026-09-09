@@ -1,4 +1,4 @@
-"""Check compiler selection for item and plugin timer harnesses without running source extraction."""
+"""Check harness compiler selection without source extraction."""
 import ast
 import os
 from pathlib import Path
@@ -14,7 +14,8 @@ class CompilerSelectionTests(unittest.TestCase):
     def setUpClass(cls):
         cls.compilers = []
         for name in ['check_item_callbacks.py', 'check_item_publication.py',
-                     'check_plugin_timer_contracts.py']:
+                     'check_plugin_timer_contracts.py', 'check_list_replacement.py',
+                     'check_trigger_variable_preservation.py']:
             path = Path(__file__).with_name(name)
             tree = ast.parse(path.read_text(), filename=str(path))
             functions = [node for node in tree.body

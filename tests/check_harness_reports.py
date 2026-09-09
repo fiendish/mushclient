@@ -25,7 +25,7 @@ class HarnessReportTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         for name in [
             'tests/check_item_callbacks.py', 'tests/check_list_replacement.py',
-            'tests/list_replacement.cpp.in', 'xml/xml_load_world.cpp',
+            'tests/list_replacement.cpp.in', 'control_redraw.h', 'xml/xml_load_world.cpp',
             'doc.cpp', 'doc.h', 'dialogs/world_prefs/genpropertypage.cpp',
         ]:
             target = self.root / name

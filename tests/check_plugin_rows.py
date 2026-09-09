@@ -26,7 +26,7 @@ def block(text, marker):
 
 FIXTURE = r'''
 #include <algorithm>
-#include <cassert>
+#include <cstdlib>
 #include <cctype>
 #include <cstdint>
 #include <functional>
@@ -36,6 +36,8 @@ FIXTURE = r'''
 #include <string>
 #include <vector>
 using namespace std;
+// Keep fixture checks active when CXX defines NDEBUG.
+#define CHECK(value) do { if (!(value)) { cerr << __LINE__ << ": check failed: " << #value << endl; exit(1); } } while (0)
 using __int64 = long long;
 using LPARAM = intptr_t; using WPARAM = uintptr_t; using LRESULT = intptr_t;
 using DWORD = uintptr_t; using POSITION = size_t;
@@ -77,7 +79,7 @@ struct CMUSHclientDoc {
   vector<CPlugin*> m_PluginList;
   function<void(CPlugin*)> onEnable;
   void EnablePlugin(const CString& id, bool enabled) {
-    CPlugin* plugin=GetPlugin(id); assert(plugin);
+    CPlugin* plugin=GetPlugin(id); CHECK(plugin);
     plugin->m_bEnabled=enabled;
     if (onEnable) onEnable(plugin);
   }
@@ -115,7 +117,7 @@ struct Control {
   }
   void SetItemState(int, int, int) {}
   int GetNextItem(int i, int flag) const {
-    assert(flag==LVNI_SELECTED);
+    CHECK(flag==LVNI_SELECTED);
     while (++i<GetItemCount()) if (rows[i].selected) return i;
     return -1;
   }
@@ -144,11 +146,11 @@ int main() {
   CPluginsDlg dialog; dialog.m_pDoc=&doc; dialog.m_iDocumentNumber=1;
   auto& list=dialog.m_ctlPluginList;
   dialog.LoadList();
-  assert(list.GetItemData(0)==1 && list.GetItemData(1)==0);
-  assert(dialog.GetPluginForItem(0)==&other && dialog.GetPluginForItem(1)==old.get());
+  CHECK(list.GetItemData(0)==1 && list.GetItemData(1)==0);
+  CHECK(dialog.GetPluginForItem(0)==&other && dialog.GetPluginForItem(1)==old.get());
   list.rows[0].selected=list.rows[1].selected=true;
   dialog.OnKickIdle(0, 0);
-  assert(list.loads==1 && list.rows[0].selected && list.rows[1].selected);
+  CHECK(list.loads==1 && list.rows[0].selected && list.rows[1].selected);
   cout << "Unchanged sorted rows preserve selection and do not reload\n" << flush;
 
   auto replacement=make_unique<CPlugin>(*old);
@@ -158,41 +160,41 @@ int main() {
   replacement->m_strSource="new.xml"; replacement->m_bEnabled=false; replacement->m_dVersion=2;
   doc.m_PluginList={&other, replacement.get()}; old.reset();
   dialog.OnEdit();
-  assert((dialog.edited==vector<CString>{"other.xml"}));
-  assert(list.loads==1); // A stale selection must not act on its replacement before idle.
-  assert(dialog.GetPluginForItem(1)==nullptr);
+  CHECK((dialog.edited==vector<CString>{"other.xml"}));
+  CHECK(list.loads==1); // A stale selection must not act on its replacement before idle.
+  CHECK(dialog.GetPluginForItem(1)==nullptr);
   dialog.OnKickIdle(0, 0);
-  assert((list.rows[0].text==vector<CString>{
+  CHECK((list.rows[0].text==vector<CString>{
     "Aardvark", "New purpose", "New author", "Python", "new.xml", "No", " 2.00"}));
-  assert(list.loads==2 && list.GetItemData(0)==1);
-  assert(dialog.GetPluginForItem(0)==replacement.get() && dialog.GetPluginForItem(1)==&other);
-  assert(dialog.GetPluginForIndex(0)==&other);
-  assert(list.GetNextItem(-1, LVNI_SELECTED)==-1); // Keep LoadList's selection policy.
+  CHECK(list.loads==2 && list.GetItemData(0)==1);
+  CHECK(dialog.GetPluginForItem(0)==replacement.get() && dialog.GetPluginForItem(1)==&other);
+  CHECK(dialog.GetPluginForIndex(0)==&other);
+  CHECK(list.GetNextItem(-1, LVNI_SELECTED)==-1); // Keep LoadList's selection policy.
   list.rows[0].selected=true; dialog.edited.clear(); dialog.OnEdit();
-  assert((dialog.edited==vector<CString>{"new.xml"}));
+  CHECK((dialog.edited==vector<CString>{"new.xml"}));
   dialog.OnKickIdle(0, 0);
-  assert(list.loads==2 && list.rows[0].selected);
+  CHECK(list.loads==2 && list.rows[0].selected);
   cout << "Same-ID replacement refreshes metadata and sort order; stale selected edits are rejected\n" << flush;
 
   auto different=make_unique<CPlugin>(*replacement);
   different->m_strID="C"; ++different->m_iPluginInstanceNumber; different->m_dVersion=3;
   doc.m_PluginList={&other, different.get()}; replacement.reset();
-  assert(dialog.GetPluginForItem(0)==nullptr);
+  CHECK(dialog.GetPluginForItem(0)==nullptr);
   dialog.OnKickIdle(0, 0);
-  assert(list.loads==3 && list.rows[0].text[eColumnVersion]==" 3.00");
-  assert(dialog.GetPluginForItem(0)==different.get());
+  CHECK(list.loads==3 && list.rows[0].text[eColumnVersion]==" 3.00");
+  CHECK(dialog.GetPluginForItem(0)==different.get());
   cout << "Different-ID replacement still refreshes\n" << flush;
 
   list.SetItemData(0, 999); dialog.OnKickIdle(0, 0);
-  assert(list.loads==4 && dialog.GetPluginForItem(0)==different.get());
+  CHECK(list.loads==4 && dialog.GetPluginForItem(0)==different.get());
   list.rows.pop_back(); dialog.OnKickIdle(0, 0);
-  assert(list.loads==5 && list.GetItemCount()==2);
-  assert(dialog.GetPluginForIndex(-1)==nullptr);
-  assert(dialog.GetPluginForIndex(dialog.m_PluginIDs.GetSize())==nullptr);
+  CHECK(list.loads==5 && list.GetItemCount()==2);
+  CHECK(dialog.GetPluginForIndex(-1)==nullptr);
+  CHECK(dialog.GetPluginForIndex(dialog.m_PluginIDs.GetSize())==nullptr);
   dialog.m_PluginInstanceNumbers.pop_back();
-  assert(dialog.GetPluginForIndex(1)==nullptr);
+  CHECK(dialog.GetPluginForIndex(1)==nullptr);
   dialog.OnKickIdle(0, 0);
-  assert(list.loads==6 && dialog.GetPluginForIndex(1)==different.get());
+  CHECK(list.loads==6 && dialog.GetPluginForIndex(1)==different.get());
   cout << "Missing instance metadata rejects lookup and is rebuilt at idle\n";
 
   // The first selected plugin's callback replaces the second selected plugin.
@@ -208,20 +210,20 @@ int main() {
   doc.onEnable=[&](CPlugin* plugin) {
     ++calls;
     if (plugin==&first) {doc.m_PluginList[1]=next.get(); second.reset();}
-    else assert(plugin==&last);
+    else CHECK(plugin==&last);
   };
   dialog.OnEnable();
-  assert(calls==2 && first.m_bEnabled && last.m_bEnabled && !next->m_bEnabled);
-  assert(dialog.GetPluginForItem(1)==next.get());
+  CHECK(calls==2 && first.m_bEnabled && last.m_bEnabled && !next->m_bEnabled);
+  CHECK(dialog.GetPluginForItem(1)==next.get());
   doc.onEnable=nullptr;
   list.rows[1].selected=true; dialog.OnEnable();
-  assert(next->m_bEnabled); // A fresh selection still acts on the new instance.
+  CHECK(next->m_bEnabled); // A fresh selection still acts on the new instance.
   cout << "Enable callback replacement cannot retarget another selected row\n";
   const int loadsBeforeClosing=list.loads;
   ++doc.m_iUniqueDocumentNumber;
-  assert(dialog.GetPluginForItem(0)==nullptr);
+  CHECK(dialog.GetPluginForItem(0)==nullptr);
   dialog.OnKickIdle(0, 0);
-  assert(dialog.closed && list.loads==loadsBeforeClosing);
+  CHECK(dialog.closed && list.loads==loadsBeforeClosing);
   cout << "Invalid row data, row count, and document identity retain their checks\n";
 }
 '''

@@ -130,10 +130,27 @@ def main():
     log.write_text(result.stdout + result.stderr)
     print(result.stdout + result.stderr, end='', flush=True)
     result.check_returncode()
+    argument_checks = []
+    for label, arguments, diagnostic in (
+            ('missing-phase', [], 'argc == 2'),
+            ('extra-phase', ['all', 'extra'], 'argc == 2'),
+            ('unknown-phase', ['unknown'], 'phase == "guards"'),
+            ('empty-phase', [''], 'phase == "guards"')):
+        invocation = [str(binary), *arguments]
+        invalid = subprocess.run(invocation, capture_output=True, text=True)
+        invalid_log = output / f'{label}.log'
+        invalid_log.write_text(invalid.stdout + invalid.stderr)
+        if invalid.returncode != 1 or diagnostic not in invalid.stderr or invalid.stdout:
+            print(invalid.stdout + invalid.stderr, end='', flush=True)
+            raise AssertionError(f'{label} did not fail at argument validation.')
+        argument_checks.append({'name': label, 'command': invocation,
+                                'exit_code': invalid.returncode, 'log': str(invalid_log)})
+        print(f'{label}: rejected at argument validation', flush=True)
     report.write_text(json.dumps({
         'revision': args.revision or 'working-tree', 'source_sha256': inputs,
         'fixture_sha256': hashlib.sha256(fixture.read_bytes()).hexdigest(),
         'copy_checks': checks, 'runtime_command': cmd, 'runtime_log': str(log),
+        'argument_checks': argument_checks,
         'status': 'pass',
         'limits': 'MFC strings, maps, time, and output are substitutes. '
                   'Only the DebugHelper entry and timer branch are compiled. '

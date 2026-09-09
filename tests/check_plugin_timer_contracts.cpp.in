@@ -183,23 +183,65 @@ void CheckTimerOutput() {
     for (size_t i = 0; i < doc.colours.size(); ++i)
         CHECK(doc.colours[i] == (i >= 4 && i < 8 ? "gray" : "#0080FF"));
 
-    // Equal fire times keep the last timer in map enumeration order.
-    for (bool reverseOrder : {false, true}) {
+    // Retain equal deadlines, including disabled and never-scheduled timers.
+    for (bool pluginContext : {false, true}) for (bool reverseOrder : {false, true})
+    for (double deadline : {0.0, 120.0})
+    for (bool firstEnabled : {false, true}) for (bool secondEnabled : {false, true}) {
         CMUSHclientDoc equal;
         CPlugin plugin;
         equal.availablePlugin = &plugin;
         equal.m_CurrentPlugin = &previous;
-        late.tFireTime.seconds = named.tFireTime.seconds = 0;
-        plugin.m_TimerMap.entries = {{"*late", &late}, {"internal-name", &named}};
-        if (reverseOrder) reverse(plugin.m_TimerMap.entries.begin(), plugin.m_TimerMap.entries.end());
-        const string label = reverseOrder ? "*late" : "Visible Label";
-        equal.DebugHelper("timerlist", "_0123456789abcdef01234567_");
-        CHECK(equal.m_CurrentPlugin == &previous && equal.m_TimerMap.visits == 0);
-        CHECK(equal.links.size() == 1 && equal.links[0].second == label);
-        CHECK(equal.links[0].first == "!!" DEBUG_PLUGIN_ID ":showtimer(_0123456789abcdef01234567_" + label + ")");
-        CHECK(equal.output == "\n(For plugin: Fixture plugin)\n------ Timer List (firing order) ------\n\n"
-                              "  1.  Enabled : " + label + "    At 01:02:3.50\n1 timer.\n");
+        CTimer first, second, before, after;
+        first.tFireTime.seconds = second.tFireTime.seconds = deadline;
+        first.strLabel = "Visible Label";
+        first.bEnabled = firstEnabled;
+        second.bEnabled = secondEnabled;
+        second.iType = CTimer::eInterval;
+        before.tFireTime.seconds = deadline - 10;
+        after.tFireTime.seconds = deadline + 10;
+        CTimerMap &selected = pluginContext ? plugin.m_TimerMap : equal.m_TimerMap;
+        selected.entries = {{"*after", &after}, {"internal-name", &first},
+                            {"*interval", &second}, {"*before", &before}};
+        if (reverseOrder) reverse(selected.entries.begin(), selected.entries.end());
+        const string prefix = pluginContext ? "_0123456789abcdef01234567_" : "";
+        equal.DebugHelper("timerlist", prefix.c_str());
+        CHECK(equal.m_CurrentPlugin == &previous && previous.m_TimerMap.visits == 0);
+        CHECK(selected.starts == 1 && selected.visits == 4);
+        CHECK((pluginContext ? equal.m_TimerMap : plugin.m_TimerMap).visits == 0);
+        CHECK(equal.links.size() == 4);
+        const vector<string> labels = reverseOrder
+            ? vector<string>{"*before", "*interval", "Visible Label", "*after"}
+            : vector<string>{"*before", "Visible Label", "*interval", "*after"};
+        string expected = pluginContext ? "\n(For plugin: Fixture plugin)" : "";
+        expected += "\n------ Timer List (firing order) ------\n\n";
+        size_t colourIndex = 0;
+        for (size_t i = 0; i < labels.size(); ++i) {
+            const bool interval = labels[i] == "*interval";
+            const bool disabled = interval ? !secondEnabled
+                : labels[i] == "Visible Label" ? !firstEnabled : false;
+            CHECK(equal.links[i].second == labels[i]);
+            CHECK(equal.links[i].first == "!!" DEBUG_PLUGIN_ID ":showtimer(" + prefix + labels[i] + ")");
+            expected += CFormat("%3i. %8s : %s %5s 01:02:3.50", int(i + 1),
+                                disabled ? "DISABLED" : "Enabled", labels[i].c_str(),
+                                interval ? "Every" : "At").value;
+            const double fireTime = deadline + (i == 0 ? -10 : i == 3 ? 10 : 0);
+            if (fireTime > 0)
+                expected += CFormat(" - firing in %8.1f seconds.", fireTime - 100).value;
+            expected += "\n";
+            for (int segment = 0; segment < (fireTime > 0 ? 4 : 3); ++segment) {
+                CHECK(colourIndex < equal.colours.size());
+                CHECK(equal.colours[colourIndex++] == (disabled ? "gray" : "#0080FF"));
+            }
+        }
+        CHECK(colourIndex == equal.colours.size());
+        CHECK(equal.output == expected + "4 timers.\n");
     }
+    CMUSHclientDoc single;
+    single.m_TimerMap.entries = {{"internal-name", &named}};
+    single.DebugHelper("timerlist", "");
+    CHECK(single.output == "\n------ Timer List (firing order) ------\n\n"
+                           "  1.  Enabled : Visible Label    At 01:02:3.50 - firing in      0.0 seconds.\n"
+                           "1 timer.\n");
     CMUSHclientDoc empty;
     empty.m_bEnableTimers = false;
     empty.m_iConnectPhase = 0;
@@ -236,6 +278,7 @@ void CheckTimerTraversal() {
 int main(int argc, char **argv) {
     CHECK(argc == 2);
     const string phase = argv[1];
+    CHECK(phase == "guards" || phase == "timers" || phase == "all");
     if (phase == "guards" || phase == "all") CheckGuards();
     if (phase == "timers" || phase == "all") {
         CheckTimerOutput();

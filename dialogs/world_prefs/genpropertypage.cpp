@@ -5,6 +5,7 @@
 #include "genpropertypage.h"
 #include "..\EditMultiLine.h"
 #include <functional>
+#include "../../control_redraw.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -106,6 +107,17 @@ static void CopyPropertyRuntimeState (CObject * pOldItem, CObject * pNewItem,
     ((CVariable *) pNewItem)->bSelected = ((CVariable *) pOldItem)->bSelected;
   }
 
+static __int64 GetPropertyCreationNumber (const CObject * pItem)
+  {
+  if (pItem->IsKindOf (RUNTIME_CLASS (CAlias)))
+    return ((const CAlias *) pItem)->nCreationNumber;
+  if (pItem->IsKindOf (RUNTIME_CLASS (CTrigger)))
+    return ((const CTrigger *) pItem)->nCreationNumber;
+  if (pItem->IsKindOf (RUNTIME_CLASS (CTimer)))
+    return ((const CTimer *) pItem)->nCreationNumber;
+  return 0;  // variables have no script lookup callback
+  }
+
 static void SetPropertyCreationNumber (CObject * pItem)
   {
   if (pItem->IsKindOf (RUNTIME_CLASS (CAlias)))
@@ -174,6 +186,8 @@ CGenPropertyPage::CGenPropertyPage(const UINT nID) :
   m_iColumnCount        = 0;
   m_bWantTreeControl    = false;
   m_bReloadList         = false;
+  m_bListRedrawDisabled = false;
+  m_bTreeRedrawDisabled = false;
 
 
 }   // end of CGenPropertyPage::CGenPropertyPage
@@ -671,6 +685,9 @@ CString strMsg;
     return false;
     }
 
+  const __int64 nOriginalCreationNumber = GetPropertyCreationNumber (pItem);
+  const __int64 nOriginalUpdateNumber = GetModificationNumber (pItem);
+
   CString strMapOldName = *pstrObjectName;
   strMapOldName.MakeLower ();
   const CString strMapName = bNameChanged ? strObjectName : strMapOldName;
@@ -689,6 +706,33 @@ CString strMsg;
                                                m_strObjectType,
                                                GetLabel (pUpdatedItem),
                                                strDispatchMessage));
+
+  // Script lookup can run Lua table callbacks. Keep their changes instead
+  // of overwriting them with the replacement prepared before the callback.
+  CObject * pLiveItem = NULL;
+  if (!m_ObjectMap->Lookup (strMapOldName, pLiveItem) ||
+      pLiveItem != pItem ||
+      GetPropertyCreationNumber (pLiveItem) != nOriginalCreationNumber ||
+      GetModificationNumber (pLiveItem) != nOriginalUpdateNumber)
+    {
+    m_bReloadList = true;
+    strMsg = TFormat ("The %s named \"%s\" has already been modified by a script subroutine",
+                  (LPCTSTR) m_strObjectType,
+                  (LPCTSTR) strMapOldName);
+    ::UMessageBox (strMsg);
+    return false;
+    }
+
+  if (bNameChanged && m_ObjectMap->Lookup (strMapName, pLiveItem))
+    {
+    m_bReloadList = true;
+    strMsg = TFormat ("The %s named \"%s\" already exists in the %s list",
+                  (LPCTSTR) m_strObjectType,
+                  (LPCTSTR) strMapName,
+                  (LPCTSTR) m_strObjectType);
+    ::UMessageBox (strMsg);
+    return false;
+    }
 
   std::unique_ptr<CString> pRowName (new CString (strMapName));
 
@@ -1391,6 +1435,10 @@ void CGenPropertyPage::LoadList (void)
         bFiltering = false;
     }
 
+  // Defer native layout and paint work while both row sets coexist.
+  CControlRedrawGuard listRedraw (m_ctlList->GetSafeHwnd (), m_bListRedrawDisabled);
+  CControlRedrawGuard treeRedraw (m_cTreeCtrl.GetSafeHwnd (), m_bTreeRedrawDisabled);
+
   CString strObjectName;
   CObject * pItem;
   vector<CString> objectNames;
@@ -1537,6 +1585,11 @@ void CGenPropertyPage::LoadList (void)
 
   // sort filtered items
   SortItems ();
+
+  // EnsureVisible needs the layout that native controls defer during a batch.
+  // Restore before selection, scrolling, and the final visibility changes.
+  treeRedraw.Restore ();
+  listRedraw.Restore ();
 
   bool bSelected = false;
 

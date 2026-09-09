@@ -54,9 +54,19 @@ def main():
     header = source('doc.h')
     manual = between(send, '    } // end of auto say', '    }  // end not auto-say')
     manual = manual[manual.index('    pDoc->m_iExecutionDepth = 0;'):]
-    depth_info = re.search(r'case\s+230\s*:.*?break;', info).group()
-    depth_limit = re.search(r'^#define MAX_EXECUTION_DEPTH\s+\d+.*$',
-                            header, re.MULTILINE).group()
+    depth_case = re.search(
+        r'^\s*case\s+230\s*:.*?(?=^\s*(?:case\b|default\s*:)|\Z)',
+        info, re.MULTILINE | re.DOTALL)
+    if depth_case is None:
+        raise ValueError('scripting/methods/methods_info.cpp: missing case 230')
+    depth_info = depth_case.group()
+    if re.search(r'\bbreak\s*;', depth_info) is None:
+        raise ValueError('scripting/methods/methods_info.cpp: case 230 has no break')
+    depth_macro = re.search(r'^#define MAX_EXECUTION_DEPTH\s+\d+.*$',
+                            header, re.MULTILINE)
+    if depth_macro is None:
+        raise ValueError('doc.h: missing numeric MAX_EXECUTION_DEPTH definition')
+    depth_limit = depth_macro.group()
     parts = {
         '@EXECUTE@': between(methods, 'long CMUSHclientDoc::Execute(',
                             'long CMUSHclientDoc::DoCommand('),

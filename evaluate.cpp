@@ -814,7 +814,7 @@ bool bStagedReplacementPublished = false;
               {
               bNotifyPluginListChanged = EndPluginListChangedDeferral ();
               if (bNotifyPluginListChanged)
-                PluginListChanged ();
+                m_bPluginListChangedPending = true;
               throw;
               }
             if (bNotifyPluginListChanged)
@@ -849,7 +849,7 @@ bool bStagedReplacementPublished = false;
               {
               bNotifyPluginListChanged = EndPluginListChangedDeferral ();
               if (bNotifyPluginListChanged)
-                PluginListChanged ();
+                m_bPluginListChangedPending = true;
               throw;
               }
             if (bNotifyPluginListChanged)
@@ -891,7 +891,7 @@ bool bStagedReplacementPublished = false;
               {
               bNotifyPluginListChanged = EndPluginListChangedDeferral ();
               if (bNotifyPluginListChanged)
-                PluginListChanged ();
+                m_bPluginListChangedPending = true;
               throw;
               }
             if (bNotifyPluginListChanged)

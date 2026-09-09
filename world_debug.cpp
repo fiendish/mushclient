@@ -1964,7 +1964,7 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
     int iCount = 0;
     CmcDateTime timeNow = CmcDateTime::GetTimeNow ();
 
-    map<double, pair<CTimer *, CString> > sortedTimers;
+    multimap<double, pair<CTimer *, CString> > sortedTimers;
 
     // put into map for sorting into firing order
     for (pos = GetTimerMap ().GetStartPosition(); pos; )
@@ -1974,12 +1974,13 @@ void CMUSHclientDoc::DebugHelper (const CString strAction, CString strArgument)
 
       GetTimerMap ().GetNextAssoc (pos, strName, pTimer);
 
-      sortedTimers [pTimer->tFireTime.GetTime ()] = make_pair (pTimer, strName);
+      sortedTimers.insert (
+        make_pair (pTimer->tFireTime.GetTime (), make_pair (pTimer, strName)));
       } // end of for loop
 
       
     // now pull out of map and display
-    for (map<double, pair<CTimer *, CString> >::const_iterator it = sortedTimers.begin ();
+    for (multimap<double, pair<CTimer *, CString> >::const_iterator it = sortedTimers.begin ();
          it != sortedTimers.end ();
          it++, iCount++)
            {
