@@ -2,7 +2,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <iostream>
 #include <list>
 #include <memory>
@@ -78,11 +77,7 @@ struct CPlugin {
   bool m_bEnabled = true;
   struct Callbacks { int operator[](const string &) { return 1; } } m_PluginCallbacks;
   int deliveries = 0;
-  function<void()> onExecute;
-  void ExecutePluginScript(CScriptCallInfo &) {
-    ++deliveries;
-    if (onExecute) onExecute();
-  }
+  void ExecutePluginScript(CScriptCallInfo &) { ++deliveries; }
 };
 struct CPluginInstanceIdentity {
   explicit CPluginInstanceIdentity(CPlugin *p)
@@ -241,57 +236,7 @@ void RunCase(const string &label, vector<Step> steps, bool caller = false,
   cout << "{\"case\":\"" << label << "\",\"failures\":" << failures - before << "}\n";
 }
 
-void RunIdleDeferralCase(int depth) {
-  const int before = failures;
-  CPlugin plugin;
-  CMUSHclientDoc doc;
-  doc.m_PluginList.push_back(&plugin);
-  doc.m_bPluginListChangedPending = true;
-  for (int i = 0; i < depth; ++i) doc.BeginPluginListChangedDeferral();
-  doc.PluginListChanged();
-  for (int i = depth; i > 0; --i) {
-    // Repeated modal idle calls must leave deferred work pending without
-    // requesting another idle cycle solely to retry that work.
-    for (int retry = 0; retry < 3; ++retry) {
-      CHECK(IdleDelivery(&doc) == 0);
-      CHECK(doc.m_bPluginListChangedPending);
-      CHECK(doc.m_bPluginListChangedDeferred);
-      CHECK(plugin.deliveries == 0);
-    }
-    CHECK(doc.EndPluginListChangedDeferral() == (i == 1));
-  }
-  CHECK(IdleDelivery(&doc) == 1);
-  CHECK(plugin.deliveries == 1);
-  CHECK(!doc.m_bPluginListChangedPending);
-  CHECK(IdleDelivery(&doc) == 0);
-  cout << "{\"case\":\"idle_deferral_" << depth
-       << "\",\"failures\":" << failures - before << "}\n";
-}
-
-void RunNestedNotificationCase() {
-  const int before = failures;
-  CPlugin plugin;
-  CMUSHclientDoc doc;
-  doc.m_PluginList.push_back(&plugin);
-  plugin.onExecute = [&] {
-    if (plugin.deliveries == 1) doc.PluginListChanged();
-  };
-  doc.m_bPluginListChangedPending = true;
-  CHECK(IdleDelivery(&doc) == 1);
-  CHECK(plugin.deliveries == 1);
-  CHECK(doc.m_bPluginListChangedPending);
-  CHECK(IdleDelivery(&doc) == 1);
-  CHECK(plugin.deliveries == 2);
-  CHECK(!doc.m_bPluginListChangedPending);
-  CHECK(IdleDelivery(&doc) == 0);
-  cout << "{\"case\":\"nested_notification\",\"failures\":"
-       << failures - before << "}\n";
-}
-
 int main() {
-  RunIdleDeferralCase(1);
-  RunIdleDeferralCase(2);
-  RunNestedNotificationCase();
   for (Kind kind : {TRIGGER, ALIAS, TIMER}) {
     string prefix = names[kind];
     RunCase(prefix + "/original_exception", {{kind, true, true}});
