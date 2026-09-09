@@ -27,6 +27,7 @@ CPluginsDlg::CPluginsDlg(CWnd* pParent /*=NULL*/)
 	//}}AFX_DATA_INIT  
 
   m_pDoc = NULL;
+  m_iDocumentNumber = 0;
 
 // default to sorting in name order
 
@@ -86,6 +87,9 @@ END_MESSAGE_MAP()
 
 BOOL CPluginsDlg::OnInitDialog() 
 {
+	if (!m_pDoc)
+	  return FALSE;
+	m_iDocumentNumber = m_pDoc->m_iUniqueDocumentNumber;
 	CDialog::OnInitDialog();
 	
 int iColOrder [eColumnCount] = {0, 1, 2, 3, 4, 5, 6},
@@ -130,12 +134,17 @@ static int CALLBACK CompareFunc ( LPARAM lParam1,
                                  LPARAM lParam2,
                                  LPARAM lParamSort)
   { 
- CPlugin * item1 = (CPlugin *) lParam1;
- CPlugin * item2 = (CPlugin *) lParam2;
+ CPluginsDlg * pDialog = (CPluginsDlg *) lParamSort;
+ CPlugin * item1 = pDialog->GetPluginForIndex ((int) lParam1);
+ CPlugin * item2 = pDialog->GetPluginForIndex ((int) lParam2);
+
+ if (!item1 || !item2)
+   return pDialog->GetPluginIDForIndex ((int) lParam1).CompareNoCase (
+          pDialog->GetPluginIDForIndex ((int) lParam2));
 
 int iResult;
 
-  switch (lParamSort & 0xFF)   // which sort key
+  switch (pDialog->m_last_col)   // which sort key
     {
     case eColumnName:
       iResult = item1->m_strName.CompareNoCase (item2->m_strName); 
@@ -172,12 +181,51 @@ int iResult;
 
 // if reverse sort wanted, reverse sense of result
 
-  if (lParamSort & 0xFF00)
+  if (pDialog->m_reverse)
     iResult *= -1;
 
   return iResult;
 
   } // end of CompareFunc
+
+CMUSHclientDoc * CPluginsDlg::GetLiveDocument (void) const
+  {
+  if (!m_pDoc)
+    return NULL;
+
+  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
+    {
+    CMUSHclientDoc * pDoc =
+      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+    if (pDoc == m_pDoc && pDoc->m_iUniqueDocumentNumber == m_iDocumentNumber)
+      return pDoc;
+    }
+
+  return NULL;
+  }
+
+CString CPluginsDlg::GetPluginIDForIndex (const int iIndex) const
+  {
+  if (iIndex < 0 || iIndex >= m_PluginIDs.GetSize ())
+    return "";
+  return m_PluginIDs [iIndex];
+  }
+
+CPlugin * CPluginsDlg::GetPluginForIndex (const int iIndex) const
+  {
+  CMUSHclientDoc * pDoc = GetLiveDocument ();
+  CString strPluginID = GetPluginIDForIndex (iIndex);
+  if (!pDoc || strPluginID.IsEmpty ())
+    return NULL;
+  return pDoc->GetPlugin (strPluginID);
+  }
+
+CPlugin * CPluginsDlg::GetPluginForItem (const int nItem) const
+  {
+  if (nItem < 0 || nItem >= m_ctlPluginList.GetItemCount ())
+    return NULL;
+  return GetPluginForIndex ((int) m_ctlPluginList.GetItemData (nItem));
+  }
 
 void CPluginsDlg::LoadList (void)
   {
@@ -185,9 +233,17 @@ void CPluginsDlg::LoadList (void)
 int nItem = 0;
 
   m_ctlPluginList.DeleteAllItems ();
+  m_PluginIDs.RemoveAll ();
 
-  for (PluginListIterator pit = m_pDoc->m_PluginList.begin (); 
-       pit != m_pDoc->m_PluginList.end (); 
+  CMUSHclientDoc * pDoc = GetLiveDocument ();
+  if (!pDoc)
+    {
+    EndDialog (IDCANCEL);
+    return;
+    }
+
+  for (PluginListIterator pit = pDoc->m_PluginList.begin ();
+       pit != pDoc->m_PluginList.end ();
        ++pit, nItem++)
     {
     CPlugin * p = *pit;
@@ -199,11 +255,12 @@ int nItem = 0;
 	  m_ctlPluginList.SetItemText (nItem, eColumnFile, p->m_strSource);
     m_ctlPluginList.SetItemText (nItem, eColumnEnabled, p->m_bEnabled ? "Yes" : "No");
     m_ctlPluginList.SetItemText (nItem, eColumnVersion, CFormat ("%5.2f", p->m_dVersion));
-    m_ctlPluginList.SetItemData (nItem, (DWORD) p);
+    int iPluginID = m_PluginIDs.Add (p->m_strID);
+    m_ctlPluginList.SetItemData (nItem, (DWORD) iPluginID);
 
     }
 
-  m_ctlPluginList.SortItems (CompareFunc, m_reverse << 8 | m_last_col); 
+  m_ctlPluginList.SortItems (CompareFunc, (LPARAM) this);
 
   // focus on the list but don't select anything
   m_ctlPluginList.SetItemState (0, LVIS_FOCUSED, LVIS_FOCUSED);
@@ -214,6 +271,14 @@ void CPluginsDlg::OnColumnclickPluginsList(NMHDR* pNMHDR, LRESULT* pResult)
 {
 	NM_LISTVIEW* pNMListView = (NM_LISTVIEW*)pNMHDR;
 
+  for (int nItem = 0; nItem < m_ctlPluginList.GetItemCount (); nItem++)
+    if (!GetPluginForItem (nItem))
+      {
+      LoadList ();
+      *pResult = 0;
+      return;
+      }
+
   int col = pNMListView->iSubItem;
 
   if (col == m_last_col)
@@ -223,7 +288,7 @@ void CPluginsDlg::OnColumnclickPluginsList(NMHDR* pNMHDR, LRESULT* pResult)
 
   m_last_col = col;
     
-  m_ctlPluginList.SortItems (CompareFunc, m_reverse << 8 | m_last_col); 
+  m_ctlPluginList.SortItems (CompareFunc, (LPARAM) this);
 	
 	*pResult = 0;
 } // end of CPluginsDlg::OnColumnclickPluginsList
@@ -236,7 +301,9 @@ for (int nItem = -1;
       (nItem = m_ctlPluginList.GetNextItem(nItem, LVNI_SELECTED)) != -1;)
   {
 
-  CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+  CPlugin * p = GetPluginForItem (nItem);
+  if (!p)
+    continue;
 
   PluginListIterator pit = find (m_pDoc->m_PluginList.begin (), 
                                  m_pDoc->m_PluginList.end (), 
@@ -280,7 +347,10 @@ for (int nItem = -1;
       (nItem = m_ctlPluginList.GetNextItem(nItem, LVNI_SELECTED)) != -1;)
   {
 
-  CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+  CPlugin * p = GetPluginForItem (nItem);
+
+  if (!p)
+    continue;
 
 
   // need a non-blank description for at least one of them
@@ -300,6 +370,19 @@ pCmdUI->Enable (FALSE);
 
 LRESULT CPluginsDlg::OnKickIdle(WPARAM, LPARAM)
   {
+  if (!GetLiveDocument ())
+    {
+    EndDialog (IDCANCEL);
+    return 0;
+    }
+
+  bool bReload = m_ctlPluginList.GetItemCount () != m_PluginIDs.GetSize ();
+  for (int nItem = 0; !bReload && nItem < m_ctlPluginList.GetItemCount (); nItem++)
+    bReload = GetPluginForItem (nItem) == NULL;
+
+  if (bReload)
+    LoadList ();
+
   UpdateDialogControls (AfxGetApp()->m_pMainWnd, false);
   return 0;
   } // end of CPluginsDlg::OnKickIdle
@@ -407,7 +490,9 @@ int nItem,
     {
     nItem = arySelected [i];
 
-    CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+    CPlugin * p = GetPluginForItem (nItem);
+	  if (!p)
+	    continue;
 	  
     PluginListIterator pit = find (m_pDoc->m_PluginList.begin (), 
                                    m_pDoc->m_PluginList.end (), 
@@ -415,6 +500,12 @@ int nItem,
 
     if (pit != m_pDoc->m_PluginList.end ())
       {
+      if (p->m_iActiveScriptCalls > 0)
+        {
+        ::TMessageBox ("Plugin cannot be removed while it is executing.",
+                       MB_ICONEXCLAMATION);
+        continue;
+        }
       CString strPluginID = p->m_strID;
       CString strPluginName = p->m_strName;
       m_pDoc->m_PluginList.erase (pit);  // remove from list
@@ -448,7 +539,7 @@ if (nItem == -1)
 if (nItem == 0)
  return;      // already at top
 
-CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+CPlugin * p = GetPluginForItem (nItem);
 	
   POSITION pos = m_pDoc->m_PluginList.Find (p);
 	
@@ -487,7 +578,9 @@ for (int nItem = -1;
   {
 
 
-  CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+  CPlugin * p = GetPluginForItem (nItem);
+	if (!p)
+	  continue;
 	  
 
     PluginListIterator pit = find (m_pDoc->m_PluginList.begin (), 
@@ -496,6 +589,12 @@ for (int nItem = -1;
 
     if (pit != m_pDoc->m_PluginList.end ())
       {
+      if (p->m_iActiveScriptCalls > 0)
+        {
+        ::TMessageBox ("Plugin cannot be reinstalled while it is executing.",
+                       MB_ICONEXCLAMATION);
+        continue;
+        }
       CString strName       = p->m_strSource;
       CString strPluginID   = p->m_strID;
       CString strPluginName = p->m_strName;
@@ -588,7 +687,9 @@ for (int nItem = -1;
       (nItem = m_ctlPluginList.GetNextItem(nItem, LVNI_SELECTED)) != -1;)
   {
 
-  CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+  CPlugin * p = GetPluginForItem (nItem);
+	if (!p)
+	  continue;
 	  
   PluginListIterator pit = find (m_pDoc->m_PluginList.begin (), 
                                  m_pDoc->m_PluginList.end (), 
@@ -704,7 +805,9 @@ void CPluginsDlg::OnRdblclkPluginsList(NMHDR* pNMHDR, LRESULT* pResult)
         (nItem = m_ctlPluginList.GetNextItem(nItem, LVNI_SELECTED)) != -1;)
     {
 
-    CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+    CPlugin * p = GetPluginForItem (nItem);
+	  if (!p)
+	    continue;
 	    
     PluginListIterator pit = find (m_pDoc->m_PluginList.begin (), 
                                    m_pDoc->m_PluginList.end (), 
@@ -756,7 +859,9 @@ for (int nItem = -1;
       (nItem = m_ctlPluginList.GetNextItem(nItem, LVNI_SELECTED)) != -1;)
   {
 
-  CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+  CPlugin * p = GetPluginForItem (nItem);
+	if (!p)
+	  continue;
 	  
   PluginListIterator pit = find (m_pDoc->m_PluginList.begin (), 
                                  m_pDoc->m_PluginList.end (), 
@@ -791,7 +896,9 @@ for (int nItem = -1;
       (nItem = m_ctlPluginList.GetNextItem(nItem, LVNI_SELECTED)) != -1;)
   {
 
-  CPlugin * p = (CPlugin *) m_ctlPluginList.GetItemData (nItem);
+  CPlugin * p = GetPluginForItem (nItem);
+	if (!p)
+	  continue;
 	  
   PluginListIterator pit = find (m_pDoc->m_PluginList.begin (), 
                                  m_pDoc->m_PluginList.end (), 

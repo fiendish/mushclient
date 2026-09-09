@@ -17,11 +17,8 @@ void CMUSHclientDoc::Serialize_World_XML (CArchive& ar)
   {
 	if (ar.IsStoring())
 	  {
-    CPlugin * pSavedPlugin = m_CurrentPlugin;
-    m_CurrentPlugin = NULL;   // make sure we save main triggers etc.
-    
-    try
-      {
+    CPluginContextGuard pluginContextGuard (this, NULL); // save main triggers etc.
+
     // ensure world has an ID
       if (m_strWorldID.IsEmpty ())
         m_strWorldID = GetUniqueID ();
@@ -34,16 +31,6 @@ void CMUSHclientDoc::Serialize_World_XML (CArchive& ar)
            pit != m_PluginList.end (); 
            ++pit)
          (*pit)->SaveState ();
-
-      } // end of try
-
-    catch (CException *)
-      {    
-      m_CurrentPlugin = pSavedPlugin;
-      throw;
-      }
-
-    m_CurrentPlugin = pSavedPlugin;
     }
   else
     { // loading

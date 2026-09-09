@@ -41,6 +41,10 @@ int i;
   m_TriggerMap.InitHashTable (293);  // probably won't have many more than 300 triggers
   m_TimerMap.InitHashTable (293);    // probably won't have many more than 300 timers
 
+  m_pRetiredAliases = NULL;
+  m_pRetiredTriggers = NULL;
+  m_pRetiredTimers = NULL;
+
   SetDefaults (false);        // set up numeric/boolean defaults
   SetAlphaDefaults (false);   // set up alpha defaults
 
@@ -80,6 +84,11 @@ int i;
   m_bPluginProcessingCommand = false;
   m_bPluginProcessingSend = false;
   m_bPluginProcessingSent = false;
+  m_bInPluginListChanged = false;
+  m_bPluginListChangedPending = false;
+  m_iPluginListChangedDeferralDepth = 0;
+  m_bPluginListChangedDeferred = false;
+  m_bInScreendraw = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
   m_iNextChatID = 0;
@@ -560,10 +569,24 @@ int i;
   CloseLog ();    // this writes out the log file postamble as well
 
 // delete triggers
-       
+
+  while (m_pRetiredTriggers)
+    {
+    CTrigger * pTrigger = m_pRetiredTriggers;
+    m_pRetiredTriggers = pTrigger->pNextRetired;
+    delete pTrigger;
+    }
+
   DELETE_MAP (m_TriggerMap, CTrigger); 
 
 // delete aliass
+
+  while (m_pRetiredAliases)
+    {
+    CAlias * pAlias = m_pRetiredAliases;
+    m_pRetiredAliases = pAlias->pNextRetired;
+    delete pAlias;
+    }
 
   DELETE_MAP (m_AliasMap, CAlias); 
 
@@ -572,6 +595,13 @@ int i;
   DELETE_LIST (m_LineList);
 
 // delete timer map
+
+  while (m_pRetiredTimers)
+    {
+    CTimer * pTimer = m_pRetiredTimers;
+    m_pRetiredTimers = pTimer->pNextRetired;
+    delete pTimer;
+    }
 
   DELETE_MAP (m_TimerMap, CTimer); 
   

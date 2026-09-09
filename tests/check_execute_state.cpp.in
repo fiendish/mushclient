@@ -1,0 +1,429 @@
+// Portable substitutes for the extracted Execute state checks.
+#include <algorithm>
+#include <cctype>
+#include <functional>
+#include <iostream>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+void Require(bool condition, const std::string &message)
+{
+  if (!condition)
+    throw std::runtime_error(message);
+}
+
+using LPCTSTR = const char *;
+using POSITION = size_t;
+const char *ENDLINE = "\r\n";
+const std::string ON_PLUGIN_COMMAND = "OnPluginCommand";
+@DEPTH_LIMIT@
+@ERROR_CODES@
+@GUARDS@
+
+struct CString
+{
+  std::string value;
+  static bool failConstruction;
+  CString() = default;
+  CString(const char *text)
+  {
+    if (failConstruction)
+    {
+      failConstruction = false;
+      throw std::bad_alloc();
+    }
+    value = text;
+  }
+  CString(char text) : value(1, text) {}
+  CString(const std::string &text) : value(text) {}
+  operator LPCTSTR() const { return value.c_str(); }
+  bool IsEmpty() const { return value.empty(); }
+  int GetLength() const { return static_cast<int>(value.size()); }
+  CString Left(int length) const { return value.substr(0, length); }
+  CString Mid(int start) const { return value.substr(start); }
+  void Delete(int start, int length) { value.erase(start, length); }
+  char operator[](size_t i) const { return value.at(i); }
+  CString &operator+=(char c) { value += c; return *this; }
+  bool operator==(const CString &other) const { return value == other.value; }
+  void TrimLeft()
+  {
+    value.erase(0, value.find_first_not_of(" \t\r\n"));
+  }
+  int CompareNoCase(const char *other) const
+  {
+    std::string left = value, right = other;
+    auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+    std::transform(left.begin(), left.end(), left.begin(), lower);
+    std::transform(right.begin(), right.end(), right.begin(), lower);
+    return left.compare(right);
+  }
+  void Replace(const CString &from, const CString &to)
+  {
+    Require(!from.IsEmpty(), "The replacement token must not be empty");
+    size_t pos = 0;
+    while ((pos = value.find(from.value, pos)) != std::string::npos)
+    {
+      value.replace(pos, from.value.size(), to.value);
+      pos += to.value.size();
+    }
+  }
+  void Replace(char from, char to)
+  {
+    std::replace(value.begin(), value.end(), from, to);
+  }
+};
+bool CString::failConstruction = false;
+
+CString Replace(CString text, const CString &from, const CString &to)
+{
+  text.Replace(from, to);
+  return text;
+}
+CString FixupEscapeSequences(const CString &text) { return text; }
+const char *Translate(const char *text) { return text; }
+
+struct CStringList
+{
+  std::vector<CString> values;
+  bool IsEmpty() const { return values.empty(); }
+  void AddTail(const CString &text) { values.push_back(text); }
+  POSITION GetHeadPosition() const { return values.empty() ? 0 : 1; }
+  CString GetNext(POSITION &position) const
+  {
+    CString result = values.at(position - 1);
+    position = position < values.size() ? position + 1 : 0;
+    return result;
+  }
+};
+
+void StringToList(const CString &text, const char *separator, CStringList &list)
+{
+  size_t begin = 0;
+  const std::string delimiter = separator;
+  while (begin < text.value.size())
+  {
+    size_t end = text.value.find(delimiter, begin);
+    list.AddTail(text.value.substr(begin, end - begin));
+    if (end == std::string::npos)
+      break;
+    begin = end + delimiter.size();
+  }
+}
+
+struct CPlugin {};
+struct InjectedError { int site; };
+struct ScriptEngine
+{
+  std::function<void(const CString &)> parse;
+  void Parse(const CString &command, const char *name)
+  {
+    Require(std::string(name) == "Command line", "Script context changed");
+    parse(command);
+  }
+};
+
+struct CMUSHclientDoc
+{
+  int m_iExecutionDepth = 0;
+  CPlugin *m_CurrentPlugin = nullptr;
+  CString m_strScriptPrefix = "/", m_strCommandStackCharacter = ";";
+  bool m_bEnableScripts = true, m_bInSendToScript = true;
+  bool m_enable_command_stack = false, m_bPluginProcessingCommand = false;
+  bool m_display_my_input = true, m_bTranslateBackslashSequences = false;
+  ScriptEngine engine;
+  ScriptEngine *m_ScriptEngine = &engine;
+  CPlugin callbackPlugin;
+  bool closed = false;
+  std::vector<std::string> events;
+  std::function<void(const std::string &)> onEvent;
+  std::function<bool(CString &)> onCommand;
+  std::function<bool(const CString &)> onEvaluate;
+
+  CMUSHclientDoc()
+  {
+    engine.parse = [&](const CString &command) {
+      Require(m_CurrentPlugin == nullptr, "Script must run in world context");
+      Require(!m_bInSendToScript, "Script flag must be cleared during Parse");
+      Event("parse:" + command.value);
+    };
+  }
+  void Event(const std::string &event)
+  {
+    events.push_back(event);
+    if (onEvent)
+      onEvent(event);
+  }
+  void SetUpVariantLong(long &result, long value) { result = value; }
+  long GetInfo(int type)
+  {
+    long vaResult = 0;
+    switch (type)
+    {
+      @GET_DEPTH@
+      default: throw std::runtime_error("Unsupported GetInfo fixture request");
+    }
+    return vaResult;
+  }
+  bool SendToAllPluginCallbacks(const std::string &name, CString &command)
+  {
+    Require(name == ON_PLUGIN_COMMAND, "Callback name changed");
+    Require(m_bPluginProcessingCommand, "Callback recursion flag is not set");
+    Require(m_CurrentPlugin == nullptr, "Dispatch must start in world context");
+    Event("callback:" + command.value);
+    // Model the dispatcher's temporary plugin context, not its Lua/COM engine.
+    CValueStateGuard<CPlugin *> context(m_CurrentPlugin, &callbackPlugin);
+    return onCommand ? onCommand(command) : true;
+  }
+  bool EvaluateCommand(const CString &command, bool aliases, bool &omit)
+  {
+    Require(m_CurrentPlugin == nullptr, "Evaluation must use world context");
+    Require(aliases && !omit, "Evaluation arguments changed");
+    Event("evaluate:" + command.value);
+    return onEvaluate ? onEvaluate(command) : false;
+  }
+  bool CheckConnected() { Event("connected"); return closed; }
+  bool LoggingInput() { Event("logging"); return true; }
+  void SendMsg(const char *text, bool display, bool queue, bool log)
+  {
+    Require(std::string(text) == ENDLINE && display && !queue && log,
+            "Empty-line output arguments changed");
+    Event("send");
+  }
+  void ColourNote(const char *, const char *, const char *text)
+  {
+    Event("note:" + std::string(text));
+  }
+  long Execute(LPCTSTR Command);
+};
+
+@EXECUTE@
+
+void ManualInput(CMUSHclientDoc &doc, const CString &strFullCommand)
+{
+  CMUSHclientDoc *pDoc = &doc;
+  // Exact non-auto-say reset and nested call from CSendView::SendCommand.
+  @MANUAL_INPUT@
+}
+
+void Restored(CMUSHclientDoc &doc, int entry, CPlugin *plugin)
+{
+  Require(doc.GetInfo(230) == entry,
+          "GetInfo(230): expected " + std::to_string(entry) +
+          ", got " + std::to_string(doc.GetInfo(230)));
+  Require(doc.m_CurrentPlugin == plugin, "Entry plugin context was not restored");
+  Require(!doc.m_bPluginProcessingCommand, "Callback recursion flag leaked");
+  Require(doc.m_bInSendToScript, "Script flag leaked");
+}
+
+void NormalAndOrder()
+{
+  CPlugin plugin;
+  for (int entry : {0, 3}) for (CPlugin *context : {static_cast<CPlugin *>(nullptr), &plugin})
+  {
+    CMUSHclientDoc doc;
+    doc.m_iExecutionDepth = entry;
+    doc.m_CurrentPlugin = context;
+    doc.onEvent = [&](const std::string &) {
+      Require(doc.GetInfo(230) == entry + 1, "Active depth changed");
+    };
+    Require(doc.Execute("one\r\n\r\ntwo") == eOK, "Normal result changed");
+    Restored(doc, entry, context);
+    Require(doc.events == std::vector<std::string>{
+      "callback:one", "evaluate:one", "callback:", "connected", "logging",
+      "send", "callback:two", "evaluate:two"}, "Callback/output order changed");
+  }
+}
+
+void EarlyReturnsAndFiltering()
+{
+  CPlugin plugin;
+  for (int branch = 0; branch < 6; ++branch)
+  {
+    CMUSHclientDoc doc;
+    doc.m_iExecutionDepth = 3;
+    doc.m_CurrentPlugin = &plugin;
+    if (branch == 0)
+    {
+      Require(doc.Execute("/return") == eOK, "Script return changed");
+      Require(doc.events == std::vector<std::string>{"parse:return"}, "Script order changed");
+    }
+    if (branch == 1)
+    {
+      doc.m_ScriptEngine = nullptr;
+      Require(doc.Execute("/return") == eOK, "Missing-engine return changed");
+      Require(doc.events.size() == 1 && doc.events[0].find("note:") == 0,
+              "Missing-engine warning changed");
+    }
+    if (branch == 2)
+    {
+      doc.closed = true;
+      Require(doc.Execute("") == eWorldClosed, "Closed-world return changed");
+      Require(doc.events == std::vector<std::string>{"callback:", "connected"},
+              "Closed-world output changed");
+    }
+    if (branch == 3)
+    {
+      doc.onCommand = [](CString &command) {
+        if (command.value == "veto") return false;
+        command = "changed";
+        return true;
+      };
+      Require(doc.Execute("veto\nkeep") == eOK, "Filter return changed");
+      Require(doc.events == std::vector<std::string>{
+        "callback:veto", "callback:keep", "evaluate:changed"}, "Filter order changed");
+    }
+    if (branch == 4)
+    {
+      doc.onEvaluate = [](const CString &) { return true; };
+      Require(doc.Execute("stop\nafter") == eOK, "Evaluation stop result changed");
+      Require(doc.events == std::vector<std::string>{"callback:stop", "evaluate:stop"},
+              "Commands continued after evaluation stopped");
+    }
+    if (branch == 5)
+    {
+      doc.m_enable_command_stack = true;
+      Require(doc.Execute("one;;literal;two") == eOK, "Stacked return changed");
+      Require(doc.events == std::vector<std::string>{
+        "callback:one;literal", "evaluate:one;literal", "callback:two", "evaluate:two"},
+        "Command stacking changed");
+    }
+    Restored(doc, 3, &plugin);
+  }
+}
+
+void DepthLimitAndNestedExecute()
+{
+  CPlugin plugin;
+  CMUSHclientDoc doc;
+  doc.m_CurrentPlugin = &plugin;
+  doc.onEvaluate = [&](const CString &) {
+    int active = doc.m_iExecutionDepth;
+    long result = doc.Execute("nested");
+    Require(result == (active == MAX_EXECUTION_DEPTH ? eCommandsNestedTooDeeply : eOK),
+            "Nested limit result changed");
+    Require(doc.GetInfo(230) == active, "Nested Execute did not restore caller depth");
+    Require(doc.m_CurrentPlugin == nullptr, "Nested Execute lost world context");
+    return false;
+  };
+  Require(doc.Execute("root") == eOK, "Root execution failed");
+  Restored(doc, 0, &plugin);
+  Require(doc.events.size() == 2 * MAX_EXECUTION_DEPTH, "Limit ran an extra callback");
+  doc.events.clear();
+  doc.m_iExecutionDepth = MAX_EXECUTION_DEPTH;
+  Require(doc.Execute("blocked") == eCommandsNestedTooDeeply, "Direct limit failed");
+  Restored(doc, MAX_EXECUTION_DEPTH, &plugin);
+  Require(doc.events.empty(), "Depth rejection produced callbacks or output");
+}
+
+void NestedPluginContext()
+{
+  CMUSHclientDoc doc;
+  CPlugin plugin;
+  doc.m_CurrentPlugin = &plugin;
+  doc.onCommand = [&](CString &) {
+    Require(doc.m_CurrentPlugin == &doc.callbackPlugin, "Callback context missing");
+    Require(doc.Execute("nested") == eOK, "Nested plugin execution failed");
+    Require(doc.GetInfo(230) == 1 && doc.m_CurrentPlugin == &doc.callbackPlugin,
+            "Nested Execute lost plugin entry state");
+    return true;
+  };
+  Require(doc.Execute("root") == eOK, "Outer plugin execution failed");
+  Restored(doc, 0, &plugin);
+  Require(doc.events == std::vector<std::string>{
+    "callback:root", "evaluate:nested", "evaluate:root"}, "Nested callback order changed");
+}
+
+void Exceptions()
+{
+  CPlugin plugin;
+  const std::vector<std::string> sites = {
+    "callback:fail", "evaluate:fail", "parse:fail", "connected", "logging", "send", "note:"};
+  for (size_t site = 0; site < sites.size(); ++site)
+  {
+    CMUSHclientDoc doc;
+    doc.m_iExecutionDepth = 3;
+    doc.m_CurrentPlugin = &plugin;
+    doc.onEvent = [&](const std::string &event) {
+      if (event.find(sites[site]) == 0) throw InjectedError{static_cast<int>(site)};
+    };
+    if (site == 6) doc.m_ScriptEngine = nullptr;
+    bool caught = false;
+    try { doc.Execute(site == 2 || site == 6 ? "/fail" : site >= 3 ? "" : "fail"); }
+    catch (const InjectedError &error)
+    {
+      Require(error.site == static_cast<int>(site), "Exception payload changed");
+      caught = true;
+    }
+    Require(caught, "Exception was swallowed");
+    Restored(doc, 3, &plugin);
+  }
+  CMUSHclientDoc doc;
+  doc.m_iExecutionDepth = 3;
+  doc.m_CurrentPlugin = &plugin;
+  CString::failConstruction = true;
+  bool caught = false;
+  try { doc.Execute("allocation failure"); }
+  catch (const std::bad_alloc &) { caught = true; }
+  Require(caught, "Command construction exception was swallowed");
+  Restored(doc, 3, &plugin);
+  Require(doc.events.empty(), "Allocation failure produced output");
+}
+
+void ManualReset(int entry, bool fail)
+{
+  CMUSHclientDoc doc;
+  CPlugin plugin;
+  doc.m_iExecutionDepth = entry;
+  doc.m_CurrentPlugin = &plugin;
+  doc.onCommand = [&](CString &) {
+    Require(doc.GetInfo(230) == entry + 1, "Outer active depth changed");
+    ManualInput(doc, "typed");
+    Require(doc.GetInfo(230) == 0, "Manual-input Execute did not restore its zero entry");
+    Require(doc.m_CurrentPlugin == &doc.callbackPlugin, "Manual input lost callback context");
+    if (fail) throw InjectedError{99};
+    return true;
+  };
+  doc.onEvaluate = [&](const CString &command) {
+    Require(doc.GetInfo(230) == (command.value == "typed" ? 1 : 0),
+            "Effective depth after manual input changed");
+    return false;
+  };
+  bool caught = false;
+  try { Require(doc.Execute("outer") == eOK, "Outer reset result changed"); }
+  catch (const InjectedError &error)
+  {
+    Require(fail && error.site == 99, "Reset exception changed");
+    caught = true;
+  }
+  Require(caught == fail, "Reset exception propagation changed");
+  // Check entry restoration through the actual GetInfo(230) production case.
+  Restored(doc, entry, &plugin);
+  std::vector<std::string> expected = {"callback:outer", "evaluate:typed"};
+  if (!fail) expected.push_back("evaluate:outer");
+  Require(doc.events == expected, "Manual-input callback/output order changed");
+}
+
+int main()
+{
+  int passed = 0, failed = 0;
+  auto run = [&](const std::string &name, const std::function<void()> &test) {
+    try { test(); ++passed; std::cout << "PASS " << name << '\n'; }
+    catch (const std::exception &error)
+    {
+      ++failed;
+      std::cerr << "FAIL " << name << ": " << error.what() << '\n';
+    }
+  };
+  run("normal state and callback/output order", NormalAndOrder);
+  run("early returns, veto, evaluation stop, and command stacking", EarlyReturnsAndFiltering);
+  run("depth limit and nested Execute", DepthLimitAndNestedExecute);
+  run("nested plugin entry context", NestedPluginContext);
+  run("callback, script, output, and allocation exceptions", Exceptions);
+  for (int entry : {0, 3}) for (bool fail : {false, true})
+    run("manual reset entry=" + std::to_string(entry) + (fail ? " exception" : " return"),
+        [=] { ManualReset(entry, fail); });
+  std::cout << passed << " groups passed; " << failed << " groups failed\n";
+  return failed ? 1 : 0;
+}
