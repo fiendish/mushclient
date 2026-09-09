@@ -261,6 +261,14 @@ CPlugin * pPlugin = GetPlugin (PluginID);
       e->Delete ();
       iResult = eProblemsLoadingPlugin;
       }
+
+    catch (...)
+      {
+      SetModifiedFlag (TRUE);   // the original plugin was removed
+      // Queue notification without replacing the load exception with a callback error.
+      m_bPluginListChangedPending = true;
+      throw;
+      }
   }
 
   if (iResult != eOK)

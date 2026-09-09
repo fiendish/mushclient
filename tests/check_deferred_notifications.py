@@ -96,18 +96,30 @@ def main():
     result = subprocess.run([str(exe)], capture_output=True, text=True)
     (out / 'result.log').write_text(result.stdout + result.stderr)
     print(result.stdout + result.stderr, end='', flush=True)
-    cases = [json.loads(line) for line in result.stdout.splitlines()]
+    cases = []
+    parse_errors = []
+    first_parse_error = None
+    for number, line in enumerate(result.stdout.splitlines(), 1):
+        try:
+            cases.append(json.loads(line))
+        except json.JSONDecodeError as error:
+            parse_errors.append({'line': number, 'output': line, 'error': str(error)})
+            if first_parse_error is None:
+                first_parse_error = error
     report.write_text(json.dumps({
         'revision': args.revision or 'working-tree',
-        'result': 'pass' if result.returncode == 0 else 'fail',
+        'result': 'pass' if result.returncode == 0 and not parse_errors else 'fail',
         'exit_code': result.returncode, 'command': command,
         'source_sha256': sources, 'cases': cases,
+        'stdout': result.stdout, 'stderr': result.stderr, 'parse_errors': parse_errors,
         'limits': 'Production replacement blocks, caller catch handlers, notification '
                   'methods, and idle delivery block with MFC, XML, publication, '
                   'callback, and snapshot allocator substitutes. No native parser, '
                   'message loop, MFC allocation failure, or full application run.'
     }, indent=2) + '\n')
     result.check_returncode()
+    if first_parse_error is not None:
+        raise first_parse_error
 
 
 if __name__ == '__main__':

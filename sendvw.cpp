@@ -336,7 +336,8 @@ ASSERT_VALID(pDoc);
 	if (nChar == VK_RETURN)
   	{
 
-    pDoc->m_iCurrentActionSource = eUserTyping;
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (pDoc->m_iCurrentActionSource, eUserTyping);
 
 		CString strText;
 		GetEditCtrl().GetWindowText(strText);
@@ -384,7 +385,6 @@ ASSERT_VALID(pDoc);
 // cancel any previous message on the status line
     pDoc->ShowStatusLine ();
 
-    pDoc->m_iCurrentActionSource = eUnknownActionSource;
     return;
 
   	} // end of return key

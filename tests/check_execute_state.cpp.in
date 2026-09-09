@@ -102,7 +102,9 @@ void StringToList(const CString &text, const char *separator, CStringList &list)
 {
   size_t begin = 0;
   const std::string delimiter = separator;
-  while (begin < text.value.size())
+  if (text.IsEmpty())
+    return;
+  while (begin <= text.value.size())
   {
     size_t end = text.value.find(delimiter, begin);
     list.AddTail(text.value.substr(begin, end - begin));
@@ -233,6 +235,57 @@ void NormalAndOrder()
     Require(doc.events == std::vector<std::string>{
       "callback:one", "evaluate:one", "callback:", "connected", "logging",
       "send", "callback:two", "evaluate:two"}, "Callback/output order changed");
+  }
+}
+
+void TrailingEmptyCommands()
+{
+  const std::vector<std::string> empty = {"callback:", "connected", "logging", "send"};
+  for (const char *command : {"", "one\n", "one\r\n", "one\n\n", "\n"})
+  {
+    CMUSHclientDoc doc;
+    CPlugin plugin;
+    doc.m_iExecutionDepth = 3;
+    doc.m_CurrentPlugin = &plugin;
+    std::vector<std::string> expected;
+    std::string input = command;
+    if (input.find("one") == 0)
+      expected = {"callback:one", "evaluate:one"};
+    expected.insert(expected.end(), empty.begin(), empty.end());
+    if (input == "one\n\n" || input == "\n")
+      expected.insert(expected.end(), empty.begin(), empty.end());
+    Require(doc.Execute(command) == eOK, "Trailing-empty result changed");
+    Require(doc.events == expected, "Trailing-empty callback/output order changed");
+    Restored(doc, 3, &plugin);
+  }
+  for (int action = 0; action < 3; ++action)
+  {
+    CMUSHclientDoc doc;
+    CPlugin plugin;
+    doc.m_iExecutionDepth = 3;
+    doc.m_CurrentPlugin = &plugin;
+    doc.closed = action == 1;
+    doc.onCommand = [&](CString &command) {
+      if (!command.IsEmpty()) return true;
+      if (action == 2) throw InjectedError{100};
+      return action != 0;
+    };
+    bool caught = false;
+    try
+    {
+      Require(doc.Execute("one\n") == (action == 1 ? eWorldClosed : eOK),
+              "Trailing-empty early return changed");
+    }
+    catch (const InjectedError &error)
+    {
+      Require(action == 2 && error.site == 100, "Trailing-empty exception changed");
+      caught = true;
+    }
+    Require(caught == (action == 2), "Trailing-empty exception was swallowed");
+    std::vector<std::string> expected = {"callback:one", "evaluate:one", "callback:"};
+    if (action == 1) expected.push_back("connected");
+    Require(doc.events == expected, "Trailing-empty veto or early-return order changed");
+    Restored(doc, 3, &plugin);
   }
 }
 
@@ -417,6 +470,7 @@ int main()
     }
   };
   run("normal state and callback/output order", NormalAndOrder);
+  run("trailing empty commands, veto, early return, and exception", TrailingEmptyCommands);
   run("early returns, veto, evaluation stop, and command stacking", EarlyReturnsAndFiltering);
   run("depth limit and nested Execute", DepthLimitAndNestedExecute);
   run("nested plugin entry context", NestedPluginContext);

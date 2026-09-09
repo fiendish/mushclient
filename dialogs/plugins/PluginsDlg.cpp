@@ -392,8 +392,7 @@ LRESULT CPluginsDlg::OnKickIdle(WPARAM, LPARAM)
     {
     CPlugin * p = GetPluginForItem (nItem);
     // Sorting moves rows, but item data still indexes both identity arrays.
-    bReload = !p || p->m_iPluginInstanceNumber !=
-      m_PluginInstanceNumbers [(int) m_ctlPluginList.GetItemData (nItem)];
+    bReload = !p;
     }
 
   if (bReload)

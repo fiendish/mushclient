@@ -162,6 +162,7 @@ assert editor.count('m_ObjectMap->SetAt (strMapName, pUpdatedItem);')==2
 run('editor_keys',r'''
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <iostream>
 #include <map>
 #include <memory>

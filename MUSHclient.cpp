@@ -1028,7 +1028,8 @@ BOOL CMUSHclientApp::OnIdle(LONG lCount)
       (CMUSHclientDoc*) m_pWorldDocTemplate->GetNextDoc(pos);
 
     if (pDoc->m_bPluginListChangedPending &&
-        !pDoc->m_bInPluginListChanged)
+        !pDoc->m_bInPluginListChanged &&
+        pDoc->m_iPluginListChangedDeferralDepth == 0)
       {
       pDoc->PluginListChanged ();
       return 1;

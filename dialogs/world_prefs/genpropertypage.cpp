@@ -1700,8 +1700,18 @@ LRESULT CGenPropertyPage::OnKickIdle(WPARAM, LPARAM)
 
   if (m_bReloadList)
     {
+    // Clear this request before callbacks can send another idle message.
     m_bReloadList = false;
-    LoadList ();
+    try
+      {
+      LoadList ();
+      }
+    catch (...)
+      {
+      // Retry on a later idle message and preserve the original exception.
+      m_bReloadList = true;
+      throw;
+      }
     }
 
   UpdateDialogControls (AfxGetApp()->m_pMainWnd, false);

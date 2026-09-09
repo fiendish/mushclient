@@ -4,6 +4,7 @@
 #ifdef NDEBUG
 #error List replacement checks require assertions.
 #endif
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -13,7 +14,7 @@
 #include <string>
 #include <vector>
 using namespace std;
-using POSITION=size_t; using HTREEITEM=void*; using DWORD=uintptr_t;
+using HTREEITEM=void*; using DWORD=uintptr_t;
 using UINT=unsigned; using BOOL=bool;
 constexpr bool TRUE=true;
 constexpr int LVIS_FOCUSED=1,LVIS_SELECTED=2;
@@ -38,10 +39,27 @@ template<class It,class T> It counted_find(It first,It last,T value) {
   return last;
 }
 struct CObject {int value;bool IsKindOf(int){return true;}};
+// Each position owns its iterator state, including copies and nested traversals.
+struct POSITION {
+  map<string,CObject*>* owner=nullptr;
+  map<string,CObject*>::iterator cursor;
+  POSITION(nullptr_t=nullptr) {}
+  explicit POSITION(map<string,CObject*>& items):owner(&items),cursor(items.begin()) {
+    if(cursor==items.end())owner=nullptr;
+  }
+  explicit operator bool() const {return owner!=nullptr;}
+  bool operator==(nullptr_t) const {return owner==nullptr;}
+};
 struct ObjectMap {
   map<string,CObject*> items;
-  POSITION GetStartPosition(){return items.empty()?0:1;}
-  void GetNextAssoc(POSITION& p,CString& key,CObject*& value){auto i=items.begin();advance(i,p-1);key=i->first;value=i->second;p=p<items.size()?p+1:0;}
+  uint64_t traversalSteps=0;
+  POSITION GetStartPosition(){return POSITION(items);}
+  void GetNextAssoc(POSITION& p,CString& key,CObject*& value){
+    assert(p.owner==&items && p.cursor!=items.end());
+    key=p.cursor->first;value=p.cursor->second;
+    ++p.cursor;++traversalSteps;
+    if(p.cursor==items.end())p=0;
+  }
   bool Lookup(const CString& key,CObject*& value){auto i=items.find(key);if(i==items.end())return false;value=i->second;return true;}
 };
 // Exercise the real redraw guard with Win32 message substitutes. The
@@ -115,7 +133,37 @@ struct CGenPropertyPage {
   }
 };
 @INSERT@
+void CheckPositions(){
+  ObjectMap objects;
+  assert(objects.GetStartPosition()==0);
+  POSITION empty=0;assert(!empty);
+  CObject values[3]={{0},{1},{2}};
+  for(int i=0;i<3;++i)objects.items[to_string(i)]=&values[i];
+  auto next=[&](POSITION& p,int expected){
+    CString key;CObject* value=nullptr;
+    objects.GetNextAssoc(p,key,value);
+    assert(key==to_string(expected) && value==&values[expected]);
+  };
+  POSITION first=objects.GetStartPosition();next(first,0);
+  POSITION copied=first;
+  POSITION second=objects.GetStartPosition();next(second,0);
+  next(first,1);next(copied,1);next(second,1);
+  next(first,2);assert(first==0 && copied && second);
+  next(copied,2);next(second,2);assert(copied==0 && second==0);
+  assert(objects.traversalSteps==8);
+  objects.traversalSteps=0;
+  POSITION outer=objects.GetStartPosition();
+  for(int i=0;i<3;++i){
+    next(outer,i);
+    POSITION inner=objects.GetStartPosition();
+    for(int j=0;j<3;++j)next(inner,j);
+    assert(inner==0);
+  }
+  assert(outer==0 && objects.traversalSteps==12);
+  cout<<"ObjectMap: independent, copied, and nested positions reach zero after linear traversal\n";
+}
 int main(){
+  CheckPositions();
   for(bool visible:{false,true})for(bool fail:{false,true}){
     WindowState w;w.visible=visible;bool disabled=false;
     try{CControlRedrawGuard outer(&w,disabled);
@@ -171,12 +219,16 @@ int main(){
     cout<<"rows="<<n<<" comparisons="<<comparisons<<endl;
     assert(comparisons>0 && comparisons<64ULL*n*levels);
     assert(page.control.GetItemCount()==n);
+    assert(page.objects.traversalSteps==static_cast<uint64_t>(n));
+    cout<<"map rows="<<n<<" traversal steps="<<page.objects.traversalSteps<<endl;
   }
   {CGenPropertyPage page;page.setup(10000);auto old=page.control.rows;
    page.failDescriptionAt=5000;comparisons=0;bool caught=false;
    try{page.Reload();}catch(const runtime_error& e){caught=string(e.what())=="description failure";}
    assert(caught && page.control.rows==old && comparisons>0 && comparisons<64ULL*10000*14);
    cout<<"large rollback comparisons="<<comparisons<<endl;
+   assert(page.objects.traversalSteps==10000);
+   cout<<"map rollback traversal steps="<<page.objects.traversalSteps<<endl;
   }
   assert(CString::live==0);
   cout<<"Large-list comparison bounds and ownership checks passed\n";
