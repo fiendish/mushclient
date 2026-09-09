@@ -201,15 +201,17 @@ int main() {
   auto second=make_unique<CPlugin>(); second->m_strID="second";
   second->m_strName="Zulu"; second->m_bEnabled=false;
   auto next=make_unique<CPlugin>(*second); ++next->m_iPluginInstanceNumber;
-  doc.m_PluginList={&first,second.get()}; dialog.LoadList();
-  list.rows[0].selected=list.rows[1].selected=true;
+  CPlugin last; last.m_strID="last"; last.m_strName="Zzz"; last.m_bEnabled=false;
+  doc.m_PluginList={&first,second.get(),&last}; dialog.LoadList();
+  list.rows[0].selected=list.rows[1].selected=list.rows[2].selected=true;
   int calls=0;
   doc.onEnable=[&](CPlugin* plugin) {
-    ++calls; assert(plugin==&first);
-    doc.m_PluginList[1]=next.get(); second.reset();
+    ++calls;
+    if (plugin==&first) {doc.m_PluginList[1]=next.get(); second.reset();}
+    else assert(plugin==&last);
   };
   dialog.OnEnable();
-  assert(calls==1 && first.m_bEnabled && !next->m_bEnabled);
+  assert(calls==2 && first.m_bEnabled && last.m_bEnabled && !next->m_bEnabled);
   assert(dialog.GetPluginForItem(1)==next.get());
   doc.onEnable=nullptr;
   list.rows[1].selected=true; dialog.OnEnable();
