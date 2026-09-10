@@ -2,7 +2,9 @@
 
 Requires Python 3 and clang++. Uses ASan/UBSan and MFC/socket stubs.
 The fixture delivers close requests during callbacks and drains deferred closes
-at explicit safe points. It does not prove native modal-message dispatch.
+at explicit safe points. The timer fixture extracts only marked-chat cleanup;
+a continuation counter represents the remaining timer work. It does not prove
+native modal-message dispatch or full timer scheduling.
 """
 import argparse
 import json
@@ -44,8 +46,11 @@ def main():
             'void CMUSHclientDoc::OnCloseDocument()',
             'void CMUSHclientDoc::BeginProgressOperation ()',
             'void CMUSHclientDoc::EndProgressOperation ()']),
+        block(doc, 'CChatSocket * CMUSHclientDoc::GetChatSocket ('),
         block(read('childfrm.cpp'), 'void CChildFrame::OnClose()'),
         block(chat, 'void CChatSocket::OnReceive('),
+        block(chat, 'void CChatSocket::OnClose('),
+        block(read('scripting/methods/methods_chat.cpp'), 'long CMUSHclientDoc::ChatDisconnect('),
         block(chat, 'void CChatSocket::ProcessChatMessage ('),
         block(chat, 'void CChatSocket::Process_Send_command'),
         block(chat, 'void CChatSocket::Process_Message'),
@@ -57,8 +62,11 @@ def main():
         block(stdafx, 'class CBoolStateGuard') + ';',
         block(read('doc.h'), 'class CWorldDocumentOperationGuard') + ';',
     ])
+    cleanup = block(block(read('timers.cpp'), 'void CMUSHclientDoc::CheckTimerList ('),
+                    'for (POSITION chatpos = m_ChatList.GetHeadPosition (); chatpos; )')
     template = Path(__file__).with_name('world_callback_lifetime.cpp.in').read_text()
     source = replace_once(replace_once(template, '@GUARDS@', guards), '@FUNCTIONS@', functions)
+    source = replace_once(source, '@CHAT_CLEANUP@', cleanup)
 
     def compile_source(name, content, flags=()):
         cpp = out / f'{name}.cpp'
@@ -91,6 +99,12 @@ def main():
                 chat_guard + '\n' + inner_guard), 'chat', 'world retained after command'),
             ('remove_script_guard', replace_once(source, script_guard, ''),
                 'script', 'world retained during script reload'),
+            ('remove_chat_cleanup_condition', replace_once(source,
+                'pSocket->m_bDeleteMe && m_iActiveProgressOperations == 0',
+                'pSocket->m_bDeleteMe'), 'timer', 'marked chat survives modal timer cleanup'),
+            ('return_before_timer_cleanup', replace_once(source, cleanup,
+                'if (m_iActiveProgressOperations != 0) return;\n' + cleanup),
+                'timer', 'timer work continues during an active operation'),
         ]
         for name, mutant, case, expected in mutants:
             exe = compile_source(name, mutant, ('-DNDEBUG',))

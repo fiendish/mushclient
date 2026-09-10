@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -21,7 +22,7 @@ using POSITION = std::size_t;
 using BOOL = int;
 constexpr int SOCKET_ERROR=-1, TRUE=1, FALSE=0, WM_CLOSE=16;
 constexpr int MB_YESNO=4, MB_ICONQUESTION=32, IDYES=6, IDNO=7;
-constexpr int eOK=0, eCommandsNestedTooDeeply=1, eWorldClosed=2, MAX_EXECUTION_DEPTH=20;
+constexpr int eOK=0, eCommandsNestedTooDeeply=1, eWorldClosed=2, eChatIDNotFound=3, MAX_EXECUTION_DEPTH=20;
 enum { eReloadNever, eReloadAlways, eReloadConfirm };
 enum { eChatAwaitingConnectConfirm, eChatAwaitingConnectionRequest, eChatConnected,
        eChatClosed, eChatMudMaster, eChatZMud, eChatConnection, eChatSession,
@@ -91,6 +92,16 @@ struct MSG { void* hwnd=nullptr; int message=0; };
 struct CPlugin {};
 struct CChatSocket;
 struct CMUSHclientDoc;
+// Minimal MFC list substitute. Cleanup always breaks after removing one node.
+struct ChatList {
+    std::vector<CChatSocket*> items;
+    POSITION GetHeadPosition() const { return items.empty()?0:1; }
+    CChatSocket* GetNext(POSITION& p) const {
+        auto socket=items.at(p-1);p=p==items.size()?0:p+1;return socket;
+    }
+    void RemoveAt(POSITION p) { items.erase(items.begin()+p-1); }
+};
+std::function<void(CMUSHclientDoc*)> commandHook;
 struct State {
     bool worldDestroyed=false,chatDestroyed=false,throwCommand=false,throwReload=false;
     bool throwPrompt=false,closeDuringCommand=true,closeDuringPrompt=true;
@@ -108,6 +119,8 @@ struct ScriptEngine {
 };
 struct CMUSHclientDoc: CDocument {
     CChatSocket* chat=nullptr;
+    ChatList m_ChatList;
+    int timerContinuations=0;
     CPlugin plugin;
     CPlugin* m_CurrentPlugin=&plugin;
     ScriptEngine engine{this};
@@ -127,6 +140,9 @@ struct CMUSHclientDoc: CDocument {
     void OnCloseDocument();
     void OnScriptFileChanged(bool force=false);
     long Execute(LPCTSTR);
+    long ChatDisconnect(long);
+    CChatSocket* GetChatSocket(const long) const;
+    void CleanupTick();
     template<class... T> bool SendToAllPluginCallbacks(T...) { return true; }
     void ChatNote(int kind,const CString&);
     void Activate(){}
@@ -197,11 +213,15 @@ struct CChatSocket {
     CString m_outstanding_input;
     string incoming;
     explicit CChatSocket(CMUSHclientDoc* p):m_pDoc(p){}
-    ~CChatSocket() { state->chatDestroyed=true; }
+    bool* destructionFlag=nullptr;
+    ~CChatSocket() {
+        if(destructionFlag)*destructionFlag=true;
+        else state->chatDestroyed=true;
+    }
     int Receive(char* buffer,int size) { CHECK(incoming.size()<=static_cast<std::size_t>(size),"packet fits");
         std::memcpy(buffer,incoming.data(),incoming.size());return static_cast<int>(incoming.size()); }
     int GetLastError() { return 0; }
-    void OnClose(int) { m_bDeleteMe=true; }
+    void OnClose(int);
     void SendData(const CString&){}
     void SendChatMessage(int,const CString&){}
     void OnReceive(int);
@@ -224,12 +244,22 @@ struct CChatSocket {
     UNUSED_HANDLER(Process_PGPkey)
 #undef UNUSED_HANDLER
 };
-CMUSHclientDoc::~CMUSHclientDoc() { state->worldDestroyed=true;delete chat; }
+CMUSHclientDoc::~CMUSHclientDoc() {
+    state->worldDestroyed=true;delete chat;
+    for(auto socket:m_ChatList.items)delete socket;
+}
+// List ownership is a substitute. Lookup, disconnect, and close use extracted source.
+void CMUSHclientDoc::CleanupTick() {
+    @CHAT_CLEANUP@
+    // The rest of CheckTimerList is outside this fixture. A return above is a failure.
+    ++timerContinuations;
+}
 void ScriptEngine::Parse(const CString&,const char*) {
     ++state->commands;
     CHECK(doc->m_iExecutionDepth==1,"remote execution depth reset");
     CHECK(doc->m_CurrentPlugin==nullptr,"Execute clears current plugin");
     if(state->closeDuringCommand)ExpectRetained(doc,"world retained during command");
+    if(commandHook)commandHook(doc);
     if(state->throwCommand)throw std::runtime_error("command callback failure");
     ++state->completedCommands;
 }
@@ -247,7 +277,7 @@ int UMessageBox(const CString&,int) {
 @GUARDS@
 @FUNCTIONS@
 
-void Reset(State& s) { state=&s;App=AppStub{};App.doc=new CMUSHclientDoc; }
+void Reset(State& s) { state=&s;commandHook={};App=AppStub{};App.doc=new CMUSHclientDoc; }
 void Finish() {
     CHECK(!state->worldDestroyed,"world alive until callback returns");
     CHECK(App.doc->m_iActiveProgressOperations==0,"operation depth restored");
@@ -316,7 +346,96 @@ void ScriptCases() {
     }
     std::puts("PASS: reload yes, no, force, throw, close request, and early returns");
 }
+CChatSocket* AddChat(CMUSHclientDoc* doc,int id,bool& destroyed) {
+    auto socket=new CChatSocket(doc);socket->m_iChatID=id;socket->destructionFlag=&destroyed;
+    doc->m_ChatList.items.push_back(socket);return socket;
+}
+void TimerCases() {
+    for(int protocol:{eChatMudMaster,eChatZMud})for(bool throws:{false,true})for(bool outerOperation:{false,true}) {
+        State s;Reset(s);s.closeDuringCommand=false;s.throwCommand=throws;
+        auto doc=App.doc;
+        bool liveDeleted=false,activeDeleted=false,markedDeleted=false;
+        bool otherLiveDeleted=false,otherFirstDeleted=false,otherSecondDeleted=false;
+        AddChat(doc,10,liveDeleted);
+        auto active=AddChat(doc,11,activeDeleted);
+        AddChat(doc,12,markedDeleted);
+        CHECK(doc->ChatDisconnect(12)==eOK,"existing marked chat disconnects");
+        auto other=new CMUSHclientDoc;
+        AddChat(other,20,otherLiveDeleted);AddChat(other,21,otherFirstDeleted);AddChat(other,22,otherSecondDeleted);
+        CHECK(other->ChatDisconnect(21)==eOK && other->ChatDisconnect(22)==eOK,"other world chats disconnect");
+        active->m_iChatConnectionType=protocol;
+        active->incoming=Packet(protocol,CHAT_SEND_COMMAND,"/disconnect")+Packet(protocol,CHAT_MESSAGE,"next");
+        std::unique_ptr<CWorldDocumentOperationGuard> outer;
+        if(outerOperation)outer=std::make_unique<CWorldDocumentOperationGuard>(doc);
+        commandHook=[&](CMUSHclientDoc* current) {
+            CHECK(current==doc,"command uses its owning world");
+            CHECK(doc->m_iActiveProgressOperations==1+outerOperation,"receive guard nests in prior operation");
+            CHECK(doc->ChatDisconnect(11)==eOK,"command disconnects its own chat");
+            CHECK(active->m_bDeleteMe && active->m_iChatStatus==eChatClosed,"real OnClose marks the active chat");
+            CHECK(doc->GetChatSocket(11)==nullptr && doc->ChatDisconnect(11)==eChatIDNotFound,
+                  "disconnected chat becomes unavailable before physical deletion");
+            CHECK(!activeDeleted && doc->m_ChatList.items.size()==3,"disconnect preserves allocation until safe cleanup");
+            CHECK(doc->GetChatSocket(10)!=nullptr && doc->GetChatSocket(12)==nullptr,
+                  "live chat remains available and marked chat stays unavailable");
+            // Model a modal script callback that dispatches a timer while Parse is active.
+            {
+                CWorldDocumentOperationGuard nested(doc);
+                CHECK(doc->m_iActiveProgressOperations==2+outerOperation,"nested operation depth retained");
+                const int before=doc->timerContinuations;
+                doc->CleanupTick();
+                CHECK(!activeDeleted,"marked chat survives modal timer cleanup");
+                CHECK(doc->timerContinuations==before+1,"timer work continues during an active operation");
+                CHECK(!markedDeleted && !liveDeleted,"same-world marked and live chats survive active operation");
+                other->CleanupTick();
+                CHECK(otherFirstDeleted && !otherSecondDeleted && !otherLiveDeleted,"other world cleans one marked chat during active receive");
+                CHECK(other->timerContinuations==1,"other world continues timer work after deletion");
+                other->CleanupTick();
+                CHECK(otherSecondDeleted && !otherLiveDeleted,"other world next tick cleans remaining marked chat");
+                CHECK(other->timerContinuations==2,"other world timer work continues on each tick");
+            }
+            CHECK(doc->m_iActiveProgressOperations==1+outerOperation,"inner guard restores prior operation depth");
+            doc->CleanupTick();
+            CHECK(!activeDeleted && !markedDeleted,"receive guard retains marked chats after inner scope");
+            CHECK(doc->timerContinuations==2,"timer work continues after inner scope");
+        };
+        bool caught=false;
+        try { active->OnReceive(0); }
+        catch(const std::runtime_error& error) {
+            caught=true;CHECK(string(error.what())=="command callback failure","timer callback preserves original exception");
+        }
+        commandHook={};
+        CHECK(caught==throws,"timer callback exception propagates");
+        CHECK(!activeDeleted,"marked socket survives receive return or throw");
+        CHECK(doc->GetChatSocket(11)==nullptr,"marked socket stays unavailable while cleanup is deferred");
+        CHECK(doc->m_iActiveProgressOperations==outerOperation,"receive unwind restores outer depth");
+        CHECK(doc->m_iExecutionDepth==7 && doc->m_CurrentPlugin==&doc->plugin && doc->m_bInSendToScript,
+              "command state restores before marked socket deletion");
+        CHECK(s.commands==1 && s.completedCommands==(throws?0:1),"accepted command completes or propagates its error");
+        CHECK(s.afterCommands==0 && !active->m_outstanding_input.IsEmpty(),"real receive loop stops buffered input after chat disconnect");
+        if(outerOperation) {
+            doc->CleanupTick();
+            CHECK(!activeDeleted && !markedDeleted,"outer operation defers cleanup after receive returns");
+            CHECK(doc->timerContinuations==3,"outer operation does not stop timer work");
+            outer.reset();
+        }
+        CHECK(doc->m_iActiveProgressOperations==0,"all operation guards release before later tick");
+        const int before=doc->timerContinuations;
+        doc->CleanupTick();
+        CHECK(activeDeleted && !markedDeleted && !liveDeleted,"later tick deletes active marked chat only");
+        CHECK(doc->m_ChatList.items.size()==2 && doc->timerContinuations==before+1,"deletion removes one list entry and continues timers");
+        doc->CleanupTick();
+        CHECK(markedDeleted && !liveDeleted,"next tick deletes remaining marked chat only");
+        doc->CleanupTick();
+        CHECK(doc->m_ChatList.items.size()==1 && !liveDeleted,"live unmarked chat remains on later ticks");
+        CHECK(doc->timerContinuations==before+3,"timer work continues after all marked chats are gone");
+        CHECK(!s.worldDestroyed,"chat cleanup does not close either world");
+        Finish();CHECK(liveDeleted,"world teardown releases surviving chat");
+        delete other;CHECK(otherLiveDeleted,"other world teardown releases surviving chat");
+    }
+    std::puts("PASS: timer cleanup retains active chat, preserves other worlds and timer work, and deletes on later ticks after return or throw");
+}
 int main(int argc,char** argv) {
     if(argc==1 || string(argv[1])=="chat")ChatCases();
     if(argc==1 || string(argv[1])=="script")ScriptCases();
+    if(argc==1 || string(argv[1])=="timer")TimerCases();
 }
