@@ -1,3 +1,6 @@
+#ifdef NDEBUG
+#error Monitor lifetime tests require assertions; do not define NDEBUG.
+#endif
 #include <atomic>
 #include <cassert>
 #include <chrono>

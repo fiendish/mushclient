@@ -1390,28 +1390,66 @@ class COutputSearchSnapshot : public CObject
   struct Line
     {
     __int64 iCreationNumber;
-    CString strText;
+    const char * text;
+    int length;
     bool bHardReturn;
 
     explicit Line (const CLine * pLine) :
       iCreationNumber (pLine->nCreationNumber),
-      strText (pLine->text, pLine->len),
+      text (pLine->text), length (pLine->len),
       bHardReturn (pLine->hard_return) {}
 
     bool IsUnchanged (const CLine * pLine) const
       {
       return iCreationNumber == pLine->nCreationNumber &&
              bHardReturn == pLine->hard_return &&
-             strText.GetLength () == pLine->len &&
-             memcmp ((LPCTSTR) strText, pLine->text, pLine->len) == 0;
+             length == pLine->len &&
+             memcmp (text, pLine->text, pLine->len) == 0;
       }
     };
 
   vector<Line> m_Lines;
+  vector<std::unique_ptr<char []> > m_TextBlocks;
   CFindInfo m_FindInfo;
   const __int64 m_iOutputGeneration;
   long m_nFirstLine, m_nLastLine;
   bool m_bFound, m_bRestart;
+
+  // Copy complete lines into bounded blocks, as RecallText does. All source
+  // pointers stay within this non-yielding copy; readers use only owned text.
+  static void CopyText (vector<Line> & lines,
+                        vector<std::unique_ptr<char []> > & textBlocks)
+    {
+    size_t textBytesRemaining = 0;
+    for (const Line & line : lines)
+      textBytesRemaining += line.length;
+
+    char * nextText = NULL;
+    size_t blockBytesRemaining = 0;
+    for (Line & line : lines)
+      {
+      if (line.length == 0)
+        {
+        line.text = "";
+        continue;
+        }
+      const size_t length = line.length;
+      if (blockBytesRemaining < length)
+        {
+        const size_t blockSize = (std::max) (length,
+          (std::min) (textBytesRemaining, size_t (64 * 1024)));
+        std::unique_ptr<char []> block (new char [blockSize]);
+        textBlocks.push_back (std::move (block));
+        nextText = textBlocks.back ().get ();
+        blockBytesRemaining = blockSize;
+        }
+      memcpy (nextText, line.text, length);
+      line.text = nextText;
+      nextText += length;
+      blockBytesRemaining -= length;
+      textBytesRemaining -= length;
+      }
+    }
 
   COutputSearchSnapshot (CMUSHclientDoc * pDoc, bool bAgain) :
     m_iOutputGeneration (pDoc->m_iOutputGeneration),
@@ -1440,6 +1478,7 @@ class COutputSearchSnapshot : public CObject
     m_Lines.reserve (pDoc->m_LineList.GetCount ());
     for (POSITION pos = pDoc->m_LineList.GetHeadPosition (); pos; )
       m_Lines.push_back (Line (pDoc->m_LineList.GetNext (pos)));
+    CopyText (m_Lines, m_TextBlocks);
     }
 
   // Verify the complete logical line, including its wrap boundaries. No yield
@@ -1564,13 +1603,13 @@ void CSendView::DoFind (bool bAgain)
     {
     // Columns are byte offsets into the complete wrapped line.
     while (nStartLine < snapshot->m_nLastLine &&
-           iStartColumn >= snapshot->m_Lines [nStartLine].strText.GetLength ())
-      iStartColumn -= snapshot->m_Lines [nStartLine++].strText.GetLength ();
+           iStartColumn >= snapshot->m_Lines [nStartLine].length)
+      iStartColumn -= snapshot->m_Lines [nStartLine++].length;
     while (nEndLine < snapshot->m_nLastLine &&
-           iEndColumn > snapshot->m_Lines [nEndLine].strText.GetLength ())
-      iEndColumn -= snapshot->m_Lines [nEndLine++].strText.GetLength ();
-    bSelect = iStartColumn <= snapshot->m_Lines [nStartLine].strText.GetLength () &&
-              iEndColumn <= snapshot->m_Lines [nEndLine].strText.GetLength ();
+           iEndColumn > snapshot->m_Lines [nEndLine].length)
+      iEndColumn -= snapshot->m_Lines [nEndLine++].length;
+    bSelect = iStartColumn <= snapshot->m_Lines [nStartLine].length &&
+              iEndColumn <= snapshot->m_Lines [nEndLine].length;
     if (find.m_iStartColumn == find.m_iEndColumn)
       {
       nEndLine = nStartLine;
@@ -1588,9 +1627,13 @@ void CSendView::DoFind (bool bAgain)
   // Prepare the only allocating publication steps before changing ownership.
   list<pair<int, int> > matches (find.m_MatchesOnLine);
   vector<COutputSearchSnapshot::Line> matchedLines;
+  vector<std::unique_ptr<char []> > matchedTextBlocks;
   if (bSelect)
+    {
     matchedLines.assign (snapshot->m_Lines.begin () + snapshot->m_nFirstLine,
                          snapshot->m_Lines.begin () + snapshot->m_nLastLine + 1);
+    COutputSearchSnapshot::CopyText (matchedLines, matchedTextBlocks);
+    }
   if (!find.m_strFindStringList.IsEmpty () &&
       (saved.m_strFindStringList.IsEmpty () ||
        saved.m_strFindStringList.GetHead () != find.m_strFindStringList.GetHead ()))
@@ -1638,6 +1681,7 @@ void CSendView::DoFind (bool bAgain)
 
   // Only the matched logical line is needed to validate the next Find Again.
   snapshot->m_Lines.swap (matchedLines);
+  snapshot->m_TextBlocks.swap (matchedTextBlocks);
   snapshot->m_nFirstLine = bSelect ? 0 : -1;
   snapshot->m_nLastLine = static_cast<long> (snapshot->m_Lines.size ()) - 1;
   pTopView->Invalidate ();
@@ -1669,7 +1713,8 @@ bool CSendView::GetNextLine (const CObject * pObject,
   strLine.Empty ();
   while (true)
     {
-    strLine += snapshot->m_Lines [nLast].strText;
+    const COutputSearchSnapshot::Line & line = snapshot->m_Lines [nLast];
+    strLine.Append (line.text, line.length);
     if (snapshot->m_Lines [nLast].bHardReturn ||
         nLast + 1 == static_cast<long> (snapshot->m_Lines.size ()))
       break;

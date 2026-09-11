@@ -73,7 +73,9 @@ def main():
     if disabled.returncode == 0 or 'Output search checks require assertions' not in disabled.stderr:
         raise RuntimeError('The harness did not reject NDEBUG')
     mutants = {
-        'text_validation': ('memcmp ((LPCTSTR) strText, pLine->text, pLine->len) == 0', 'true'),
+        'text_validation': ('memcmp (text, pLine->text, pLine->len) == 0', 'true'),
+        'borrowed_source': ('    CopyText (m_Lines, m_TextBlocks);', ''),
+        'borrowed_match': ('    COutputSearchSnapshot::CopyText (matchedLines, matchedTextBlocks);', ''),
         'nested_publication': ('m_pOutputSearchSnapshot == snapshot', 'true'),
     }
     for name, (before, after) in mutants.items():
@@ -86,8 +88,11 @@ def main():
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
                                 env=environment)
         (out / (name + '.log')).write_text(result.stdout + result.stderr)
-        if result.returncode == 0 or 'Assertion failed' not in result.stderr and 'Assertion ' not in result.stderr:
-            raise RuntimeError(f'Mutation did not fail an assertion: {name}\n{result.stderr}')
+        expected = ('AddressSanitizer: heap-use-after-free' in result.stderr
+                    if name.startswith('borrowed_') else
+                    'Assertion failed' in result.stderr or 'Assertion ' in result.stderr)
+        if result.returncode == 0 or not expected:
+            raise RuntimeError(f'Mutation did not fail the expected check: {name}\n{result.stderr}')
         print(f'PASS: {name} mutation rejected')
     print('PASS: NDEBUG rejected; extracted output search checks passed')
 

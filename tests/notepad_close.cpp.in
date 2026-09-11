@@ -481,6 +481,56 @@ void staleChooser() {
     cleanup();
 }
 
+void staleMapping() {
+    CMUSHclientDoc world;
+    create(world, "A stale");
+    create(world, "B live");
+    create(world, "C stale");
+    create(world, "D live");
+    auto dlg = chooser(world);
+    CHECK(dlg.m_NotepadDocumentNumbers.GetSize() == 4);
+    CHECK(world.CloseNotepad("A stale", false));
+    CHECK(world.CloseNotepad("C stale", false));
+    create(world, "A stale"); // The same title has a different identity.
+    for (int row : {0, 1}) {
+        dlg.m_ctlNotepadList.selected = row;
+        dlg.OnOpenExisting();
+        CHECK(!dlg.accepted && !dlg.m_pTextDocument);
+    }
+    CHECK(dlg.m_ctlNotepadList.items.size() == 2);
+    for (int row : {0, 1}) {
+        const auto item = dlg.m_ctlNotepadList.items[row];
+        auto *expected = world.FindNotepad(item.title);
+        CHECK(expected && dlg.GetNotepadForIndex(static_cast<int>(item.data)) == expected);
+        dlg.m_ctlNotepadList.selected = row;
+        dlg.OnOpenExisting();
+        CHECK(dlg.accepted && dlg.m_pTextDocument == expected);
+    }
+    cleanup();
+}
+
+void switchClosedBeforeSelection() {
+    CMUSHclientDoc world;
+    create(world, "A closed");
+    auto *live = create(world, "B live");
+    CChooseNotepadDlg::modal = [&](CChooseNotepadDlg &dlg) {
+        CHECK(world.CloseNotepad("A closed", false));
+        auto *replacement = create(world, "A closed");
+        dlg.m_ctlNotepadList.selected = 0;
+        dlg.OnOpenExisting();
+        CHECK(!dlg.accepted && !dlg.m_pTextDocument);
+        CHECK(replacement->view.frame.activations == 0);
+        dlg.m_ctlNotepadList.selected = 0;
+        dlg.OnOpenExisting();
+        CHECK(dlg.accepted && dlg.m_pTextDocument == live);
+        return IDOK;
+    };
+    CHECK(world.SwitchToNotepad());
+    CHECK(live->view.frame.activations == 1);
+    CChooseNotepadDlg::modal = {};
+    cleanup();
+}
+
 void enumeration() {
     CMUSHclientDoc world, other;
     auto *pending = create(world, "Pending");
@@ -650,6 +700,8 @@ int main(int argc, char **argv) {
     else if (name == "cancelled_close") cancelledClose();
     else if (name == "repeated_close") repeatedClose();
     else if (name == "stale_chooser") staleChooser();
+    else if (name == "stale_mapping") staleMapping();
+    else if (name == "switch_closed_before_selection") switchClosedBeforeSelection();
     else if (name == "enumeration") enumeration();
     else if (name == "switch") switchNotepad();
     else if (name == "immediate_close") immediateClose();

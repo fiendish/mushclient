@@ -36,10 +36,19 @@ cpp.write_text(template)
 for mode, flags in [('release', []), ('debug', ['-D_DEBUG'])]:
     exe = out / mode
     subprocess.run(['clang++', '-std=c++17', '-pthread', '-O1', '-g',
-                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                    '-fno-omit-frame-pointer',
                     *flags, str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=30)
 print(f'Artifacts: {out}')
+
+# Reject builds that remove the test assertions.
+disabled = subprocess.run(['clang++', '-std=c++17', '-pthread', '-DNDEBUG',
+                           '-fsyntax-only', str(cpp)], capture_output=True, text=True)
+(out / 'ndebug.log').write_text(disabled.stdout + disabled.stderr)
+if disabled.returncode == 0 or 'Monitor lifetime tests require assertions' not in disabled.stderr:
+    raise RuntimeError('The monitor fixture did not reject NDEBUG')
+print('PASS: NDEBUG is rejected')
 
 # One targeted mutation proves that stale-generation rejection is exercised.
 mutated = template.replace('iMonitorToken != 0 && pDoc->m_iMonitorToken == iMonitorToken', 'true')
@@ -48,7 +57,8 @@ mutant = out / 'stale_token_mutation.cpp'
 mutant.write_text(mutated)
 exe = out / 'stale_token_mutation'
 subprocess.run(['clang++', '-std=c++17', '-pthread', '-O1', '-g',
-                '-fsanitize=address,undefined', str(mutant), '-o', str(exe)], check=True)
+                '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                str(mutant), '-o', str(exe)], check=True)
 result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
 (out / 'mutation.log').write_text(result.stdout + result.stderr)
 assert result.returncode != 0, 'Stale-token mutation escaped detection'

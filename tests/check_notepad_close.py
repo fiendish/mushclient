@@ -117,7 +117,8 @@ def main():
 
     environment = dict(os.environ, UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
     cases = ['close_append', 'close_replace', 'cancelled_close', 'repeated_close',
-             'stale_chooser', 'enumeration', 'switch', 'immediate_close',
+             'stale_chooser', 'stale_mapping', 'switch_closed_before_selection',
+             'enumeration', 'switch', 'immediate_close',
              'flip_pending_only', 'flip_pending_before_live', 'flip_live', 'flip_absent']
     for mode, flags in [('release', []), ('debug', ['-D_DEBUG'])]:
         exe = compile_fixture(mode, template, flags)

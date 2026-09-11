@@ -55,7 +55,8 @@ def main():
     for mode, flags in [('hostname_lookup', []), ('hostname_lookup_ndebug', ['-DNDEBUG'])]:
         exe = out / mode
         subprocess.run(['clang++', '-std=c++17', '-O1', '-g',
-                        '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                        '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                        '-fno-omit-frame-pointer',
                         *flags, str(cpp), '-o', str(exe)], check=True)
         result = subprocess.run([str(exe)], capture_output=True, text=True)
         log = 'result.log' if not flags else 'result-ndebug.log'
