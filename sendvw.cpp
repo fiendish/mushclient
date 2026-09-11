@@ -1226,6 +1226,7 @@ ASSERT_VALID(pDoc);
 
   if (!m_bNotifyingPluginCommandChanged)      // don't recurse
     {
+    CWorldDocumentOperationGuard operationGuard (pDoc);
     CBoolStateGuard notifyGuard (m_bNotifyingPluginCommandChanged, true);
     pDoc->SendToAllPluginCallbacks (ON_PLUGIN_COMMAND_CHANGED);
     }
