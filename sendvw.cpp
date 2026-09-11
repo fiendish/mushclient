@@ -336,6 +336,7 @@ ASSERT_VALID(pDoc);
 	if (nChar == VK_RETURN)
   	{
 
+    CWorldDocumentOperationGuard operationGuard (pDoc);
     CValueStateGuard<unsigned short> actionSourceGuard
       (pDoc->m_iCurrentActionSource, eUserTyping);
 
@@ -618,6 +619,7 @@ void CSendView::SendCommand (const CString strOriginalCommand,
 	CMUSHclientDoc* pDoc = GetDocument();
 	ASSERT_VALID(pDoc);
 
+  CWorldDocumentOperationGuard operationGuard (pDoc);
   pDoc->m_bOmitFromCommandHistory = false;    // don't omit it yet
 
   // auto-say only applies when you actually type something, so I removed it 
@@ -765,6 +767,8 @@ void CSendView::SendMacro (int whichone)
   // ignore empty macros
   if (pDoc->m_macros [whichone].IsEmpty ())
     return;
+
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
@@ -1068,6 +1072,7 @@ ASSERT_VALID(pDoc);
 
 // turn auto-say off, they obviously don't want to say west, examine, etc.
 
+  CWorldDocumentOperationGuard operationGuard (pDoc);
   CValueStateGuard<unsigned short> autoSayGuard
     (pDoc->m_bEnableAutoSay, FALSE);
 
@@ -2224,6 +2229,7 @@ int nEndChar;
 CString strCurrent;
 
 //save old config
+CWorldDocumentOperationGuard operationGuard (pDoc);
 bool old_bTabCompletionSpace = pDoc->m_bTabCompletionSpace;
 CValueStateGuard<unsigned short> tabCompletionSpaceGuard
   (pDoc->m_bTabCompletionSpace, pDoc->m_bTabCompletionSpace);
