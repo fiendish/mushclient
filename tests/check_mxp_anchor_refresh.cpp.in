@@ -1,0 +1,435 @@
+#include <cassert>
+#include <cstddef>
+#include <cstdlib>
+#include <iostream>
+#include <new>
+#include <random>
+#include <type_traits>
+#include <vector>
+
+using __int64 = long long;
+static bool failAllocations = false;
+void* operator new(std::size_t size) {
+  if (failAllocations) throw std::bad_alloc();
+  if (void* result = std::malloc(size ? size : 1)) return result;
+  throw std::bad_alloc();
+}
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete[](void* value) noexcept { std::free(value); }
+void operator delete(void* value, std::size_t) noexcept { std::free(value); }
+void operator delete[](void* value, std::size_t) noexcept { std::free(value); }
+
+struct CLine;
+struct CStyle;
+struct Counts { long long lines = 0, styles = 0, index = 0; };
+static Counts reads;
+struct Position {};
+using POSITION = Position*;
+template<class T> struct List {
+  struct Node : Position { Node* prev; Node* next; T value; };
+  Node* head = nullptr;
+  Node* tail = nullptr;
+  int count = 0;
+  List() = default;
+  List(const List&) = delete;
+  List& operator=(const List&) = delete;
+  ~List() { while (count) delete RemoveTail(); }
+  bool IsEmpty() const { return count == 0; }
+  int GetCount() const { return count; }
+  POSITION GetHeadPosition() const { return head; }
+  POSITION GetTailPosition() const { return tail; }
+  T GetTail() const { assert(tail); return tail->value; }
+  T GetHead() const { assert(head); return head->value; }
+  T GetAt(POSITION pos) const {
+    assert(pos);
+    if constexpr (std::is_same<T, CLine*>::value) ++reads.index;
+    return static_cast<Node*>(pos)->value;
+  }
+  T GetNext(POSITION& pos) const {
+    assert(pos);
+    if constexpr (std::is_same<T, CLine*>::value) ++reads.lines;
+    if constexpr (std::is_same<T, CStyle*>::value) ++reads.styles;
+    Node* node = static_cast<Node*>(pos);
+    pos = node->next;
+    return node->value;
+  }
+  POSITION AddTail(T value) {
+    Node* node = new Node{{}, tail, nullptr, value};
+    if (tail) tail->next = node; else head = node;
+    tail = node;
+    ++count;
+    return node;
+  }
+  T RemoveTail() {
+    assert(tail);
+    Node* node = tail;
+    T value = node->value;
+    tail = node->prev;
+    if (tail) tail->next = nullptr; else head = nullptr;
+    delete node;
+    --count;
+    return value;
+  }
+  T RemoveHead() {
+    assert(head);
+    Node* node = head;
+    T value = node->value;
+    head = node->next;
+    if (head) head->prev = nullptr; else tail = nullptr;
+    delete node;
+    --count;
+    return value;
+  }
+};
+
+static __int64 sequence = 0;
+static const int JUMP_SIZE = 100;
+static const int START_TAG = 1;
+struct CStyle {
+  __int64 nCreationNumber = ++sequence;
+  __int64 nRangeCreationNumber = nCreationNumber;
+  int iFlags = 0;
+};
+struct CLine {
+  __int64 nCreationNumber = ++sequence;
+  List<CStyle*> styleList;
+  CLine() { styleList.AddTail(new CStyle); }
+};
+struct CActiveTag {
+  __int64 nOpeningStyleCreationNumber = 0;
+  __int64 nOpeningLineCreationNumber = 0;
+  __int64 nFallbackStyleRangeNumber = 0;
+  __int64 nFallbackLineCreationNumber = 0;
+  bool operator==(const CActiveTag& other) const {
+    return nOpeningStyleCreationNumber == other.nOpeningStyleCreationNumber &&
+      nOpeningLineCreationNumber == other.nOpeningLineCreationNumber &&
+      nFallbackStyleRangeNumber == other.nFallbackStyleRangeNumber &&
+      nFallbackLineCreationNumber == other.nFallbackLineCreationNumber;
+  }
+};
+struct CMUSHclientDoc {
+  List<CLine*> m_LineList;
+  List<CActiveTag*> m_ActiveTagList;
+  CLine* m_pCurrentLine = nullptr;
+  std::vector<POSITION> positions;
+  POSITION* m_pLinePositions = nullptr;
+  void RefreshMXPMissingTagAnchors();
+  void BaselineRefresh();
+  CLine* append() {
+    m_pCurrentLine = new CLine;
+    m_LineList.AddTail(m_pCurrentLine);
+    return m_pCurrentLine;
+  }
+  void history(int count) { while (m_LineList.GetCount() < count) append(); }
+  void index() {
+    positions.assign(m_LineList.GetCount() / JUMP_SIZE + 1, nullptr);
+    int number = 0;
+    for (POSITION pos = m_LineList.GetHeadPosition(); pos; ++number) {
+      if (number % JUMP_SIZE == 0) positions[number / JUMP_SIZE] = pos;
+      m_LineList.GetNext(pos);
+    }
+    m_pLinePositions = positions.data();
+  }
+  void deleteTail() {
+    delete m_LineList.RemoveTail();
+    m_pCurrentLine = m_LineList.IsEmpty() ? nullptr : m_LineList.GetTail();
+  }
+  CActiveTag* open() {
+    CStyle* marker = new CStyle;
+    marker->iFlags = START_TAG;
+    m_pCurrentLine->styleList.AddTail(marker);
+    CActiveTag* tag = new CActiveTag;
+    tag->nOpeningLineCreationNumber = m_pCurrentLine->nCreationNumber;
+    tag->nOpeningStyleCreationNumber = marker->nCreationNumber;
+    // A live marker must leave these fields unchanged.
+    tag->nFallbackLineCreationNumber = -11;
+    m_ActiveTagList.AddTail(tag);
+    return tag;
+  }
+  void clearTailStyles() {
+    auto& styles = m_pCurrentLine->styleList;
+    while (!styles.IsEmpty()) delete styles.RemoveTail();
+    styles.AddTail(new CStyle);
+  }
+};
+
+@REFRESH@
+
+// Frozen reference rules: search the entire history for a marker, then take
+// the first fallback range OR post-opening style in line and style order.
+static void reference(CMUSHclientDoc& doc) {
+  if (!doc.m_pCurrentLine || doc.m_ActiveTagList.IsEmpty()) return;
+  for (POSITION tags = doc.m_ActiveTagList.GetHeadPosition(); tags;) {
+    CActiveTag* tag = doc.m_ActiveTagList.GetNext(tags);
+    bool marker = false;
+    for (POSITION lines = doc.m_LineList.GetHeadPosition(); lines && !marker;) {
+      CLine* line = doc.m_LineList.GetNext(lines);
+      for (POSITION styles = line->styleList.GetHeadPosition(); styles;) {
+        CStyle* style = line->styleList.GetNext(styles);
+        if ((style->iFlags & START_TAG) &&
+            style->nCreationNumber == tag->nOpeningStyleCreationNumber) {
+          marker = true;
+          break;
+        }
+      }
+    }
+    if (marker) continue;
+    CLine* boundaryLine = nullptr;
+    CStyle* boundary = nullptr;
+    for (POSITION lines = doc.m_LineList.GetHeadPosition(); lines && !boundary;) {
+      CLine* line = doc.m_LineList.GetNext(lines);
+      for (POSITION styles = line->styleList.GetHeadPosition(); styles;) {
+        CStyle* style = line->styleList.GetNext(styles);
+        if ((tag->nFallbackStyleRangeNumber &&
+             style->nRangeCreationNumber == tag->nFallbackStyleRangeNumber) ||
+            line->nCreationNumber > tag->nOpeningLineCreationNumber ||
+            (line->nCreationNumber == tag->nOpeningLineCreationNumber &&
+             style->nCreationNumber > tag->nOpeningStyleCreationNumber)) {
+          boundaryLine = line;
+          boundary = style;
+          break;
+        }
+      }
+    }
+    if (!boundary) {
+      boundaryLine = doc.m_pCurrentLine;
+      boundary = boundaryLine->styleList.GetTail();
+    }
+    tag->nFallbackLineCreationNumber = boundaryLine->nCreationNumber;
+    tag->nFallbackStyleRangeNumber = boundary->nRangeCreationNumber;
+  }
+}
+
+@BASELINE@
+
+static std::vector<CActiveTag> tags(CMUSHclientDoc& doc) {
+  std::vector<CActiveTag> result;
+  for (POSITION pos = doc.m_ActiveTagList.GetHeadPosition(); pos;)
+    result.push_back(*doc.m_ActiveTagList.GetNext(pos));
+  return result;
+}
+static int differentialChecks = 0;
+static Counts compare(CMUSHclientDoc& doc, const char* name = nullptr,
+                      int history = 0, bool bounded = true) {
+  auto before = tags(doc);
+  reads = {};
+  reference(doc);
+  auto expected = tags(doc);
+  int number = 0;
+  for (POSITION pos = doc.m_ActiveTagList.GetHeadPosition(); pos;)
+    *doc.m_ActiveTagList.GetNext(pos) = before.at(number++);
+  reads = {};
+  doc.BaselineRefresh();
+  Counts old = reads;
+  assert(tags(doc) == expected);
+  number = 0;
+  for (POSITION pos = doc.m_ActiveTagList.GetHeadPosition(); pos;)
+    *doc.m_ActiveTagList.GetNext(pos) = before.at(number++);
+  reads = {};
+  failAllocations = true;
+  doc.RefreshMXPMissingTagAnchors();
+  failAllocations = false;
+  Counts current = reads;
+  if (tags(doc) != expected) {
+    std::cerr << "Differential failure: " << (name ? name : "random") << '\n';
+    std::abort();
+  }
+  ++differentialChecks;
+  if (name) {
+    std::cout << "{\"case\":\"" << name << "\",\"history\":" << history
+      << ",\"tags\":" << before.size() << ",\"old_lines\":" << old.lines
+      << ",\"old_styles\":" << old.styles << ",\"new_lines\":" << current.lines
+      << ",\"new_styles\":" << current.styles << ",\"index_reads\":" << current.index << "}\n";
+    if (bounded) {
+      assert(current.lines <= 650 * static_cast<long long>(before.size()) + 1);
+      assert(current.styles <= 700 * static_cast<long long>(before.size()) + 1);
+      assert(current.index <= 40 * static_cast<long long>(before.size()) + 1);
+    }
+  }
+  return current;
+}
+
+static void copyMarker(CMUSHclientDoc& doc, CActiveTag* tag) {
+  CStyle* marker = new CStyle;
+  marker->nCreationNumber = tag->nOpeningStyleCreationNumber;
+  marker->nRangeCreationNumber = tag->nOpeningStyleCreationNumber;
+  marker->iFlags = START_TAG;
+  doc.m_pCurrentLine->styleList.AddTail(marker);
+  tag->nOpeningLineCreationNumber = doc.m_pCurrentLine->nCreationNumber;
+}
+static void cases(int count) {
+  for (int active : {1, 8, 65}) {
+    CMUSHclientDoc doc;
+    doc.history(count);
+    for (int i = 0; i < active; ++i) doc.open();
+    doc.index();
+    compare(doc, "live_recent_markers", count);
+    doc.clearTailStyles();
+    compare(doc, "carriage_return", count);
+    doc.clearTailStyles();
+    compare(doc, "repeated_carriage_return", count);
+  }
+  {
+    CMUSHclientDoc doc;
+    doc.history(count - 200);
+    CActiveTag* tag = doc.open();
+    __int64 origin = tag->nOpeningLineCreationNumber;
+    doc.history(count);
+    copyMarker(doc, tag);
+    doc.index();
+    compare(doc, "moved_marker", count);
+    doc.deleteTail();
+    doc.index();
+    compare(doc, "retained_marker_after_tail_deletion", count);
+    assert(tag->nFallbackLineCreationNumber == -11);
+    tag->nOpeningLineCreationNumber = origin;
+    compare(doc, "restored_marker", count);
+  }
+  for (bool moved : {false, true}) {
+    CMUSHclientDoc doc;
+    doc.append();
+    CActiveTag* tag = doc.open();
+    doc.history(count + JUMP_SIZE);
+    if (moved) copyMarker(doc, tag);
+    for (int i = 0; i < JUMP_SIZE; ++i) delete doc.m_LineList.RemoveHead();
+    doc.index();
+    compare(doc, moved ? "pruned_origin_moved_marker" : "pruned_marker", count);
+    if (!moved)
+      assert(tag->nFallbackLineCreationNumber == doc.m_LineList.GetHead()->nCreationNumber);
+  }
+  {
+    CMUSHclientDoc doc;
+    doc.history(count - 200);
+    CLine* origin = doc.m_pCurrentLine;
+    __int64 range = origin->styleList.GetTail()->nRangeCreationNumber;
+    // Split fragments retain the range but have later instance identities.
+    while (doc.m_LineList.GetCount() < count) {
+      doc.append();
+      doc.m_pCurrentLine->styleList.GetTail()->nRangeCreationNumber = range;
+    }
+    doc.append();
+    CActiveTag* tag = doc.open();
+    doc.deleteTail();
+    doc.index();
+    compare(doc, "older_tail_without_fallback", count);
+    assert(tag->nFallbackLineCreationNumber == doc.m_pCurrentLine->nCreationNumber);
+    compare(doc, "earliest_older_range_fragment", count);
+    assert(tag->nFallbackLineCreationNumber == origin->nCreationNumber);
+    // A split on the origin line can have an instance ID newer than the tag.
+    origin->styleList.GetHead()->nCreationNumber = ++sequence;
+    compare(doc, "split_range_instance_order", count);
+  }
+  {
+    CMUSHclientDoc doc;
+    doc.history(count);
+    doc.append();
+    CActiveTag* tag = doc.open();
+    doc.deleteTail();
+    doc.clearTailStyles();
+    doc.index();
+    compare(doc, "new_range_on_reused_older_line", count);
+    compare(doc, "retained_range_on_reused_older_line", count);
+    assert(tag->nFallbackLineCreationNumber < tag->nOpeningLineCreationNumber);
+  }
+  {
+    CMUSHclientDoc doc;
+    doc.history(count - 10);
+    CActiveTag* tag = doc.open();
+    doc.clearTailStyles();
+    __int64 firstRange = doc.m_pCurrentLine->styleList.GetTail()->nRangeCreationNumber;
+    doc.history(count);
+    tag->nFallbackStyleRangeNumber = doc.m_pCurrentLine->styleList.GetTail()->nRangeCreationNumber;
+    doc.index();
+    compare(doc, "post_opening_precedes_existing_fallback", count);
+    assert(tag->nFallbackStyleRangeNumber == firstRange);
+    doc.m_pLinePositions = nullptr;
+    compare(doc, "absent_index", count, false);
+    doc.index();
+    for (auto& pos : doc.positions) pos = nullptr;
+    compare(doc, "empty_index_slots", count, false);
+  }
+}
+
+static void randomCases() {
+  std::mt19937 random(1605);
+  for (int trial = 0; trial < 150; ++trial) {
+    CMUSHclientDoc doc;
+    doc.history(1000);
+    for (int step = 0; step < 60; ++step) {
+      switch (random() % 7) {
+        case 0: doc.history(doc.m_LineList.GetCount() + 1 + random() % 130); break;
+        case 1: doc.open(); break;
+        case 2: doc.clearTailStyles(); break;
+        case 3:
+          for (int i = 0, limit = 1 + random() % 40;
+               i < limit && doc.m_LineList.GetCount() > 1; ++i) doc.deleteTail();
+          break;
+        case 4:
+          if (doc.m_LineList.GetCount() > JUMP_SIZE)
+            for (int i = 0; i < JUMP_SIZE; ++i) delete doc.m_LineList.RemoveHead();
+          break;
+        case 5: {
+          // Preserve copies only of markers that actually occupy the source.
+          CLine* source = doc.m_pCurrentLine;
+          doc.append();
+          for (POSITION pos = source->styleList.GetHeadPosition(); pos;) {
+            CStyle* style = source->styleList.GetNext(pos);
+            if (!(style->iFlags & START_TAG)) continue;
+            for (POSITION tags = doc.m_ActiveTagList.GetHeadPosition(); tags;) {
+              CActiveTag* tag = doc.m_ActiveTagList.GetNext(tags);
+              if (tag->nOpeningStyleCreationNumber == style->nCreationNumber)
+                copyMarker(doc, tag);
+            }
+          }
+          break;
+        }
+        case 6: {
+          __int64 range = doc.m_pCurrentLine->styleList.GetTail()->nRangeCreationNumber;
+          doc.append()->styleList.GetTail()->nRangeCreationNumber = range;
+          break;
+        }
+      }
+      doc.index();
+      compare(doc);
+    }
+  }
+}
+
+int main() {
+  {
+    CMUSHclientDoc doc;
+    compare(doc, "no_current_line");
+    doc.history(1000);
+    doc.index();
+    compare(doc, "no_active_tags", 1000);
+  }
+  for (int count : {1000, 10000, 100000}) cases(count);
+  randomCases();
+  {
+    CMUSHclientDoc doc;
+    doc.history(1000);
+    doc.open();
+    doc.clearTailStyles();
+    doc.index();
+    struct Guard {
+      CMUSHclientDoc& doc;
+      ~Guard() { doc.RefreshMXPMissingTagAnchors(); }
+    };
+    bool unwound = false;
+    try {
+      Guard guard{doc};
+      failAllocations = true;
+      throw 16;
+    } catch (int value) {
+      assert(value == 16);
+      failAllocations = false;
+      unwound = true;
+    }
+    assert(unwound);
+    assert(doc.m_ActiveTagList.GetHead()->nFallbackLineCreationNumber ==
+           doc.m_pCurrentLine->nCreationNumber);
+  }
+  std::cout << "{\"differential_checks\":" << differentialChecks
+    << ",\"allocation_failure_and_destructor_unwind\":\"passed\"}\n";
+}

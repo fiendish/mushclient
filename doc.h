@@ -15,6 +15,7 @@
 #include "miniwindow.h"
 #include "plugins.h"
 #include "version.h"
+#include "output_line_buffer.h"
 
 #define COMPRESS_BUFFER_LENGTH 10000   // size of decompression buffer
 extern CString MUSHCLIENT_VERSION;
@@ -755,6 +756,7 @@ public:
 // new in version 8
 
   LONG    m_maxlines;   // maximum lines in scrollback buffer
+  __int64 m_iOutputGeneration;  // changes when output line positions become invalid
   LONG    m_nHistoryLines;  // maximum lines in command history
   unsigned short  m_nWrapColumn;    // column to wrap at
 
@@ -1172,6 +1174,10 @@ public:
   int m_iMXP_previousMode; // previous mode before mode 4 (secure-once mode)
   bool m_bInParagraph; // discard newlines (wrap)
   bool m_bMXP_script;   // in script collection mode
+  __int64 m_iMXPParagraphOwner;
+  __int64 m_iMXPPreOwner;
+  __int64 m_iMXPScriptOwner;
+  __int64 m_iMXPListOwner;
   bool m_bSuppressNewline;        // newline does NOT start a new line
 
   // NB - lists are being done in a hurry - I should really allow for nesting them
@@ -1200,6 +1206,7 @@ public:
 
   __int64 m_iMXPerrors;
   __int64 m_iMXPtags;
+  __int64 m_iMXPGeneration;  // changes when MXP is reset, stopped, or restarted
   __int64 m_iMXPentities;
 
   // end MXP stuff
@@ -1485,8 +1492,12 @@ public:
                const bool bLogIt);
 	void ReceiveMsg();
 	void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
-  void AddToLine (LPCTSTR lpszText, const int flags);
-  void StartNewLine_KeepPreviousStyle (const int flags);
+  bool AddToLine (LPCTSTR lpszText, const int flags);
+  bool AddToLineInternal (LPCTSTR lpszText, const int flags,
+                          COutputAppendTransaction * pTransaction);
+  bool StartNewLine_KeepPreviousStyle (const int flags,
+                                       bool * pbCreated = NULL,
+                                       const bool bFinishTransition = false);
   void Phase_ESC (const unsigned char c);  
   void Phase_UTF8 (const unsigned char c);  
   void Phase_ANSI (const unsigned char c);           
@@ -1535,22 +1546,29 @@ public:
   void MXP_Attlist (CString strName, CString strTag);
   void MXP_StartTag (CString strTag);
   void MXP_EndTag (CString strTag);
-  void MXP_CloseTag (CString strTag, const bool bOpen = false);
+  bool MXP_PrepareCloseTag (CString strTag, const bool bOpen,
+                            const __int64 iExpectedOpeningStyleCreationNumber,
+                            const vector<int> & closeActions,
+                            const CActiveTag * pActiveTag,
+                            CPreparedMXPClose & preparedClose);
+  void MXP_FinishCloseTag (const CPreparedMXPClose & preparedClose);
   void MXP_CloseOpenTags (void);
   void MXP_CloseAllTags (void);
   void MXP_On (const bool bPueblo = false, const bool bManual = false);     // turning MXP/Pueblo on
   void MXP_Off (const bool bCompletely = false);  // turning MXP off
-  void MXP_OpenAtomicTag (const CString strTag,   // name
+  bool MXP_OpenAtomicTag (const CString strTag,   // name
                           int iAction,            // action code
                           CStyle * pStyle,        // style it should modify
+                          __int64 & iResultStyleCreationNumber, // exact style identity
                           CString & strAction,    // new action
                           CString & strHint,      // new hint
                           CString & strVariable,  // new variable
-                          CArgumentList & ArgumentList);  // args
+                          CArgumentList & ArgumentList,
+                          const __int64 iStateOwner,
+                          COutputAppendTransaction * pOutputTransaction,
+                          vector<CDeferredMXPMessage> & deferredMessages);  // args
   void MXP_CloseAtomicTag (const int iAction, 
-                           const CString & strText,
-                           const POSITION firstlinepos,
-                           const POSITION firststylepos);
+                           const CPreparedMXPClose & preparedClose);
   CString MXP_GetEntity (CString & strName);
   bool BuildArgumentList (CArgumentList & ArgumentList, 
                           CString strTag);
@@ -1620,17 +1638,30 @@ public:
                      CAction *            pAction = NULL,
                      CLine *              pLine = NULL);
 
+  void RefreshMXPMissingTagAnchors (void);
+
   void RememberStyle (const CStyle * pStyle); 
 
-  void StartNewLine (const bool hard_break, const int flags);
+  bool StartNewLine (const bool hard_break, const int flags,
+                     const bool bResizePrevious = true,
+                     bool * pbCreated = NULL);
+  bool FinishNewLine (const int flags, const bool bResizePrevious,
+                      bool * pbCreated);
   bool ProcessPreviousLine (void);
   void SendLineToPlugin (void);
   void SetNewLineColour (const int flags);
 
+  struct CTriggerLineSnapshot
+    {
+    __int64 iCreationNumber;
+    int iColumn;  // byte offset in the original paragraph
+    int iLength;
+    };
+
   void ProcessOneTriggerSequence (CString & strCurrentLine,
                             CPaneLine & StyledLine,
                             CString & strResponse,
-                            const POSITION prevpos,
+                            const vector<CTriggerLineSnapshot> & triggerLines,
                             bool & bNoLog,
                             bool & bNoOutput,
                             bool & bChangedColour,
@@ -1648,7 +1679,8 @@ public:
 
   void WriteToLog (const char * text, size_t len);
   void WriteToLog (const CString & strText);
-  void LogLineInHTMLcolour (POSITION startpos);
+  void LogLineInHTMLcolour (POSITION startpos,
+                            const map<__int64, int> * pLineLengths = NULL);
   void LogCommand (const char * text);
   void OutputBadUTF8characters (void);
 
@@ -2923,6 +2955,104 @@ public:
 	DECLARE_INTERFACE_MAP()
 
 };
+
+/////////////////////////////////////////////////////////////////////////////
+
+class COutputAppendTransaction
+  {
+  public:
+    COutputAppendTransaction (CMUSHclientDoc * pDoc, const size_t iLength);
+    ~COutputAppendTransaction ();
+
+    __int64 Identity () const;
+    void Reserve (const size_t iLength);
+    void TrackLine (const CLine * pLine);
+    void MarkCurrentLineStyles ();
+    CStyle * PrepareAppendStyle ();
+    void OwnStyle (CStyle * pStyle);
+    void RecordCreatedLine ();
+    bool StartNewLine (const bool bHardBreak,
+                       const int iFlags,
+                       const bool bResizePrevious,
+                       bool * pbCreated);
+    void SetLineFlags (CLine * pLine, const unsigned char iFlags);
+    void SetListCount (const int iListCount);
+    size_t PrepareWrap (CLine * pPreviousLine, const int iSplitLength);
+    void PublishWrap (const size_t iWrap,
+                      const __int64 iNewLineCreationNumber,
+                      std::unique_ptr<COutputLineBuffer> pTextBuffer);
+    void Commit ();
+    void Rollback ();
+
+  private:
+    COutputAppendTransaction (const COutputAppendTransaction &);
+    COutputAppendTransaction & operator= (const COutputAppendTransaction &);
+
+    struct CCreatedLine
+      {
+      __int64 iLineCreationNumber;
+      __int64 iStyleCreationNumber;
+      __int64 iStyleRangeCreationNumber;
+      unsigned short iFlags;
+      COLORREF iForeColour;
+      COLORREF iBackColour;
+      CAction * pAction;
+      };
+
+    struct CWrapStyleBackup
+      {
+      __int64 iStyleCreationNumber;
+      unsigned short iOldLength;
+      unsigned short iRetainedLength;
+      };
+
+    struct CWrapMove
+      {
+      __int64 iPreviousLineCreationNumber;
+      __int64 iNewLineCreationNumber;
+      int iSplitLength;
+      vector<CWrapStyleBackup> styleBackups;
+      std::unique_ptr<COutputLineBuffer> pTextBuffer;
+      bool bPublished;
+      };
+
+    struct CLineBreakState
+      {
+      __int64 iLineCreationNumber;
+      bool bOldHardReturn;
+      bool bExpectedHardReturn;
+      bool bPublished;
+      };
+
+    struct CLineFlagsState
+      {
+      __int64 iLineCreationNumber;
+      unsigned char iOldFlags;
+      unsigned char iExpectedFlags;
+      };
+
+    struct CListCountState
+      {
+      int iListMode;
+      int iOldListCount;
+      int iExpectedListCount;
+      __int64 iListOwner;
+      };
+
+    void RestoreWrap (const CWrapMove & wrap);
+    CLine * FindLine (const __int64 iLineCreationNumber,
+                      POSITION * pPosition = NULL) const;
+
+    CMUSHclientDoc * m_pDoc;
+    __int64 m_iAppendCreationNumber;
+    __int64 m_iFirstAffectedLineCreationNumber;
+    vector<CCreatedLine> m_CreatedLines;
+    vector<CWrapMove> m_Wraps;
+    vector<CLineBreakState> m_LineBreaks;
+    vector<CLineFlagsState> m_LineFlags;
+    vector<CListCountState> m_ListCounts;
+    bool m_bCommitted;
+  };
 
 /////////////////////////////////////////////////////////////////////////////
 
