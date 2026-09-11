@@ -2761,6 +2761,8 @@ void CSendView::OnAcceleratorCommand (UINT nID)
   if (sCommand.empty ())
     return;
 
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
   CValueStateGuard<unsigned short> autoSayGuard
