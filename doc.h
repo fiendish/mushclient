@@ -80,6 +80,10 @@ struct CXMLLoadContext
   CTimerMap * pTimerMap;
   };
 
+// Non-owning XML load journal entry. The loader owns pNew until publication.
+// After publication, the map owns the active object and the loader retains pOld.
+// On commit, the loader retires pOld. On rollback, CXMLLoadChangeGuard restores
+// the map and retires pNew or pOld according to bRollbackOwnsNew.
 template <class T>
 struct CXMLLoadChange
   {

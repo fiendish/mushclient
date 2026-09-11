@@ -14,6 +14,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -126,5 +127,11 @@ if __name__ == '__main__':
         args.output.mkdir(parents=True, exist_ok=True)
         run(args.source, args.output, args.revision)
     else:
-        with tempfile.TemporaryDirectory(prefix='mushclient-property-add-') as directory:
-            run(args.source, Path(directory), args.revision)
+        directory = Path(tempfile.mkdtemp(prefix='mushclient-property-add-'))
+        try:
+            run(args.source, directory, args.revision)
+        except BaseException:
+            print(f'Failure artifacts retained in {directory}', file=sys.stderr)
+            raise
+        else:
+            shutil.rmtree(directory)

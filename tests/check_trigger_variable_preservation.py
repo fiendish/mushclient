@@ -57,6 +57,8 @@ def main():
     args = parser.parse_args()
     out = args.output_dir or ROOT / '.test-output' / 'trigger-variable-preservation'
     out.mkdir(parents=True, exist_ok=True)
+    # Remove the old report before source extraction or either build can fail.
+    (out / 'validation.json').unlink(missing_ok=True)
 
     def source(path):
         if args.revision:
@@ -132,7 +134,17 @@ def main():
         log = out / (label + '.log')
         log.write_text(result.stdout + result.stderr)
         print(result.stdout + result.stderr, end='', flush=True)
+        expected_cases = 12 if pane else 7
+        expected_label = 'PANE' if pane else 'Normal'
+        summary = re.fullmatch(
+            rf'{expected_label}: (\d+) cases, (\d+) failed checks\n?', result.stdout)
+        case_count = int(summary[1]) if summary else None
+        failed_checks = int(summary[2]) if summary else None
+        valid_summary = case_count == expected_cases and failed_checks == 0
         results.append({'build': label, 'exit_code': result.returncode,
+                        'result': 'pass' if result.returncode == 0 and valid_summary else 'fail',
+                        'expected_cases': expected_cases, 'case_count': case_count,
+                        'failed_checks': failed_checks,
                         'command': command, 'executable': str(exe),
                         'log': str(log)})
 
@@ -147,6 +159,11 @@ def main():
         if result['exit_code'] != 0:
             raise subprocess.CalledProcessError(
                 result['exit_code'], [result['executable']])
+    for result in results:
+        if result['result'] != 'pass':
+            raise ValueError(
+                f"{result['build']}: expected {result['expected_cases']} cases "
+                f"and zero failed checks; see {result['log']}")
 
 
 if __name__ == '__main__':
