@@ -56,7 +56,7 @@ def main():
     cpp.write_text(template)
     executable = cpp.with_suffix('')
     subprocess.run(['clang++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                    '-O1', '-g', '-fsanitize=address,undefined',
+                    '-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                     '-fno-omit-frame-pointer', str(cpp), '-o', str(executable)], check=True)
     subprocess.run([str(executable), 'baseline' if args.baseline_ref else 'fixed'], check=True)
 

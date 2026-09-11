@@ -13,6 +13,10 @@ using __int64 = long long;
 using COLORREF = unsigned;
 using POSITION = void*;
 using std::vector;
+using std::exception_ptr;
+using std::current_exception;
+using std::rethrow_exception;
+constexpr int DISPID_UNKNOWN=-1;
 #define ASSERT assert
 #define COLOURTYPE 0x0300
 #define COLOUR_CUSTOM 0x0100
@@ -90,11 +94,20 @@ struct CActiveTag {
   bool bOpeningInParagraph=false, bOpeningPreMode=false, bOpeningMXPScript=false;
   int iOpeningListMode=0, iOpeningListCount=0;
   CString strVariable;
+  vector<int> closeActions;
 };
+struct CPreparedMXPClose : CActiveTag { __int64 iActiveTagCreationNumber=0; };
 struct CDeferredMXPMessage { int iLevel, iMessageNumber; CString strMessage; CDeferredMXPMessage(int l,int n,CString s):iLevel(l),iMessageNumber(n),strMessage(s){} };
 using CArgumentList=vector<int>;
 struct CAtomicElement { int iAction; CString strName="test"; };
 struct CElementItem { CAtomicElement* pAtomicElement; CArgumentList ArgumentList; };
+struct CElement {
+  List<CElementItem> ElementItemList;
+  ~CElement() { while(!ElementItemList.IsEmpty()) delete ElementItemList.RemoveTail(); }
+};
+struct CMUSHclientDoc;
+static bool BuildCustomAtomicArguments(CMUSHclientDoc*,CString,CElement*,CElementItem*,CArgumentList&,CArgumentList&);
+static CString BuildAtomicCallbackArguments(CArgumentList&) { return "arguments"; }
 struct Socket { std::string m_outstanding_data; int sends=0; void OnSend(int) { ++sends; } };
 struct CMUSHclientDoc;
 struct COutputAppendTransaction {
@@ -131,13 +144,30 @@ struct CMUSHclientDoc {
   std::function<void()> callback;
   bool outputCreatesLine=true;
   CString m_name="fixture-user";
-  static constexpr int eOrderedList=1;
+  static constexpr int eOrderedList=1, eUnorderedList=2;
+  int m_cLastChar=0, m_dispidOnMXP_OpenTag=DISPID_UNKNOWN;
+  bool m_bPluginProcessesOpenTag=false;
+  vector<int> customActions;
+  vector<bool> itemWanted;
+  vector<std::string> events;
+  size_t hookIndex=0;
+  int failOpenAction=-1, throwOpenAction=-1, throwCloseAction=-1;
+  bool throwHook=false;
+  bool MXP_StartTagScript(CString name,CString,CArgumentList&) {
+    events.push_back("hook:"+name);
+    if(throwHook) throw std::runtime_error("hook failure");
+    return !itemWanted.at(hookIndex++);
+  }
+  bool StartNewLine(bool,int) { events.push_back("newline"); newLine(); return true; }
+  void MXP_CloseAtomicTag(int,const CPreparedMXPClose&);
+  void FinishCustomClose(const CPreparedMXPClose&,bool=false);
   CMUSHclientDoc() { newLine(); }
   ~CMUSHclientDoc() { while(!m_LineList.IsEmpty()) delete m_LineList.RemoveTail(); while(!m_ActiveTagList.IsEmpty()) delete m_ActiveTagList.RemoveTail(); }
   CStyle* tail() { return m_pCurrentLine->styleList.GetTail(); }
   void newLine() { auto* l=new CLine; l->styleList.AddTail(new CStyle); m_LineList.AddTail(l); m_pCurrentLine=l; }
   CStyle* AddStyle(int f,int fore,int back,int len,CString action,CString,CString) { auto* s=new CStyle; s->iFlags=f; s->iForeColour=fore; s->iBackColour=back; s->iLength=len; s->pAction=new CAction(action); m_pCurrentLine->styleList.AddTail(s); return s; }
   CAction* GetAction(CString a,CString,CString) { return new CAction(a); }
+  CStyle* NoteStyle(unsigned short,COLORREF,COLORREF,int,CString,CString,CString,CLine* = nullptr);
   void RememberStyle(const CStyle*);
   void SendPacket(const char*,int);
   void Debug_Packets(const char*,const char*,int,__int64) { if(callback) callback(); }
@@ -151,17 +181,26 @@ struct CMUSHclientDoc {
 COutputAppendTransaction::COutputAppendTransaction(CMUSHclientDoc* d,int):m_pDoc(d) { TrackLine(d->m_pCurrentLine); }
 bool COutputAppendTransaction::StartNewLine(bool,int,bool,bool* created) { if(m_pDoc->callback) m_pDoc->callback(); *created=m_pDoc->outputCreatesLine; if(*created) m_pDoc->newLine(); return true; }
 void COutputAppendTransaction::SetListCount(int n) { m_pDoc->m_iListCount=n; }
+static bool BuildCustomAtomicArguments(CMUSHclientDoc* d,CString,CElement*,CElementItem* item,CArgumentList&,CArgumentList&) {
+  d->events.push_back("build:"+item->pAtomicElement->strName); return true;
+}
 @PREPARE_STYLE@
 @SEND_PACKET@
 @REMEMBER_STYLE@
+@NOTE_ADD_STYLE@
 @TRANSACTION@
 static void ReportDeferredMXPMessages(CMUSHclientDoc* d,vector<CDeferredMXPMessage>& ms) { for(auto& m:ms) d->MXP_error(m.iLevel,m.iMessageNumber,m.strMessage); ms.clear(); }
 static void QueueMXPMessage(vector<CDeferredMXPMessage>& ms,int l,int n,CString s) { ms.emplace_back(l,n,s); }
-bool CMUSHclientDoc::MXP_OpenAtomicTag(CString,int iAction,CStyle* pStyle,__int64& iResultStyleCreationNumber,CString& strAction,CString& strHint,CString& strVariable,CArgumentList&,__int64,COutputAppendTransaction* pOutputTransaction,vector<CDeferredMXPMessage>& deferredMessages) {
+bool CMUSHclientDoc::MXP_OpenAtomicTag(CString,int iAction,CStyle* pStyle,__int64& iResultStyleCreationNumber,CString& strAction,CString& strHint,CString& strVariable,CArgumentList&,__int64 iStateOwner,COutputAppendTransaction* pOutputTransaction,vector<CDeferredMXPMessage>& deferredMessages) {
+  events.push_back("open:"+std::to_string(iAction));
+  if(iAction==throwOpenAction) throw std::runtime_error("open failure");
+  if(iAction==failOpenAction) return false;
   @RESULT_INIT@
   bool bIgnoreUnusedArgs=false;
   switch(iAction) {
     @PACKET_CASES@
+    @PARAGRAPH_OPEN@
+    @LIST_OPEN@
     @BR_CASE@
     @HR_CASE@
     @LI_CASE@
@@ -182,18 +221,46 @@ void CMUSHclientDoc::Run(bool custom,bool paired,int action,bool followBold) {
   CAtomicElement* pAtomicElement=custom?nullptr:&element;
   vector<std::unique_ptr<CElementItem>> expandedItems;
   vector<bool> expandedItemsWanted;
-  if(custom) { expandedItems.emplace_back(new CElementItem{&element}); expandedItemsWanted.push_back(true); if(followBold) { expandedItems.emplace_back(new CElementItem{&bold}); expandedItemsWanted.push_back(true); } }
-  vector<CDeferredMXPMessage> deferredMessages;
   CArgumentList ArgumentList;
+  CElement definition;
+  CElement* pElement=&definition;
+  vector<CAtomicElement> atoms;
+  if(custom) {
+    if(customActions.empty()) { atoms.push_back(element); if(followBold) atoms.push_back(bold); }
+    else for(int value:customActions) atoms.push_back(CAtomicElement{value,std::to_string(value)});
+    for(auto& atom:atoms) definition.ElementItemList.AddTail(new CElementItem{&atom});
+    bool bPreparedExpandedItems=false;
+    @CUSTOM_PREPARATION@
+  }
+  vector<CDeferredMXPMessage> deferredMessages;
   __int64 iStateOwner=++serial, iOpeningMXPGeneration=m_iMXPGeneration;
   CMXPStartTransaction transaction(this,iStateOwner);
   transaction.PreserveStyle(tail());
   CActiveTag* pPublishedTag=nullptr;
-  if(paired) { pPublishedTag=new CActiveTag; pPublishedTag->nCreationNumber=iStateOwner; m_ActiveTagList.AddTail(pPublishedTag); transaction.SetActiveTag(pPublishedTag); auto* marker=AddStyle(START_TAG,7,0,0,"marker","",""); transaction.SetMarker(marker); }
+  if(paired) { pPublishedTag=new CActiveTag; pPublishedTag->nCreationNumber=iStateOwner;
+    auto* pTag=pPublishedTag;
+    @CLOSE_ACTIONS@
+    m_ActiveTagList.AddTail(pPublishedTag); transaction.SetActiveTag(pPublishedTag); auto* marker=AddStyle(START_TAG,7,0,0,"marker","",""); transaction.SetMarker(marker); }
   CStyle* pNewStyle=AddStyle(0,7,0,0,strAction,strHint,strVariable);
   transaction.SetStyle(pNewStyle);
   bool bWarnOutstandingTags=false;
   @FINALIZATION@
+}
+void CMUSHclientDoc::MXP_CloseAtomicTag(int iAction,const CPreparedMXPClose& preparedClose) {
+  events.push_back("close:"+std::to_string(iAction));
+  if(iAction==throwCloseAction) throw std::runtime_error("close failure");
+  switch(iAction) {
+    @PARAGRAPH_LIST_CLOSE@
+    default: break;
+  }
+}
+void CMUSHclientDoc::FinishCustomClose(const CPreparedMXPClose& preparedClose,bool throwCallback) {
+  // Only callback dispatch is a substitute. The close loop and error handling
+  // below come from production MXP_FinishCloseTag.
+  exception_ptr pendingException;
+  try { events.push_back("close callback"); if(throwCallback) throw std::runtime_error("callback failure"); }
+  catch(...) { pendingException=current_exception(); }
+  @CLOSE_DISPATCH@
 }
 static void deleteOutput(CMUSHclientDoc& d) {
   // Same lifetime boundary as DeleteLines: replace current line and styles,
@@ -315,11 +382,45 @@ static void lookupChecks() {
     styleVisits=lineVisits=0;
     assert(tx.ResolveStyle(0)==nullptr && styleVisits==0 && lineVisits==0);
     auto* oldest=d.m_LineList.GetHead()->styleList.GetHead();
+    assert(tx.ResolveStyle(oldest->nCreationNumber)==nullptr);
+    assert(lineVisits==2);
+    styleVisits=lineVisits=0;
+    assert(tx.ResolveStyle(-1)==nullptr && lineVisits==2);
+    // Deletion can resume a retained line older than this transaction.
+    ++d.m_iOutputGeneration;
+    styleVisits=lineVisits=0;
     assert(tx.ResolveStyle(oldest->nCreationNumber)==oldest);
     assert(lineVisits==static_cast<unsigned>(count));
     assert(tx.ResolveStyle(-1)==nullptr);
     tx.Commit();
     std::printf("lines=%d, styles visited for two marker checks and result=%llu\n",count,static_cast<unsigned long long>(recentVisits));
+  }
+}
+static void missingResultChecks() {
+  for(int retained:{5000,500000}) {
+    CMUSHclientDoc d;
+    for(int i=1;i<retained;++i) d.newLine();
+    d.callback=[&]{
+      // Run the exact AddStyle body used by note output. It replaces the empty
+      // result of the packet action without deleting the retained history.
+      d.NoteStyle(4,2,3,8,"callback","",""); d.m_pCurrentLine->len+=8;
+    };
+    styleVisits=lineVisits=0;
+    for(int i=0;i<100;++i) d.Run(false,false,MXP_ACTION_VERSION);
+    assert(lineVisits==200);
+    assert(d.m_LineList.GetCount()==static_cast<size_t>(retained));
+    std::printf("missing packet result: history=%d, operations=100, line visits=%llu\n",retained,static_cast<unsigned long long>(lineVisits));
+  }
+  // Rollback must still find an older preserved style when no deletion occurs.
+  {
+    CMUSHclientDoc d; auto* old=d.tail(); old->iLength=4;
+    auto identity=old->nCreationNumber;
+    d.newLine(); CMXPStartTransaction tx(&d,++serial); tx.PreserveStyle(old);
+    auto* marker=d.AddStyle(START_TAG,7,0,0,"marker","",""); tx.SetMarker(marker);
+    auto* result=d.AddStyle(0,7,0,0,"result","",""); tx.SetStyle(result);
+    tx.Rollback();
+    assert(d.m_LineList.GetHead()->styleList.GetHead()==old&&old->nCreationNumber==identity);
+    assert(d.m_pCurrentLine->styleList.GetCount()==1);
   }
 }
 static void rollbackChecks() {
@@ -365,4 +466,78 @@ static void rollbackChecks() {
   }
   std::puts("MXP rollback contracts: restored identities, repurposed marker, pruned styles passed");
 }
-int main() { packetChecks(); outputChecks(); rollbackChecks(); lookupChecks(); }
+static void customCloseChecks() {
+  int cases=0;
+  for(int action:{MXP_ACTION_P,MXP_ACTION_UL,MXP_ACTION_OL})
+    for(bool wanted:{false,true}) for(bool nonempty:{false,true}) {
+      CMUSHclientDoc d;
+      d.customActions={action,MXP_ACTION_PRE,action};
+      d.itemWanted={wanted,true,false}; d.m_bPluginProcessesOpenTag=true;
+      d.Run(true,true,action);
+      vector<std::string> expected;
+      for(int value:d.customActions) { expected.push_back("build:"+std::to_string(value)); expected.push_back("hook:"+std::to_string(value)); }
+      if(wanted) expected.push_back("open:"+std::to_string(action));
+      expected.push_back("open:"+std::to_string(MXP_ACTION_PRE));
+      assert(d.events==expected && d.hookIndex==3);
+      assert(d.argumentChecks==2+int(wanted));
+      auto* tag=d.m_ActiveTagList.GetTail();
+      vector<int> accepted;
+      if(wanted) accepted.push_back(action);
+      accepted.push_back(MXP_ACTION_PRE);
+      assert(tag->closeActions==accepted);
+      CPreparedMXPClose close; close.closeActions=tag->closeActions;
+      close.iActiveTagCreationNumber=tag->nCreationNumber;
+      d.m_pCurrentLine->len=nonempty?4:0;
+      d.events.clear(); auto lines=d.m_LineList.GetCount();
+      d.FinishCustomClose(close);
+      expected={"close callback"};
+      if(wanted) {
+        expected.push_back("close:"+std::to_string(action));
+        if(action==MXP_ACTION_P||nonempty) expected.push_back("newline");
+      }
+      expected.push_back("close:"+std::to_string(MXP_ACTION_PRE));
+      assert(d.events==expected);
+      assert(d.m_LineList.GetCount()==lines+size_t(wanted&&(action==MXP_ACTION_P||nonempty)));
+      assert(!d.m_bInParagraph&&!d.m_bPreMode&&d.m_iListMode==0);
+      ++cases;
+    }
+  // All items are declined, or no hook is installed.
+  for(bool hooks:{false,true}) {
+    CMUSHclientDoc d; d.customActions={MXP_ACTION_P,MXP_ACTION_UL,MXP_ACTION_OL};
+    d.m_bPluginProcessesOpenTag=hooks; d.itemWanted={false,false,false}; d.Run(true,true,MXP_ACTION_P);
+    assert(d.hookIndex==(hooks?3:0));
+    assert(d.m_ActiveTagList.GetTail()->closeActions==(hooks?vector<int>{}:d.customActions));
+    if(hooks) { assert(!d.m_bInParagraph&&d.m_iListMode==0); assert(d.argumentChecks==1); }
+  }
+  // Failed open actions remove the published tag and restore prior mode owners.
+  for(bool throws:{false,true}) {
+    CMUSHclientDoc d; d.customActions={MXP_ACTION_P,MXP_ACTION_PRE};
+    d.m_bInParagraph=true; d.m_iMXPParagraphOwner=55;
+    if(throws) d.throwOpenAction=MXP_ACTION_PRE; else d.failOpenAction=MXP_ACTION_PRE;
+    bool caught=false; try { d.Run(true,true,MXP_ACTION_P); }
+    catch(const std::runtime_error& e) { assert(std::string(e.what())=="open failure"); caught=true; }
+    assert(caught==throws && d.m_ActiveTagList.IsEmpty());
+    assert(d.m_bInParagraph && d.m_iMXPParagraphOwner==55 && d.argumentChecks==0);
+  }
+  // A preparation hook exception must propagate before publication.
+  {
+    CMUSHclientDoc d; d.customActions={MXP_ACTION_P}; d.itemWanted={false};
+    d.m_bPluginProcessesOpenTag=true; d.throwHook=true;
+    bool caught=false; try { d.Run(true,true,MXP_ACTION_P); }
+    catch(const std::runtime_error& e) { assert(std::string(e.what())=="hook failure"); caught=true; }
+    assert(caught&&d.m_ActiveTagList.IsEmpty()&&!d.m_bInParagraph);
+  }
+  // Close actions continue after an exception and retain the first error.
+  for(bool callbackThrows:{false,true}) {
+    CMUSHclientDoc d; d.customActions={MXP_ACTION_P,MXP_ACTION_PRE}; d.Run(true,true,MXP_ACTION_P);
+    CPreparedMXPClose close; close.closeActions=d.m_ActiveTagList.GetTail()->closeActions;
+    close.iActiveTagCreationNumber=d.m_ActiveTagList.GetTail()->nCreationNumber;
+    d.throwCloseAction=MXP_ACTION_P; d.events.clear(); bool caught=false;
+    try { d.FinishCustomClose(close,callbackThrows); }
+    catch(const std::runtime_error& e) { assert(std::string(e.what())==(callbackThrows?"callback failure":"close failure")); caught=true; }
+    assert(caught&&!d.m_bPreMode);
+    assert((d.events==vector<std::string>{"close callback","close:"+std::to_string(MXP_ACTION_P),"close:"+std::to_string(MXP_ACTION_PRE)}));
+  }
+  std::printf("custom close: %d paragraph/list cases, hook order, all-declined, no-hook, rollback, and exception contracts passed\n",cases);
+}
+int main() { packetChecks(); outputChecks(); rollbackChecks(); customCloseChecks(); lookupChecks(); missingResultChecks(); }

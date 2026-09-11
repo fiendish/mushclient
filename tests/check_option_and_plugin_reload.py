@@ -89,10 +89,14 @@ void AfxThrowMemoryException(){throw new CMemoryException;}
 '''
     # Inject only the allocator. Keep production ResizeText publication ordering.
     resize = block(read('Line.cpp'), 'void CLine::ResizeText (')
-    resize = resize.replace('new char [iNewSize]', 'allocateLineText(iNewSize)')
+    resize = replace_once(resize, 'new char [iNewSize]',
+                          'allocateLineText(iNewSize)', 'Line.cpp')
     base = block(source, 'long SetBaseOptionItem (')
     # Windows long has four bytes; the macOS/Linux host long can have eight.
-    base = base.replace('(long *)', '(int32_t *)')
+    base = replace_once(base, 'if (* (long *) p != Value)',
+                        'if (* (int32_t *) p != Value)', 'scriptingoptions.cpp')
+    base = replace_once(base, '* (long *) p = Value;',
+                        '* (int32_t *) p = Value;', 'scriptingoptions.cpp')
     body = base + block(source, 'long CMUSHclientDoc::SetOptionItem (')
     for start, end in [
         ('bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle', 'COutputAppendTransaction::COutputAppendTransaction'),

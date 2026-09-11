@@ -295,6 +295,9 @@ class CMXPStartTransaction
                           const __int64 iStateOwner) :
       m_pDoc (pDoc),
       m_iStateOwner (iStateOwner),
+      m_iOpeningOutputGeneration (pDoc->m_iOutputGeneration),
+      m_iFirstResultLineCreationNumber (pDoc->m_pCurrentLine ?
+        pDoc->m_pCurrentLine->nCreationNumber : 0),
       m_bOpeningInParagraph (pDoc->m_bInParagraph),
       m_bOpeningPreMode (pDoc->m_bPreMode),
       m_bOpeningMXPScript (pDoc->m_bMXP_script),
@@ -495,7 +498,31 @@ class CMXPStartTransaction
       }
 
     CStyle * ResolveStyle (const __int64 iCreationNumber) const
-      { return FindStyle (iCreationNumber); }
+      {
+      if (!iCreationNumber)
+        return NULL;
+
+      // Deleting output can resume an older retained line. Keep the full
+      // lookup when that happens during this transaction.
+      if (m_pDoc->m_iOutputGeneration != m_iOpeningOutputGeneration)
+        return FindStyle (iCreationNumber);
+
+      // Without deletion, results stay on the opening line or a newer line.
+      // A note callback can replace the result without deleting any lines.
+      for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
+        {
+        CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+        if (pLine->nCreationNumber < m_iFirstResultLineCreationNumber)
+          break;
+        for (POSITION stylepos = pLine->styleList.GetTailPosition (); stylepos; )
+          {
+          CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
+          if (pStyle->nCreationNumber == iCreationNumber)
+            return pStyle;
+          }
+        }
+      return NULL;
+      }
 
     void Commit ()
       {
@@ -565,6 +592,8 @@ class CMXPStartTransaction
 
     CMUSHclientDoc * m_pDoc;
     __int64 m_iStateOwner;
+    __int64 m_iOpeningOutputGeneration;
+    __int64 m_iFirstResultLineCreationNumber;
     bool m_bOpeningInParagraph;
     bool m_bOpeningPreMode;
     bool m_bOpeningMXPScript;
@@ -950,12 +979,12 @@ CString strTagVariable;
     if (pAtomicElement)
       pTag->closeActions.push_back (pAtomicElement->iAction);
     else
-      for (POSITION closepos = pElement->ElementItemList.GetHeadPosition ();
-           closepos; )
-        {
-        CElementItem * pCloseItem = pElement->ElementItemList.GetNext (closepos);
-        pTag->closeActions.push_back (pCloseItem->pAtomicElement->iAction);
-        }
+      for (size_t iExpandedItem = 0;
+           iExpandedItem < expandedItems.size ();
+           iExpandedItem++)
+        if (expandedItemsWanted [iExpandedItem])
+          pTag->closeActions.push_back (
+            expandedItems [iExpandedItem]->pAtomicElement->iAction);
     m_ActiveTagList.AddTail (pTag.get ());  // add to outstanding tag list
     pPublishedTag = pTag.release ();
     transaction.SetActiveTag (pPublishedTag);

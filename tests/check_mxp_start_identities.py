@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from output_callbacks import replace_once
+
 
 def between(text, first, last, label):
     start = text.find(first)
@@ -29,6 +31,9 @@ def main():
     start = (args.source / 'mxp/mxpStart.cpp').read_text()
     atomic = (args.source / 'mxp/mxpOpenAtomic.cpp').read_text()
     doc = (args.source / 'doc.cpp').read_text()
+    close = (args.source / 'mxp/mxpClose.cpp').read_text()
+    close_atomic = (args.source / 'mxp/mxpCloseAtomic.cpp').read_text()
+    close_atomic = close_atomic[close_atomic.index('void CMUSHclientDoc::MXP_CloseAtomicTag ('):]
     header = (args.source / 'doc.h').read_text()
     declaration = between(header, '  bool MXP_OpenAtomicTag', '  void MXP_CloseAtomicTag', 'doc.h')
     assert '__int64 & iResultStyleCreationNumber' in declaration
@@ -49,8 +54,26 @@ def main():
         packet_cases.append('case MXP_ACTION_' + name + ': {\nCString ' + variable + ' = "response-' + name + '\\r\\n";\n' + call + '\nbreak; }')
     pieces = {
         'TRANSACTION': between(start, 'class CMXPStartTransaction', 'class CActionReferenceGuard', 'mxp/mxpStart.cpp'),
+        'CUSTOM_PREPARATION': between(start,
+            '    for (POSITION itempos = pElement->ElementItemList.GetHeadPosition ();',
+            '    if (m_iMXPGeneration != iOpeningMXPGeneration || !m_bMXP)', 'mxp/mxpStart.cpp'),
+        'CLOSE_ACTIONS': between(start,
+            '    if (pAtomicElement)\n      pTag->closeActions.push_back',
+            '    m_ActiveTagList.AddTail', 'mxp/mxpStart.cpp'),
+        'PARAGRAPH_OPEN': between(atomic, '    case MXP_ACTION_P:',
+            '          // new line', 'mxp/mxpOpenAtomic.cpp'),
+        'LIST_OPEN': between(atomic, '    case MXP_ACTION_PRE:',
+            '     case MXP_ACTION_LI:', 'mxp/mxpOpenAtomic.cpp'),
+        'PARAGRAPH_LIST_CLOSE': between(close_atomic, '    case MXP_ACTION_P:',
+            '      case MXP_ACTION_VAR:', 'mxp/mxpCloseAtomic.cpp'),
+        'CLOSE_DISPATCH': between(close,
+            '  // Keep the original callback-before-close-action order.',
+            '  } // end of CMUSHclientDoc::MXP_FinishCloseTag', 'mxp/mxpClose.cpp'),
         'FINALIZATION': between(start, '  // atomic element?  (looked-up earlier)', '  } // end of CMUSHclientDoc::MXP_StartTag', 'mxp/mxpStart.cpp'),
         'SEND_PACKET': between(doc, 'void  CMUSHclientDoc::SendPacket (const char *', 'void  CMUSHclientDoc::SendPacket (const unsigned char *', 'doc.cpp'),
+        'NOTE_ADD_STYLE': replace_once(between(doc,
+            'CStyle * CMUSHclientDoc::AddStyle (', '// adds a new style to the current line', 'doc.cpp'),
+            'CStyle * CMUSHclientDoc::AddStyle (', 'CStyle * CMUSHclientDoc::NoteStyle (', 'doc.cpp'),
         'REMEMBER_STYLE': between(doc, 'void CMUSHclientDoc::RememberStyle (', 'void CMUSHclientDoc::OnDebugWorldInput', 'doc.cpp'),
         'PREPARE_STYLE': between(doc, 'void COutputAppendTransaction::TrackLine (', 'void COutputAppendTransaction::RecordCreatedLine ()', 'doc.cpp'),
         'RESULT_INIT': between(atomic, 'unsigned short iFlags', '// find current foreground', 'mxp/mxpOpenAtomic.cpp'),
@@ -70,7 +93,7 @@ def main():
     cpp = args.output / 'mxp_start_identity_test.cpp'
     cpp.write_text(template)
     executable = args.output / 'mxp_start_identity_test'
-    command = ['clang++', '-std=c++17', '-g', '-O1', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', str(cpp), '-o', str(executable)]
+    command = ['clang++', '-std=c++17', '-g', '-O1', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', str(cpp), '-o', str(executable)]
     subprocess.run(command, check=True)
     env = dict(os.environ)
     # Keep diagnostics visible. A failed compile or check stops this runner.

@@ -45,7 +45,7 @@ def main():
     cpp.write_text(template)
     executable = args.output / 'mxp_cleanup'
     subprocess.run(['clang++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
-                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
                     str(cpp), '-o', str(executable)], check=True)
     result = subprocess.run([str(executable), args.check], text=True, capture_output=True)
     (args.output / 'run.log').write_text(result.stdout + result.stderr)
