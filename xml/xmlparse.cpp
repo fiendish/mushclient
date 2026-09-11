@@ -189,17 +189,46 @@ void CXMLparser::BuildStructure (CFile * file)
   if ((unsigned char) m_strxmlBuffer [0] == 0xFF &&
       (unsigned char) m_strxmlBuffer [1] == 0xFE)
     {
+    if ((m_xmlLength - 2) % 2 != 0)
+      ThrowErrorException ("Unicode XML file ends with an incomplete character");
+
     CString buf2;
     const char * q =  m_strxmlBuffer;
     q += 2; // skip indicator bytes
+    const WCHAR * pWide = (LPCWSTR) q;
+    const int iCharacters = (m_xmlLength - 2) / 2;
+
+    // Validate surrogate pairs without newer Windows conversion flags.
+    for (int i = 0; i < iCharacters; i++)
+      {
+      if (pWide [i] >= 0xD800 && pWide [i] <= 0xDBFF)
+        {
+        if (i + 1 == iCharacters ||
+            pWide [i + 1] < 0xDC00 || pWide [i + 1] > 0xDFFF)
+          ThrowErrorException ("Could not convert Unicode XML file");
+        i++; // skip the low surrogate of this valid pair
+        }
+      else if (pWide [i] >= 0xDC00 && pWide [i] <= 0xDFFF)
+        ThrowErrorException ("Could not convert Unicode XML file");
+      }
+
     // find required buffer length
-    int length = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q, (m_xmlLength - 2) / 2, 
-                    NULL, 0, NULL, NULL);
+    int length = WideCharToMultiByte (CP_UTF8, 0, pWide,
+                                       iCharacters, NULL, 0, NULL, NULL);
+    if (length <= 0)
+      ThrowErrorException ("Could not convert Unicode XML file");
+
     // make a new string with enough length to hold it
     char * p = buf2.GetBuffer (length);
     // convert it
-    WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) q, (m_xmlLength - 2) / 2, 
-              p, length, NULL, NULL);
+    int iConverted = WideCharToMultiByte (CP_UTF8, 0, pWide,
+                                          iCharacters,
+                                          p, length, NULL, NULL);
+    if (iConverted != length)
+      {
+      buf2.ReleaseBuffer (0);
+      ThrowErrorException ("Could not convert Unicode XML file");
+      }
     buf2.ReleaseBuffer (length);
     // copy to our buffer
     m_strxmlBuffer = buf2;

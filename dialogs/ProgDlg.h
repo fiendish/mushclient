@@ -15,6 +15,11 @@ public:
     ~CProgressDlg();
 
     BOOL Create(CWnd *pParent=NULL);
+    static bool IsPumpingMessages ();
+    bool IsUsable () const;
+    void BeginOperation ();
+    void EndOperation ();
+    void RequestDelete ();
 
     // Checking for Cancel button
     BOOL CheckCancelButton();
@@ -52,6 +57,10 @@ protected:
     
     BOOL m_bCancel;
     BOOL m_bParentDisabled;
+    int m_iActiveOperations;
+    bool m_bDeletePending;
+    HWND m_hParentWindow;
+    CWnd * m_pParentWindowIdentity;
 
     void ReEnableParent();
 
@@ -66,5 +75,18 @@ protected:
     //}}AFX_MSG
     DECLARE_MESSAGE_MAP()
 };
+
+// A Lua callback can close the dialog that is currently pumping messages.
+class CProgressDlgOperationGuard
+  {
+  public:
+    explicit CProgressDlgOperationGuard (CProgressDlg * pDialog) : m_pDialog (pDialog)
+      { m_pDialog->BeginOperation (); }
+    ~CProgressDlgOperationGuard () { m_pDialog->EndOperation (); }
+  private:
+    CProgressDlg * m_pDialog;
+    CProgressDlgOperationGuard (const CProgressDlgOperationGuard &);
+    CProgressDlgOperationGuard & operator= (const CProgressDlgOperationGuard &);
+  };
 
 #endif // __PROGDLG_H__

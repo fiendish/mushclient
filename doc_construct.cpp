@@ -16,7 +16,6 @@ extern int gdoccount;
 // CMUSHclientDoc construction/destruction
 
 CMUSHclientDoc::CMUSHclientDoc()
-  :	m_eventScriptFileChanged(FALSE, TRUE)
 
 {    // constructor
 
@@ -40,6 +39,10 @@ int i;
   m_AliasMap.InitHashTable (293);    // probably won't have many more than 300 aliases
   m_TriggerMap.InitHashTable (293);  // probably won't have many more than 300 triggers
   m_TimerMap.InitHashTable (293);    // probably won't have many more than 300 timers
+
+  m_pRetiredAliases = NULL;
+  m_pRetiredTriggers = NULL;
+  m_pRetiredTimers = NULL;
 
   SetDefaults (false);        // set up numeric/boolean defaults
   SetAlphaDefaults (false);   // set up alpha defaults
@@ -80,14 +83,24 @@ int i;
   m_bPluginProcessingCommand = false;
   m_bPluginProcessingSend = false;
   m_bPluginProcessingSent = false;
+  m_bInPluginListChanged = false;
+  m_bPluginListChangedPending = false;
+  m_iPluginListChangedDeferralDepth = 0;
+  m_bPluginListChangedDeferred = false;
+  m_bInScreendraw = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
+  m_iConnectionAttemptNumber = 0;
+  m_iNameLookupGeneration = 0;
   m_iNextChatID = 0;
   m_tLastMessageTime = 0;
   m_tLastGroupMessageTime = 0;
   m_bOmitFromCommandHistory = false;
   m_bUTF_8 = false;
   m_bWorldClosing = false;
+  m_bWorldCloseQueued = false;
+  m_bWorldClosePending = false;
+  m_iActiveProgressOperations = 0;
   m_bInSendToScript = true;
 
   m_bInPlaySoundFilePlugin = false;
@@ -202,6 +215,7 @@ int i;
   m_InputFontHeight = 0;
   m_InputFontWidth = 0;
   m_total_lines = 0;
+  m_iOutputGeneration = 0;
   m_newlines_received = 0;
   m_last_line_with_IAC_GA = 0;
   m_nTotalLinesSent = 0;
@@ -253,6 +267,10 @@ int i;
   m_bInParagraph = false;
   m_bMXP_script = false;
   m_bPreMode = false;
+  m_iMXPParagraphOwner = 0;
+  m_iMXPPreOwner = 0;
+  m_iMXPScriptOwner = 0;
+  m_iMXPListOwner = 0;
   m_iMXP_defaultMode = eMXP_open;
   m_iMXP_mode = m_iMXP_defaultMode;
   m_cLastChar = 0;
@@ -377,6 +395,7 @@ int i;
   
   m_iMXPerrors = 0;     
   m_iMXPtags = 0;       
+  m_iMXPGeneration = 0;
   m_iMXPentities = 0;   
 
   // scripting support
@@ -389,7 +408,8 @@ int i;
   m_ScriptEngine = NULL;
 
   m_bInScriptFileChanged = false;
-  m_pThread = NULL;
+  m_bScriptFileChangedPending = false;
+  m_iMonitorToken = 0;
   m_bSyntaxErrorOnly = false;
 
   m_dispidWorldOpen = DISPID_UNKNOWN;
@@ -560,10 +580,24 @@ int i;
   CloseLog ();    // this writes out the log file postamble as well
 
 // delete triggers
-       
+
+  while (m_pRetiredTriggers)
+    {
+    CTrigger * pTrigger = m_pRetiredTriggers;
+    m_pRetiredTriggers = pTrigger->pNextRetired;
+    delete pTrigger;
+    }
+
   DELETE_MAP (m_TriggerMap, CTrigger); 
 
 // delete aliass
+
+  while (m_pRetiredAliases)
+    {
+    CAlias * pAlias = m_pRetiredAliases;
+    m_pRetiredAliases = pAlias->pNextRetired;
+    delete pAlias;
+    }
 
   DELETE_MAP (m_AliasMap, CAlias); 
 
@@ -572,6 +606,13 @@ int i;
   DELETE_LIST (m_LineList);
 
 // delete timer map
+
+  while (m_pRetiredTimers)
+    {
+    CTimer * pTimer = m_pRetiredTimers;
+    m_pRetiredTimers = pTimer->pNextRetired;
+    delete pTimer;
+    }
 
   DELETE_MAP (m_TimerMap, CTimer); 
   

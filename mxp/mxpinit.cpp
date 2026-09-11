@@ -316,14 +316,14 @@ char * character_entities [] =
 void CMUSHclientApp::MXP_LoadColours (void)
   {
 
-CColours * colour_item;
 CString strName;
 
   for (int i = 0; i < NUMITEMS (MXP_colours); i++)
     {
     strName = MXP_colours [i].pName;
     strName.MakeLower ();     // ensure lower case
-    m_ColoursMap.SetAt (strName, colour_item = new CColours);
+    std::unique_ptr<CColours> newColour (new CColours);
+    CColours * colour_item = newColour.get ();
     colour_item->strName = strName;
     // colours seem to be inverted in my table above
     colour_item->iColour = RGB (
@@ -331,6 +331,12 @@ CString strName;
                       GetGValue (MXP_colours [i].iColour),
                       GetRValue (MXP_colours [i].iColour)
                       );    
+
+    CColours * oldColour = NULL;
+    m_ColoursMap.Lookup (strName, oldColour);
+    m_ColoursMap.SetAt (strName, colour_item);
+    newColour.release ();
+    delete oldColour;
 
 // temporary, for displaying colours
 /*
@@ -429,15 +435,19 @@ CString strReplacement;
 void CMUSHclientApp::MXP_LoadElements (void)
   {
 
-CAtomicElement * element_item;
-
   for (int i = 0; i < NUMITEMS (MXP_elements); i++)
     {
-    m_ElementMap.SetAt (MXP_elements [i].pName, element_item = new CAtomicElement);
+    std::unique_ptr<CAtomicElement> newElement (new CAtomicElement);
+    CAtomicElement * element_item = newElement.get ();
     element_item->strName = MXP_elements [i].pName;
     element_item->strArgs = MXP_elements [i].pArgs;
     element_item->iFlags = MXP_elements [i].iFlags;
     element_item->iAction = MXP_elements [i].iAction;
+    CAtomicElement * oldElement = NULL;
+    m_ElementMap.Lookup (MXP_elements [i].pName, oldElement);
+    m_ElementMap.SetAt (MXP_elements [i].pName, element_item);
+    newElement.release ();
+    delete oldElement;
     }   // end of doing each one
 
   } // end of CMUSHclientApp::LoadAtomicElements 

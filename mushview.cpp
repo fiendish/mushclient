@@ -77,14 +77,10 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 #define TTM_SETWINDOWTHEME      CCM_SETWINDOWTHEME
 
 
-CString strMXP_menu_item [MXP_MENU_COUNT];
-
 #define ACTION_ALIAS 1    // dummy action type for alias menus
 
 // for conversion to Unicode
 static WCHAR sUnicodeText [MAX_LINE_WIDTH];
-
-int iAction = 0;
 
 /////////////////////////////////////////////////////////////////////////////
 // CMUSHView
@@ -292,6 +288,8 @@ CMUSHView::CMUSHView()
   m_nLastToolTipColumn = 0;
   m_scroll_position = 0;
   m_mousedover = false;
+  m_bInSelectionChanged = false;
+  m_iMXPMenuAction = 0;
   m_bottomview = NULL;
 
   m_iPauseStatus = ePauseUninitialised;
@@ -1988,21 +1986,17 @@ ASSERT_VALID(pDoc);
 
   } // end of CMUSHView::extend_selection
 
-int CompareMenu (const void * elem1, const void * elem2)
+static CString MXPMenuText (const CString & strAction)
   {
-  CString string1 = (*((CString *) elem1));
-  CString string2 = (*((CString *) elem2));
-
-  // strip off plugin IDs
   CStringList strList;
+  StringToList (strAction, ":", strList);
+  return strList.GetHead ();
+  }
 
-  StringToList (string1, ":", strList);
-  string1 = strList.GetHead ();
-
-  StringToList (string2, ":", strList);
-  string2 = strList.GetHead ();
-
-  return string1.CompareNoCase (string2);
+static bool CompareMenu (const CMXPMenuItem & item1,
+                         const CMXPMenuItem & item2)
+  {
+  return item1.m_strMenuText.CompareNoCase (item2.m_strMenuText) < 0;
 
   }   // end of CompareMenu
 
@@ -2013,6 +2007,8 @@ ASSERT_VALID(pDoc);
 
   if (!pDoc->m_FontHeight)
     return;
+
+  CPluginContextGuard pluginContextGuard (pDoc, NULL);
 
   CPoint wordPoint (point);
 
@@ -2065,13 +2061,14 @@ CPoint menupoint = point;
 
   pPopup->DeleteMenu (0, MF_BYPOSITION);  // get rid of dummy item
 
-  int i = 0;
+  CMXPMenuItemList menuItems;
+  menuItems.reserve (MXP_MENU_COUNT);
 
   CAlias * pAlias;
   CString strAliasName;
 
   for (pos = pDoc->m_AliasMap.GetStartPosition();
-       pos && i < MXP_MENU_COUNT;
+       pos && menuItems.size () < MXP_MENU_COUNT;
        )
      {
      pDoc->m_AliasMap.GetNextAssoc (pos, strAliasName, pAlias);
@@ -2080,21 +2077,24 @@ CPoint menupoint = point;
         !pAlias->bEnabled)
         continue;
 
-     // remember what to send if they click on it
-     strMXP_menu_item [i] = pAlias->strLabel;
-     i++;
+     CMXPMenuItem item;
+     item.m_strAction = pAlias->strLabel;
+     item.m_strMenuText = MXPMenuText (item.m_strAction);
+     item.m_strAliasKey = strAliasName;
+     item.m_iAliasCreationNumber = pAlias->nCreationNumber;
+     menuItems.push_back (item);
     } // end of all aliases
 
   // do plugins
   for (PluginListIterator pit = pDoc->m_PluginList.begin ();
-       pit != pDoc->m_PluginList.end () && i < MXP_MENU_COUNT;
+       pit != pDoc->m_PluginList.end () && menuItems.size () < MXP_MENU_COUNT;
        ++pit)
     {
     pDoc->m_CurrentPlugin = *pit;
 
     if (pDoc->m_CurrentPlugin->m_bEnabled)
       for (POSITION pos = pDoc->GetAliasMap ().GetStartPosition ();
-            pos && i < MXP_MENU_COUNT; )
+            pos && menuItems.size () < MXP_MENU_COUNT; )
         {
         pDoc->GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
 
@@ -2103,43 +2103,39 @@ CPoint menupoint = point;
             !pAlias->bEnabled)
             continue;
 
-         // remember what to send if they click on it
-         strMXP_menu_item [i] = pAlias->strLabel;
-         strMXP_menu_item [i] += ":";
-         strMXP_menu_item [i] += pDoc->m_CurrentPlugin->m_strID;  // need to know which plugin
-         i++;
+         CMXPMenuItem item;
+         item.m_strAction = pAlias->strLabel;
+         item.m_strAction += ":";
+         item.m_strAction += pDoc->m_CurrentPlugin->m_strID;
+         item.m_strMenuText = MXPMenuText (item.m_strAction);
+         item.m_strAliasKey = strAliasName;
+         item.m_strPluginID = pDoc->m_CurrentPlugin->m_strID;
+         item.m_iAliasCreationNumber = pAlias->nCreationNumber;
+         item.m_iPluginInstanceNumber =
+           pDoc->m_CurrentPlugin->m_iPluginInstanceNumber;
+         menuItems.push_back (item);
 
         }  // end of scanning plugin aliases
     } // end of doing plugins list
   pDoc->m_CurrentPlugin = NULL;
 
-  if (i == 0)
+  if (menuItems.empty ())
     {
      pPopup->AppendMenu (MF_STRING | MF_GRAYED, MXP_FIRST_MENU, "(no alias menu items)");
-     strMXP_menu_item [0].Empty ();
     }
   else
     {
-        // sort the array - otherwise we'll be all over the map :)
-    qsort (strMXP_menu_item,
-           i,
-           sizeof (CString),
-           CompareMenu);
+    sort (menuItems.begin (), menuItems.end (), CompareMenu);
 
-    for (int j = 0; j < i; j++)
+    for (size_t j = 0; j < menuItems.size (); j++)
       {
-      CString strMenu = Replace (strMXP_menu_item [j], "_", " ");
-
-      // strip off plugin id
-      CStringList strList;
-      StringToList (strMenu, ":", strList);
-      strMenu = strList.GetHead ();
+      CString strMenu = Replace (menuItems [j].m_strMenuText, "_", " ");
 
       // add menu item
-      pPopup->AppendMenu (MF_STRING | MF_ENABLED, MXP_FIRST_MENU + j, strMenu);
+      pPopup->AppendMenu (MF_STRING | MF_ENABLED,
+                          MXP_FIRST_MENU + static_cast<UINT> (j), strMenu);
 
-      // alias map lookup must be lower case
-      strMXP_menu_item [j].MakeLower ();
+      menuItems [j].m_strAction.MakeLower ();
       } // end of building menu
 
     } // end of some menu items
@@ -2151,17 +2147,17 @@ CPoint menupoint = point;
   ClientToScreen(&point);
 
   // without this line the auto-enable always set "no items" to active
-  Frame.m_bAutoMenuEnable  = FALSE;
+  CValueStateGuard<BOOL> autoMenuEnableGuard (Frame.m_bAutoMenuEnable, FALSE);
 
-  iAction = ACTION_ALIAS;
-  pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+  CValueStateGuard<int> actionGuard (m_iMXPMenuAction, ACTION_ALIAS);
+  CValueStateGuard<CMXPMenuItemList> itemsGuard (m_MXPMenuItems, menuItems);
+  const UINT nCommand = pPopup->TrackPopupMenu(
+                        TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
                         point.x,
                         point.y,
                         pWndPopupOwner);
-
-  // put things back how they were
-  Frame.m_bAutoMenuEnable  = TRUE;
-
+  if (nCommand)
+    OnMXPMenu (nCommand);
 
   } // end of CMUSHView::AliasMenu
 
@@ -2332,7 +2328,8 @@ int line,
             }   // end of passing special syntax test
           else
             {  // plugin does not exist - just execute it
-            pDoc->m_iExecutionDepth = 0;
+            CValueStateGuard<int> executionDepthGuard
+              (pDoc->m_iExecutionDepth, 0);
             pDoc->Execute (strAction);
             }
           } // end of note hyperlink
@@ -3302,21 +3299,10 @@ void CMUSHView::AutoWrapWindowWidth (CMUSHclientDoc* pDoc)
 
     if (pDoc->m_pCurrentLine)     // a new world might not have a line yet
       {
-      // save current line text
-      CString strLine = CString (pDoc->m_pCurrentLine->text, pDoc->m_pCurrentLine->len);
-
-  #ifdef USE_REALLOC
-      pDoc->m_pCurrentLine->text  = (char *) realloc (pDoc->m_pCurrentLine->text, 
-                                               MAX (pDoc->m_pCurrentLine->len, iWidth) 
-                                               * sizeof (char));
-  #else
-      delete [] pDoc->m_pCurrentLine->text;
-      pDoc->m_pCurrentLine->text = new char [MAX (pDoc->m_pCurrentLine->len, iWidth)];
-  #endif
-
-      // put text back
-      memcpy (pDoc->m_pCurrentLine->text, (LPCTSTR) strLine, pDoc->m_pCurrentLine->len);
-      ASSERT (pDoc->m_pCurrentLine->text);
+      int iMemoryAllocated = MAX (pDoc->m_pCurrentLine->len, iWidth);
+      if (pDoc->m_bUTF_8)
+        iMemoryAllocated *= 4;
+      pDoc->m_pCurrentLine->ResizeText (iMemoryAllocated);
     
       }   // end of having a current line
 
@@ -3355,11 +3341,11 @@ int lastline;
   // very bizarre bug - fixed in 4.39
   // we seem to get size messages if we are maximized and in the background
 
-  bool bOldFreeze = m_freeze;  
+  {
+  CValueStateGuard<BOOL> freezeGuard (m_freeze, m_freeze);
   if (m_bAtBufferEnd)
     OnTestEnd ();   
-
-  m_freeze = bOldFreeze;
+  }
   
   Frame.FixUpTitleBar ();   // in case we need to add the mud name to the title bar
 
@@ -3730,6 +3716,8 @@ ASSERT_VALID(pDoc);
           pPopup->DeleteMenu (0, MF_BYPOSITION);  // get rid of dummy item
 
           int iCount = MIN (actionsList.GetCount (), MXP_MENU_COUNT);
+          CMXPMenuItemList menuItems;
+          menuItems.reserve (iCount);
 
           // build up menu
           for (int i = 0; i < iCount; i++)
@@ -3752,19 +3740,26 @@ ASSERT_VALID(pDoc);
             if (i == 0)
               SetMenuDefaultItem(pPopup->m_hMenu, 0, MF_BYPOSITION);
 
-            // remember what to send if they click on it
-            strMXP_menu_item [i] = strAction;
+            CMXPMenuItem item;
+            item.m_strAction = strAction;
+            item.m_strMenuText = strHint;
+            menuItems.push_back (item);
             }
 
-          iAction = iStyle & ACTIONTYPE;
           while (pWndPopupOwner->GetStyle() & WS_CHILD)
             pWndPopupOwner = pWndPopupOwner->GetParent();
 
-
-          pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, 
+          CValueStateGuard<int> actionGuard
+            (m_iMXPMenuAction, iStyle & ACTIONTYPE);
+          CValueStateGuard<CMXPMenuItemList> itemsGuard
+            (m_MXPMenuItems, menuItems);
+          const UINT nCommand = pPopup->TrackPopupMenu(
+                                TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
                                 menupoint.x, 
                                 menupoint.y,
                                 pWndPopupOwner);
+          if (nCommand)
+            OnMXPMenu (nCommand);
 
           return;
           } // we have ACTION_SEND or ACTION_PROMPT
@@ -3786,17 +3781,25 @@ ASSERT_VALID(pDoc);
 
           SetMenuDefaultItem(pPopup->m_hMenu, 0, MF_BYPOSITION);
 
-          // remember what to send if they click on it
-          strMXP_menu_item [0] = pStyle->pAction->m_strAction;
+          CMXPMenuItem item;
+          item.m_strAction = pStyle->pAction->m_strAction;
+          item.m_strMenuText = pStyle->pAction->m_strAction;
+          CMXPMenuItemList menuItems (1, item);
 
-          iAction = iStyle & ACTIONTYPE;
           while (pWndPopupOwner->GetStyle() & WS_CHILD)
             pWndPopupOwner = pWndPopupOwner->GetParent();
 
-          pPopup->TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, 
+          CValueStateGuard<int> actionGuard
+            (m_iMXPMenuAction, iStyle & ACTIONTYPE);
+          CValueStateGuard<CMXPMenuItemList> itemsGuard
+            (m_MXPMenuItems, menuItems);
+          const UINT nCommand = pPopup->TrackPopupMenu(
+                                TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
                                 menupoint.x, 
                                 menupoint.y,
                                 pWndPopupOwner);
+          if (nCommand)
+            OnMXPMenu (nCommand);
 
           return;
           }  // end of ACTION_HYPERLINK
@@ -5644,15 +5647,21 @@ void CMUSHView::OnMXPMenu (UINT nID)
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
 
+  const UINT iMenuItem = nID - MXP_FIRST_MENU;
+  if (iMenuItem >= m_MXPMenuItems.size ())
+    return;
+
+  const CMXPMenuItem menuItem = m_MXPMenuItems [iMenuItem];
+
   // send the appropriate menu item
 
-  switch (iAction)
+  switch (m_iMXPMenuAction)
     {
     case ACTION_SEND:
       {
       if (pDoc->CheckConnected ())
         return;
-      CString strAction = strMXP_menu_item [nID - MXP_FIRST_MENU];
+      CString strAction = menuItem.m_strAction;
       if (pDoc->m_bHyperlinkAddsToCommandHistory)
         m_bottomview->AddToCommandHistory (strAction);
       pDoc->m_tLastPlayerInput = CTime::GetCurrentTime();   // for <afk> tests
@@ -5662,14 +5671,14 @@ ASSERT_VALID(pDoc);
       break;  // end of ACTION_SEND
 
     case ACTION_PROMPT:
-      if (m_bottomview->CheckTyping (pDoc, strMXP_menu_item [nID - MXP_FIRST_MENU]))
+      if (m_bottomview->CheckTyping (pDoc, menuItem.m_strAction))
         return;             
-      m_bottomview->SetCommand (strMXP_menu_item [nID - MXP_FIRST_MENU]);
+      m_bottomview->SetCommand (menuItem.m_strAction);
       break; // end of ACTION_PROMPT
 
     case ACTION_HYPERLINK:
       {
-      CString strAction = strMXP_menu_item [nID - MXP_FIRST_MENU];
+      CString strAction = menuItem.m_strAction;
 
       // don't let them slip in arbitrary OS commands
       if (strAction.Left (7).CompareNoCase ("http://") != 0 &&
@@ -5691,37 +5700,29 @@ ASSERT_VALID(pDoc);
     case ACTION_ALIAS:
       {
       CAlias * pAlias;
-      CString strLabel;
-      
-      // strip off plugin id
-      CStringList strList;
-      StringToList (strMXP_menu_item [nID - MXP_FIRST_MENU], ":", strList);
-      strLabel = strList.GetHead ();
+      CPlugin * pAliasPlugin = NULL;
 
-      // alias might be in a plugin
-      switch (strList.GetCount ())
+      if (menuItem.m_strPluginID.IsEmpty ())
         {
-        case 1:   // main world
-            if (!pDoc->m_AliasMap.Lookup (strLabel, pAlias))
-              return;   // not there? strange
-        break;
+        if (!pDoc->m_AliasMap.Lookup (menuItem.m_strAliasKey, pAlias))
+          return;
+        }
+      else
+        {
+        CPlugin * pPlugin = pDoc->GetPluginInstance
+          (menuItem.m_strPluginID, menuItem.m_iPluginInstanceNumber);
+        if (!pPlugin ||
+            !pPlugin->m_AliasMap.Lookup (menuItem.m_strAliasKey, pAlias))
+          return;
+        pAliasPlugin = pPlugin;
+        }
 
-        case 2:   // plugin
-          {
-            CString strPluginID;
-            strPluginID = strList.GetTail ();
-            CPlugin * pPlugin = pDoc->GetPlugin (strPluginID);
-            if (!pPlugin)
-              return;   // plugin does not exist? strange
-            if (!pPlugin->m_AliasMap.Lookup (strLabel, pAlias))
-              return;   // not there? strange
-          pDoc->m_CurrentPlugin = pPlugin;     // remember plugin so alias executes in correct space
-          }
+      if (pAlias->nCreationNumber != menuItem.m_iAliasCreationNumber)
+        return;
 
-        break;
-            default:   return;   // not 1 or 2 items? very strange
-        } // end of switch
-
+      CPluginContextGuard pluginContextGuard (pDoc, pAliasPlugin);
+      CPluginCallGuard pluginCallGuard (pAliasPlugin, true);
+      CAliasExecutionGuard executingGuard (pDoc, pAlias);
 
       CString strAction;
 
@@ -5761,10 +5762,7 @@ ASSERT_VALID(pDoc);
             CString strClipboard;
 
             if (!GetClipboardContents (strClipboard, pDoc->m_bUTF_8))
-              {
-              pDoc->m_CurrentPlugin = NULL;
               return;
-              }
 
         // copy up to the percent sign
 
@@ -5829,7 +5827,6 @@ ASSERT_VALID(pDoc);
           if (strName.IsEmpty ())
             {
             ::TMessageBox("@ must be followed by a variable name");
-            pDoc->m_CurrentPlugin = NULL;
             return;
             }
 
@@ -5839,7 +5836,6 @@ ASSERT_VALID(pDoc);
           if (!pDoc->m_VariableMap.Lookup (strName, variable_item))
             {
             ::UMessageBox(TFormat ("Variable '%s' is not defined.", (LPCTSTR) strName));
-            pDoc->m_CurrentPlugin = NULL;
             return;
             }
 
@@ -5873,7 +5869,7 @@ ASSERT_VALID(pDoc);
             {
             list<double> nparams;
             list<string> sparams;
-            sparams.push_back ((LPCTSTR) strMXP_menu_item [nID - MXP_FIRST_MENU]);
+            sparams.push_back ((LPCTSTR) menuItem.m_strAction);
             sparams.push_back ((LPCTSTR) pAlias->name);
             pDoc->GetScriptEngine ()->ExecuteLua (pAlias->dispid, 
                                            pAlias->strProcedure, 
@@ -5900,7 +5896,7 @@ ASSERT_VALID(pDoc);
             COleVariant args [eArgCount];
             DISPPARAMS params = { args, NULL, eArgCount, 0 };
 
-            args [eAliasName] = strMXP_menu_item [nID - MXP_FIRST_MENU];
+            args [eAliasName] = menuItem.m_strAction;
             args [eInputLine] = pAlias->name;
 
             // --------------- set up wildcards array ---------------------------
@@ -5930,7 +5926,9 @@ ASSERT_VALID(pDoc);
 
       CString strExtraOutput;
 
-      pDoc->m_iCurrentActionSource = eUserMenuAction;
+      {
+      CValueStateGuard<unsigned short> actionSourceGuard
+        (pDoc->m_iCurrentActionSource, eUserMenuAction);
 
       pDoc->SendTo (pAlias->iSendTo, 
               strAction, 
@@ -5940,8 +5938,7 @@ ASSERT_VALID(pDoc);
               pAlias->strVariable,
               strExtraOutput
               );
-
-      pDoc->m_iCurrentActionSource = eUnknownActionSource;
+      }
 
       if (!strExtraOutput.IsEmpty ())
          pDoc->DisplayMsg (strExtraOutput, strExtraOutput.GetLength (), COMMENT);
@@ -5951,9 +5948,8 @@ ASSERT_VALID(pDoc);
       pAlias->nMatched++;   // count alias matches
 
       }
-      pDoc->m_CurrentPlugin = NULL;     // no plugin active right now
       break;  // end of ACTION_ALIAS
-    } // end of switch on iAction
+    } // end of switch on m_iMXPMenuAction
 
   // unpause the output window if wanted
   if (pDoc->m_bUnpauseOnSend && m_freeze)
@@ -6404,12 +6400,12 @@ long startcol,
   if (dlg.m_bWord)
      strText += "\\b";    // word boundary
 
-  t_regexp * regexp = NULL;
+  std::unique_ptr<t_regexp> new_regexp;
 
   // compile regular expression
   try 
     {
-    regexp = regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) );
+    new_regexp.reset (regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) ));
     }   // end of try
   catch(CException* e)
     {
@@ -6423,12 +6419,11 @@ long startcol,
   // invent name for it
   strTriggerName.Format ("*trigger%s", (LPCTSTR) App.GetUniqueString ());
 
-  CTrigger * trigger_item;
-
-  // create new trigger item and insert in trigger map
-  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item = new CTrigger);
+  std::unique_ptr<CTrigger> new_trigger_item (new CTrigger);
+  CTrigger * trigger_item = new_trigger_item.get ();
 
   trigger_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  trigger_item->nCreationNumber  = App.GetUniqueNumber ();
   trigger_item->strInternalName  = strTriggerName;    // for deleting one-shot triggers
 
   trigger_item->trigger          = strText;
@@ -6438,7 +6433,7 @@ long startcol,
   
   trigger_item->bRegexp          = true;      // yes, it's a regexp
   trigger_item->bRepeat          = true;      // repeat on same line
-  trigger_item->regexp           = regexp;
+  trigger_item->regexp           = new_regexp.release ();
   trigger_item->iSendTo          = eSendToWorld;
   trigger_item->iSequence        = 90;
   trigger_item->strGroup         = "Highlighted Words";
@@ -6446,7 +6441,27 @@ long startcol,
   trigger_item->iOtherForeground = dlg.m_iOtherForeground;
   trigger_item->iOtherBackground = dlg.m_iOtherBackground;
 
-  pDoc->SortTriggers ();
+  // insert only after the trigger is complete
+  CTrigger * old_trigger_item = NULL;
+  pDoc->GetTriggerMap ().Lookup (strTriggerName, old_trigger_item);
+  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item);
+  new_trigger_item.release ();
+
+  try
+    {
+    pDoc->SortTriggers ();
+    }
+  catch (...)
+    {
+    if (old_trigger_item)
+      pDoc->GetTriggerMap ().SetAt (strTriggerName, old_trigger_item);
+    else
+      pDoc->GetTriggerMap ().RemoveKey (strTriggerName);
+    delete trigger_item;
+    throw;
+    }
+
+  pDoc->RetireTrigger (old_trigger_item);
 
   // we need to know to save it
   pDoc->SetModifiedFlag (TRUE);
@@ -6488,12 +6503,12 @@ CString strSelection;
   strText.Replace (ENDLINE, "\\n"); // replace linebreaks with \n
   strText += "\\Z";    // subject boundary
 
-  t_regexp * regexp = NULL;
+  std::unique_ptr<t_regexp> new_regexp;
 
   // compile regular expression
   try 
     {
-    regexp = regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) );
+    new_regexp.reset (regcomp (strText, (dlg.m_bMatchCase ?  0 : PCRE_CASELESS) | (pDoc->m_bUTF_8 ? PCRE_UTF8 : 0) ));
     }   // end of try
   catch(CException* e)
     {
@@ -6507,12 +6522,11 @@ CString strSelection;
   // invent name for it
   strTriggerName.Format ("*trigger%s", (LPCTSTR) App.GetUniqueString ());
 
-  CTrigger * trigger_item;
-
-  // create new trigger item and insert in trigger map
-  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item = new CTrigger);
+  std::unique_ptr<CTrigger> new_trigger_item (new CTrigger);
+  CTrigger * trigger_item = new_trigger_item.get ();
 
   trigger_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  trigger_item->nCreationNumber  = App.GetUniqueNumber ();
   trigger_item->strInternalName  = strTriggerName;    // for deleting one-shot triggers
 
   trigger_item->trigger          = strText;
@@ -6523,13 +6537,33 @@ CString strSelection;
   trigger_item->bRegexp          = true;      // yes, it's a regexp
   trigger_item->bMultiLine        = true;      // multiline
   trigger_item->bKeepEvaluating  = true;      // keep evaluating wanted
-  trigger_item->regexp           = regexp;
+  trigger_item->regexp           = new_regexp.release ();
   trigger_item->iSendTo          = eSendToOutput;
   trigger_item->strGroup         = "Multi Line";
 
   trigger_item->iLinesToMatch = iCount;
 
-  pDoc->SortTriggers ();
+  // insert only after the trigger is complete
+  CTrigger * old_trigger_item = NULL;
+  pDoc->GetTriggerMap ().Lookup (strTriggerName, old_trigger_item);
+  pDoc->GetTriggerMap ().SetAt (strTriggerName, trigger_item);
+  new_trigger_item.release ();
+
+  try
+    {
+    pDoc->SortTriggers ();
+    }
+  catch (...)
+    {
+    if (old_trigger_item)
+      pDoc->GetTriggerMap ().SetAt (strTriggerName, old_trigger_item);
+    else
+      pDoc->GetTriggerMap ().RemoveKey (strTriggerName);
+    delete trigger_item;
+    throw;
+    }
+
+  pDoc->RetireTrigger (old_trigger_item);
 
   // we need to know to save it
   pDoc->SetModifiedFlag (TRUE);
@@ -6559,12 +6593,14 @@ void CMUSHView::OnSysCommand(UINT nID, LPARAM lParam)
 
 // a mouse-over a window hotspot will come here
 void CMUSHView::Send_Mouse_Event_To_Plugin (DISPID iDispatchID,
+                                            CMiniWindow & miniwindow,
                                             const string m_sPluginID, 
                                             const string sRoutineName, 
                                             const string HotspotId,
                                             long Flags,
                                             bool dont_modify_flags)
   {
+  CBoolStateGuard executingGuard (miniwindow.m_bExecutingScript, true);
 
   // only if they have a routine
   if (sRoutineName.empty ())
@@ -6618,7 +6654,8 @@ CPlugin * pPlugin = pDoc->GetPlugin (m_sPluginID.c_str ());
 
   if (!pPlugin) 
     {
-    pDoc->Trace ("Mouse event (%s): No plugin ID: %s", HotspotId.c_str (), m_sPluginID.c_str ());
+    pDoc->Trace ("Mouse event (%s): Plugin is no longer loaded: %s",
+                 HotspotId.c_str (), m_sPluginID.c_str ());
     return;                       
     }
 
@@ -6636,17 +6673,12 @@ DISPID iDispid = pPlugin->m_ScriptEngine->GetDispid (sRoutineName.c_str ());
     return;                       
     }
 
-  // change to this plugin, call function, put current plugin back
-  CPlugin * pSavedPlugin = pDoc->m_CurrentPlugin;
-  pDoc->m_CurrentPlugin = pPlugin;   
+  CPluginContextGuard contextGuard (pDoc, pPlugin);
   CScriptDispatchID dispid_info (iDispid);
   CScriptCallInfo callinfo (sRoutineName.c_str (), dispid_info);
   pPlugin->ExecutePluginScript (callinfo, 
                                 Flags,              // keyboard flags
                                 HotspotId.c_str ());  // which hotspot
-  pDoc->m_CurrentPlugin = pSavedPlugin;
-
-
   }  // end of CMUSHView::Send_Mouse_Event_To_Plugin
 
 
@@ -6774,13 +6806,12 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
         // call MoveCallback for that hotspot, if it exists
         if (it != prev_mw->m_Hotspots.end ())
           {
-          prev_mw->m_bExecutingScript = true;
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_MoveCallback,
+                                      *prev_mw,
                                       prev_mw->m_sCallbackPlugin,
                                       it->second->m_sMoveCallback, 
                                       prev_mw->m_sMouseDownHotspot,
                                       prev_mw->m_FlagsOnMouseDown);
-          prev_mw->m_bExecutingScript = false;
           }
         return true;  // that's all
 
@@ -6824,12 +6855,11 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
         if (it != old_mw->m_Hotspots.end ())
           {
           RemoveToolTip ();
-          old_mw->m_bExecutingScript = true;
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseOver,
+                                      *old_mw,
                                       old_mw->m_sCallbackPlugin,
                                       it->second->m_sCancelMouseOver, 
                                       sOldMouseOverHotspot);
-          old_mw->m_bExecutingScript = false;
           }
         m_sPreviousMiniWindow.erase ();  // no longer have a previous mouse-over
         }   // we had previous hotspot
@@ -6859,12 +6889,11 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
       if (it != mw->m_Hotspots.end ())
         {
         RemoveToolTip ();
-        mw->m_bExecutingScript = true;
         Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseOver,
+                                    *mw,
                                     mw->m_sCallbackPlugin,
                                     it->second->m_sCancelMouseOver, 
                                     sOldMouseOverHotspotInThisWindow);
-        mw->m_bExecutingScript = false;
         }
 
       } // previous one which isn't this one, or we are no longer on one
@@ -6893,12 +6922,11 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
       if (sHotspotId != sOldMouseOverHotspotInThisWindow)
         {
         // this is our new one
-        mw->m_bExecutingScript = true;
         Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseOver,
+                                    *mw,
                                     mw->m_sCallbackPlugin, 
                                     pHotspot->m_sMouseOver, 
                                     sHotspotId);
-        mw->m_bExecutingScript = false;
         // activate tooltip if possible
         if (::IsWindow(m_ToolTip.m_hWnd))
           {
@@ -6922,7 +6950,7 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
         // capture mouse movements out of the miniwindow (version 4.46)
         // see: http://www.gammon.com.au/forum/?id=9980
 
-        if (!m_mousedover && !bWin95 && !pHotspot->m_sCancelMouseOver.empty () )
+        if (pHotspot && !m_mousedover && !bWin95 && !pHotspot->m_sCancelMouseOver.empty () )
           {
           TRACKMOUSEEVENT tme;
           ZeroMemory (&tme, sizeof tme);
@@ -6940,12 +6968,11 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
         // see lengthy forum discussion: http://www.gammon.com.au/forum/?id=9942
         if (pHotspot->m_Flags & 1)
           {
-          mw->m_bExecutingScript = true;
           Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseOver,
+                                      *mw,
                                       mw->m_sCallbackPlugin, 
                                       pHotspot->m_sMouseOver, 
                                       sHotspotId, MW_MOUSE_NOT_FIRST);
-          mw->m_bExecutingScript = false;
           }
 
         }
@@ -7010,12 +7037,11 @@ bool CMUSHView::Mouse_Down_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long 
         // call CancelMouseOver for that hotspot, if it exists
         if (it != old_mw->m_Hotspots.end ())
           {
-          old_mw->m_bExecutingScript = true;
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseOver, 
+                                      *old_mw,
                                       old_mw->m_sCallbackPlugin,
                                       it->second->m_sCancelMouseOver, 
                                       sOldMouseOverHotspot); 
-          old_mw->m_bExecutingScript = false;
           }
         m_sPreviousMiniWindow.erase ();  // no longer have a previous mouse-over
         }   // we had previous hotspot
@@ -7043,13 +7069,12 @@ bool CMUSHView::Mouse_Down_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long 
     if (pHotspot)
       {
       mw->m_FlagsOnMouseDown = flags & (MW_MOUSE_LH | MW_MOUSE_RH | MW_MOUSE_DBL | MW_MOUSE_MIDDLE); // remember mouse flags 
-      mw->m_bExecutingScript = true;
       Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseDown, 
+                                  *mw,
                                   mw->m_sCallbackPlugin, 
                                   pHotspot->m_sMouseDown, 
                                   sHotspotId,
                                   flags);   // LH / RH mouse?
-      mw->m_bExecutingScript = false;
       }
 
     m_sPreviousMiniWindow = sMiniWindowId;   // remember in case they move outside window
@@ -7133,13 +7158,12 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
         if (it != prev_mw->m_Hotspots.end ())
           {
 
-          prev_mw->m_bExecutingScript = true;
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_ReleaseCallback, 
+                                      *prev_mw,
                                       prev_mw->m_sCallbackPlugin,
                                       it->second->m_sReleaseCallback, 
                                       sOldMouseDownHotspot,
                                       prev_mw->m_FlagsOnMouseDown);
-          prev_mw->m_bExecutingScript = false;
           }
 
         }   // we had previous hotspot
@@ -7179,13 +7203,12 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
         // call CancelMouseDown for that hotspot, if it exists
         if (it != old_mw->m_Hotspots.end ())
           {
-          old_mw->m_bExecutingScript = true;
           Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseDown, 
+                                      *old_mw,
                                       old_mw->m_sCallbackPlugin,
                                       it->second->m_sCancelMouseDown, 
                                       sOldMouseDownHotspot,
                                       old_mw->m_FlagsOnMouseDown);
-          old_mw->m_bExecutingScript = false;
           }
         }   // we had previous hotspot
 
@@ -7225,13 +7248,12 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
 
       if (it != mw->m_Hotspots.end ())
         {
-        mw->m_bExecutingScript = true;
         Send_Mouse_Event_To_Plugin (it->second->m_dispid_CancelMouseDown, 
+                                    *mw,
                                     mw->m_sCallbackPlugin,
                                     it->second->m_sCancelMouseDown, 
                                     sOldMouseDownHotspotInThisWindow,
                                     mw->m_FlagsOnMouseDown);
-        mw->m_bExecutingScript = false;
         }
 
       } // previous one which isn't this one, or we are no longer on one
@@ -7249,13 +7271,12 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
     // now, did we release mouse over the hotspot it went down in?
     if (pHotspot && sOldMouseDownHotspotInThisWindow == sHotspotId)
       {
-        mw->m_bExecutingScript = true;
         Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_MouseUp, 
+                                    *mw,
                                     mw->m_sCallbackPlugin, 
                                     pHotspot->m_sMouseUp, 
                                     sHotspotId, 
                                     mw->m_FlagsOnMouseDown);  // LH / RH / middle mouse?
-        mw->m_bExecutingScript = false;
       }
 
     m_sPreviousMiniWindow.erase ();  // no longer have a previous mouse-over
@@ -7654,8 +7675,7 @@ ASSERT_VALID(pDoc);
 
 void CMUSHView::NotifySelectionChanged(void)
 {
-  static bool bInSelectionChanged = false;
-  if (bInSelectionChanged)  // don't recurse into infinite loops
+  if (m_bInSelectionChanged)  // don't recurse into infinite loops
     return;
 
   // we seem to get called when there wasn't really a change
@@ -7670,7 +7690,7 @@ void CMUSHView::NotifySelectionChanged(void)
   m_old_selend_line   = m_selend_line;
   m_old_selend_col    = m_selend_col;
 
-  bInSelectionChanged = true;
+  CBoolStateGuard selectionGuard (m_bInSelectionChanged, true);
 
   CMUSHclientDoc* pDoc = GetDocument();
   ASSERT_VALID(pDoc);
@@ -7678,7 +7698,6 @@ void CMUSHView::NotifySelectionChanged(void)
   if (pDoc->m_ScriptEngine)
     pDoc->SendToAllPluginCallbacks(ON_PLUGIN_SELECTION_CHANGED);
 
-  bInSelectionChanged = false;
   // end of notify plugins
 }
 
@@ -7745,13 +7764,12 @@ bool CMUSHView::Mouse_Wheel_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long
   // now, are we now over a hotspot?
   if (pHotspot)
     {
-    mw->m_bExecutingScript = true;
     Send_Mouse_Event_To_Plugin (pHotspot->m_dispid_ScrollwheelCallback,
+                                *mw,
                                 mw->m_sCallbackPlugin, 
                                 pHotspot->m_sScrollwheelCallback, 
                                 sHotspotId,
                                 delta);
-    mw->m_bExecutingScript = false;
     }
 
   return true;    // we are over mini-window - don't scroll underlying text

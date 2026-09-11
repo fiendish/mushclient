@@ -282,12 +282,18 @@ class CStyle : public CObject
   COLORREF       iBackColour; // RGB background colour, or ANSI/custom colour number
   CAction *      pAction;     // what action, if any this item carries out
                               //  - also stores variables  
+  __int64        nCreationNumber; // immutable identity for this style instance
+  __int64        nRangeCreationNumber; // identity shared by split style fragments
+  __int64        nOutputAppendCreationNumber; // transactional append owner
   CStyle () 
     { 
     iForeColour = WHITE;
     iBackColour = BLACK;
     iLength = iFlags = 0; 
     pAction = NULL;
+    nCreationNumber = 0;
+    nRangeCreationNumber = 0;
+    nOutputAppendCreationNumber = 0;
     };   // constructor
 
   ~CStyle () 
@@ -326,6 +332,7 @@ class CLine : public CObject
   CStyleList styleList; // list of styles applying to text, see above
   CTime m_theTime;      // time this line arrived
   LARGE_INTEGER m_lineHighPerformanceTime;  
+  __int64 nCreationNumber;        // immutable identity for this line instance
   int iMemoryAllocated; // size of buffer allocated for "text"
 
   long m_nLineNumber;
@@ -339,6 +346,7 @@ class CLine : public CObject
          const bool bUnicode 
          );   // constructor
   ~CLine ();    // destructor
+  void ResizeText (const int iNewSize);
 
   };
 
@@ -358,6 +366,7 @@ class CAlias : public CObject
    bEnabled = TRUE;
    dispid = DISPID_UNKNOWN;
    nUpdateNumber = 0;
+   nCreationNumber = 0;
    nInvocationCount = 0;
    nMatched = 0;
    bExpandVariables = FALSE;
@@ -384,6 +393,7 @@ class CAlias : public CObject
    wildcards.resize (MAX_WILDCARDS);
    bExecutingScript = false;
    bOneShot = false;
+   pNextRetired = NULL;
 
   };
 
@@ -431,6 +441,7 @@ class CAlias : public CObject
   
   DISPID dispid;                    // dispatch ID for calling the script
   __int64 nUpdateNumber;            // for detecting update clashes
+  __int64 nCreationNumber;          // immutable identity for this object instance
   long  nInvocationCount; // how many times procedure called
   long  nMatched;         // how many times the alias matched
   vector<string> wildcards;   // matching wildcards
@@ -440,17 +451,33 @@ class CAlias : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CAlias * pNextRetired;    // next replaced alias waiting for active script to finish
   CString strInternalName;  // name it is stored in the alias map under
+  };
+
+// Reserve pointer storage without publishing additional evaluation entries.
+// SetSize(0) frees MFC storage, so restore only the logical size after growing.
+template <class T>
+class CScriptItemArray : public CTypedPtrArray<CPtrArray, T *>
+  {
+  public:
+  void Reserve (INT_PTR count)
+    {
+    const INT_PTR oldSize = this->GetSize ();
+    if (count > oldSize)
+      {
+      this->SetSize (count);
+      this->m_nSize = oldSize;
+      }
+    }
   };
 
 // map for lookup by name
 typedef CTypedPtrMap <CMapStringToPtr, CString, CAlias*> CAliasMap;
 // array for saving in order
-typedef CTypedPtrArray <CPtrArray, CAlias*> CAliasArray;
+typedef CScriptItemArray<CAlias> CAliasArray;
 // list for alias evaluation
 typedef CTypedPtrList <CPtrList, CAlias*> CAliasList;
-// map for lookup name from pointer
-typedef map <CAlias*, string> CAliasRevMap;
 
 /////////////////////////////////////////////////////////////////////////////
 //  CTrigger
@@ -477,6 +504,7 @@ class CTrigger : public CObject
      bEnabled = TRUE;
      dispid = DISPID_UNKNOWN;
      nUpdateNumber = 0;
+     nCreationNumber = 0;
      colour = 0;    // custom colour 1
      nInvocationCount = 0;
      iClipboardArg = 0;
@@ -502,6 +530,7 @@ class CTrigger : public CObject
      wildcards.resize (MAX_WILDCARDS);
      bExecutingScript = false;
      bOneShot = FALSE;
+     pNextRetired = NULL;
 
     };
 
@@ -568,6 +597,7 @@ class CTrigger : public CObject
   
   DISPID dispid;                  // dispatch ID for calling the script
   __int64 nUpdateNumber;          // for detecting update clashes
+  __int64 nCreationNumber;        // immutable identity for this object instance
   long  nInvocationCount;         // how many times procedure called
   long  nMatched;         // how many times the trigger fired
   vector<string> wildcards;   // matching wildcards
@@ -577,17 +607,16 @@ class CTrigger : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CTrigger * pNextRetired;  // next replaced trigger waiting for active script to finish
   CString strInternalName;  // name it is stored in the trigger map under
   };
 
 // map for lookup by name
 typedef CTypedPtrMap <CMapStringToPtr, CString, CTrigger*> CTriggerMap;
 // array for sequencing evaluation
-typedef CTypedPtrArray <CPtrArray, CTrigger*> CTriggerArray;
+typedef CScriptItemArray<CTrigger> CTriggerArray;
 // list for trigger evaluation
 typedef CTypedPtrList <CPtrList, CTrigger*> CTriggerList;
-// map for lookup name from pointer
-typedef map <CTrigger*, string> CTriggerRevMap;
 
 /////////////////////////////////////////////////////////////////////////////
 //  CTimer
@@ -633,6 +662,8 @@ class CTimer : public CObject
      bOmitFromOutput = false;
      bOmitFromLog = false;
      bExecutingScript = false;
+     nCreationNumber = 0;
+     pNextRetired = NULL;
     };
 
   bool operator== (const CTimer & rhs) const;
@@ -682,6 +713,7 @@ class CTimer : public CObject
 
   DISPID dispid;                  // dispatch ID for calling the script
   __int64 nUpdateNumber;          // for detecting update clashes
+  __int64 nCreationNumber;        // immutable identity for this object instance
   long  nInvocationCount; // how many times procedure called
   long  nMatched;         // how many times the timer fired
 
@@ -695,6 +727,7 @@ class CTimer : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CTimer * pNextRetired;    // next replaced timer waiting for active script to finish
 
   static unsigned long GetNextTimerSequence () { return nNextCreateSequence++; }
 
@@ -705,8 +738,6 @@ class CTimer : public CObject
 
 typedef CTypedPtrMap <CMapStringToPtr, CString, CTimer*> CTimerMap;
 
-// map for lookup name from pointer
-typedef map <CTimer*, string> CTimerRevMap;
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -906,17 +937,105 @@ class CActiveTag :public CObject
   CString strName;    // name of tag we opened
   bool    bSecure;    // was it secure mode at the time?  
   bool    bNoReset;   // protected from reset?
+  __int64 nCreationNumber; // immutable identity for this active tag
+  __int64 nOpeningStyleCreationNumber; // exact opening marker for this tag
+  __int64 nOpeningLineCreationNumber; // line that held the opening marker
+  __int64 nFallbackLineCreationNumber; // line containing a replacement content boundary
+  __int64 nFallbackStyleRangeNumber; // replacement boundary after destructive output changes
+  vector<int> closeActions; // close plan selected when the tag opened
+  unsigned short iOpeningFlags; // style to restore if scrollback prunes the marker
+  COLORREF iOpeningForeColour;
+  COLORREF iOpeningBackColour;
+  CAction * pOpeningAction;
+  CString strVariable;
+  bool bOpeningInParagraph;
+  bool bOpeningPreMode;
+  bool bOpeningMXPScript;
+  int iOpeningListMode;
+  int iOpeningListCount;
+  __int64 iOpeningParagraphOwner;
+  __int64 iOpeningPreOwner;
+  __int64 iOpeningScriptOwner;
+  __int64 iOpeningListOwner;
 
   CActiveTag () 
     { 
     bSecure = false;
     bNoReset = false;
+    nCreationNumber = 0;
+    nOpeningStyleCreationNumber = 0;
+    nOpeningLineCreationNumber = 0;
+    nFallbackLineCreationNumber = 0;
+    nFallbackStyleRangeNumber = 0;
+    iOpeningFlags = 0;
+    iOpeningForeColour = WHITE;
+    iOpeningBackColour = BLACK;
+    pOpeningAction = NULL;
+    bOpeningInParagraph = false;
+    bOpeningPreMode = false;
+    bOpeningMXPScript = false;
+    iOpeningListMode = 0;
+    iOpeningListCount = 0;
+    iOpeningParagraphOwner = 0;
+    iOpeningPreOwner = 0;
+    iOpeningScriptOwner = 0;
+    iOpeningListOwner = 0;
     }; // constructor
 
+  ~CActiveTag ()
+    {
+    if (pOpeningAction)
+      pOpeningAction->Release ();
+    }
 
   };
 
 typedef CTypedPtrList <CPtrList, CActiveTag*> CActiveTagList;
+
+struct CPreparedMXPClose
+  {
+  CPreparedMXPClose () :
+    bHaveVariable (false),
+    iActiveTagCreationNumber (0),
+    iFirstContentLineCreationNumber (0),
+    bOpeningInParagraph (false),
+    bOpeningPreMode (false),
+    bOpeningMXPScript (false),
+    iOpeningListMode (0),
+    iOpeningListCount (0),
+    iOpeningParagraphOwner (0),
+    iOpeningPreOwner (0),
+    iOpeningScriptOwner (0),
+    iOpeningListOwner (0) {}
+  CString strTag;
+  CString strText;
+  CString strVariable;
+  bool bHaveVariable;
+  __int64 iActiveTagCreationNumber;
+  __int64 iFirstContentLineCreationNumber;
+  bool bOpeningInParagraph;
+  bool bOpeningPreMode;
+  bool bOpeningMXPScript;
+  int iOpeningListMode;
+  int iOpeningListCount;
+  __int64 iOpeningParagraphOwner;
+  __int64 iOpeningPreOwner;
+  __int64 iOpeningScriptOwner;
+  __int64 iOpeningListOwner;
+  vector<int> closeActions;
+  set<__int64> contentStyleRangeNumbers;
+  };
+
+struct CDeferredMXPMessage
+  {
+  CDeferredMXPMessage (const int level,
+                       const long number,
+                       const CString & message) :
+    iLevel (level), iMessageNumber (number), strMessage (message) { }
+  int iLevel;
+  long iMessageNumber;
+  CString strMessage;
+  };
 
 // for storing map directions, and inverses of them
 class CMapDirection

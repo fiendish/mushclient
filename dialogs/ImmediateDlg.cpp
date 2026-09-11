@@ -63,11 +63,9 @@ CString strText;
 
   Frame.SetStatusMessageNow (Translate ("Executing immediate script"));
 
-  m_pDoc->m_bInSendToScript = false;  // they can do DeleteLines here I think
+  CBoolStateGuard sendToScriptGuard (m_pDoc->m_bInSendToScript, false);
 
   m_pDoc->m_ScriptEngine->Parse (strText, "Immediate");
-
-  m_pDoc->m_bInSendToScript = true;
 
   m_pDoc->ShowStatusLine ();
 

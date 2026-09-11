@@ -34,14 +34,12 @@ CString strMsg;
 
   // see if a plugin will handle trace message
 
-  m_bTrace = false;  // stop infinite loops, where we report that the trace script was called
+  {
+  CValueStateGuard<bool> traceGuard (m_bTrace, false);
+  // stop infinite loops, where we report that the trace script was called
   if (SendToFirstPluginCallbacks (ON_PLUGIN_TRACE, strMsg))
-    {
-    m_bTrace = true;
     return;   // sent to plugin? don't display it
-    }
-
-  m_bTrace = true;
+  }
 
   strMsg += ENDLINE;      // add a new line
 

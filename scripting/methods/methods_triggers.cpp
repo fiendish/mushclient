@@ -110,14 +110,11 @@ CTrigger * trigger_item;
 
   bool bTemporary = trigger_item->bTemporary;
 
-  // the trigger seems to exist - delete its pointer
+  set<CTrigger *> triggersToDelete;
+  triggersToDelete.insert (trigger_item);
+  SortTriggers (&triggersToDelete);
+  VERIFY (GetTriggerMap ().RemoveKey (strTriggerName));
   delete trigger_item;
-
-  // now delete its entry
-  if (!GetTriggerMap ().RemoveKey (strTriggerName))
-    return eTriggerNotFound;
-
-  SortTriggers ();
 
   if (!m_CurrentPlugin && !bTemporary) // plugin mods don't really count
     SetModifiedFlag (TRUE);   // document has changed
@@ -206,24 +203,13 @@ bool bReplace = false;
     return eBadRegularExpression;
     } // end of catch
 
-  // trigger replacement wanted
-  if (bReplace)
-    {
-    // the trigger seems to exist - delete its pointer
-    delete trigger_item;
-
-    // now delete its entry
-    GetTriggerMap ().RemoveKey (strTriggerName);
-    }
-
-  // create new trigger item and insert in trigger map
-  GetTriggerMap ().SetAt (strTriggerName, trigger_item = new CTrigger);
-
-  if ((Flags & eTemporary) == 0)
-    if (!m_CurrentPlugin) // plugin mods don't really count
-      SetModifiedFlag (TRUE);
+  CTrigger * old_trigger_item = bReplace ? trigger_item : NULL;
+  std::unique_ptr<t_regexp> new_regexp (regexp);
+  std::unique_ptr<CTrigger> new_trigger_item (new CTrigger);
+  trigger_item = new_trigger_item.get ();
 
   trigger_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  trigger_item->nCreationNumber  = App.GetUniqueNumber ();
   trigger_item->strInternalName  = strTriggerName;    // for deleting one-shot triggers
 
   trigger_item->trigger          = MatchText;
@@ -244,7 +230,7 @@ bool bReplace = false;
   trigger_item->iClipboardArg    = Wildcard;
   trigger_item->sound_to_play    = SoundFileName;
   trigger_item->dispid           = dispid;
-  trigger_item->regexp           = regexp;
+  trigger_item->regexp           = new_regexp.release ();
   trigger_item->iSendTo          = SendTo;
   trigger_item->iSequence        = Sequence;
   trigger_item->strVariable      = TriggerName;   // kludge
@@ -255,7 +241,28 @@ bool bReplace = false;
   if (Wildcard < 0 || Wildcard > 10)
     trigger_item->iClipboardArg = 0;
 
-  SortTriggers ();
+  GetTriggerMap ().SetAt (strTriggerName, trigger_item);
+  new_trigger_item.release ();
+
+  try
+    {
+    SortTriggers ();
+    }
+  catch (...)
+    {
+    if (old_trigger_item)
+      GetTriggerMap ().SetAt (strTriggerName, old_trigger_item);
+    else
+      GetTriggerMap ().RemoveKey (strTriggerName);
+    delete trigger_item;
+    throw;
+    }
+
+  RetireTrigger (old_trigger_item);
+
+  if ((Flags & eTemporary) == 0)
+    if (!m_CurrentPlugin) // plugin mods don't really count
+      SetModifiedFlag (TRUE);
 
 	return eOK;
 }     // end of CMUSHclientDoc::AddTriggerEx
@@ -537,25 +544,35 @@ CTrigger * trigger_item;
 
 long CMUSHclientDoc::DeleteTemporaryTriggers() 
 {
-long iCount = 0;
 POSITION pos;
 CString strTriggerName;
 CTrigger * trigger_item;
+vector<pair<string, CTrigger *> > triggersToDelete;
+set<CTrigger *> excludedTriggers;
 
   for (pos = GetTriggerMap ().GetStartPosition(); pos; )
     {
     GetTriggerMap ().GetNextAssoc (pos, strTriggerName, trigger_item);
     if (trigger_item->bTemporary && !trigger_item->bExecutingScript)
       {
-      delete trigger_item;
-      GetTriggerMap ().RemoveKey (strTriggerName);
-      iCount++;
+      triggersToDelete.push_back (make_pair (string ((LPCTSTR) strTriggerName), trigger_item));
+      excludedTriggers.insert (trigger_item);
       }
     }   // end of deleting triggers
 
-  SortTriggers ();
+  SortTriggers (&excludedTriggers);
+  if (!triggersToDelete.empty ())
+    {
+    for (vector<pair<string, CTrigger *> >::const_iterator it = triggersToDelete.begin ();
+         it != triggersToDelete.end ();
+         ++it)
+      {
+      VERIFY (GetTriggerMap ().RemoveKey (it->first.c_str ()));
+      delete it->second;
+      }
+    }
 
-	return iCount;
+	return triggersToDelete.size ();
 }   // end of CMUSHclientDoc::DeleteTemporaryTriggers
 
 
@@ -600,7 +617,8 @@ long CMUSHclientDoc::DeleteTriggerGroup(LPCTSTR GroupName)
   if (strlen (GroupName) == 0)
     return 0;
 
-  vector<string> vToDelete;
+  vector<pair<string, CTrigger *> > vToDelete;
+  set<CTrigger *> excludedTriggers;
 
   // do triggers
   for (pos = GetTriggerMap ().GetStartPosition(); pos; )
@@ -613,24 +631,23 @@ long CMUSHclientDoc::DeleteTriggerGroup(LPCTSTR GroupName)
       if (trigger_item->bExecutingScript)
         continue;
 
-      // delete its pointer
-      delete trigger_item;
-
       // remember to delete from trigger map
-      vToDelete.push_back ((LPCTSTR) strTriggerName);
+      vToDelete.push_back (make_pair (string ((LPCTSTR) strTriggerName), trigger_item));
+      excludedTriggers.insert (trigger_item);
 
       }
     }   // end of triggers
 
-  // now delete from map, do it this way in case deleting whilst looping throws things out
-  for (vector<string>::const_iterator it = vToDelete.begin (); 
-       it != vToDelete.end ();
-       it++)
-      GetTriggerMap ().RemoveKey (it->c_str ());
- 
   if (!vToDelete.empty ())
     {
-    SortTriggers ();
+    SortTriggers (&excludedTriggers);
+    for (vector<pair<string, CTrigger *> >::const_iterator it = vToDelete.begin ();
+         it != vToDelete.end ();
+         ++it)
+      {
+      VERIFY (GetTriggerMap ().RemoveKey (it->first.c_str ()));
+      delete it->second;
+      }
     if (!m_CurrentPlugin) // plugin mods don't really count
       SetModifiedFlag (TRUE);   // document has changed
     }
@@ -753,12 +770,11 @@ bool bChanged;
     	return ePluginCannotSetOption;  // not available for writing at all    
 
     // ------ preliminary validation before setting the option
+    std::unique_ptr<t_regexp> newRegexp;
 
     if (strOptionName == "multi_line" ||
         strOptionName == "ignore_case")
       {
-      t_regexp * regexp = NULL;
-
       CString strRegexp;
 
       if (trigger_item->bRegexp)
@@ -777,10 +793,10 @@ bool bChanged;
         if (strOptionName == "ignore_case")
           bIgnoreCase = iValue;
 
-        regexp = regcomp (strRegexp, (bIgnoreCase ? PCRE_CASELESS : 0) |
-                                     (bMultiLine  ? PCRE_MULTILINE : 0) |
-                                     (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                     );
+        newRegexp.reset (regcomp (strRegexp, (bIgnoreCase ? PCRE_CASELESS : 0) |
+                                             (bMultiLine  ? PCRE_MULTILINE : 0) |
+                                             (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                             ));
         }   // end of try
       catch(CException* e)
         {
@@ -788,9 +804,9 @@ bool bChanged;
         return eBadRegularExpression;
         } // end of catch
 
-      delete trigger_item->regexp;    // get rid of old one
-      trigger_item->regexp = regexp;
       }   // end of option multi_line or ignore_case
+
+    unsigned short iOldSequence = trigger_item->iSequence;
 
     iResult = SetBaseOptionItem (iItem,
                         TriggerOptionsTable,
@@ -799,15 +815,34 @@ bool bChanged;
                         iValue,
                         bChanged);
 
+    if (iResult != eOK)
+      return iResult;
+
+    if (strOptionName == "sequence")
+      {
+      try
+        {
+        SortTriggers ();
+        }
+      catch (...)
+        {
+        trigger_item->iSequence = iOldSequence;
+        throw;
+        }
+      }
+
+    if (newRegexp.get ())
+      {
+      delete trigger_item->regexp;
+      trigger_item->regexp = newRegexp.release ();
+      }
+
     if (bChanged)
       {
       if (!m_CurrentPlugin) // plugin mods don't really count
         SetModifiedFlag (TRUE);   // document has changed
       trigger_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
       }
-
-    if (strOptionName == "sequence")
-      SortTriggers ();
 
     return iResult;
 
@@ -828,14 +863,15 @@ bool bChanged;
     	  return ePluginCannotSetOption;  // not available for writing at all    
 
       // ------ preliminary validation before setting the option
+      std::unique_ptr<t_regexp> newRegexp;
+      DISPID newDispid = DISPID_UNKNOWN;
+      bool bUpdateDispid = false;
 
       // cannot have null match text
       if (strOptionName == "match")
         {
         if (strValue.IsEmpty ())
           return eTriggerCannotBeEmpty;
-
-        t_regexp * regexp = NULL;
 
         CString strRegexp; 
 
@@ -847,10 +883,10 @@ bool bChanged;
         // compile regular expression
         try 
           {
-          regexp = regcomp (strRegexp, (trigger_item->ignore_case ? PCRE_CASELESS : 0) |
-                                       (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
-                                       (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                       );
+          newRegexp.reset (regcomp (strRegexp, (trigger_item->ignore_case ? PCRE_CASELESS : 0) |
+                                               (trigger_item->bMultiLine  ? PCRE_MULTILINE : 0) |
+                                               (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                               ));
           }   // end of try
         catch(CException* e)
           {
@@ -858,9 +894,6 @@ bool bChanged;
           return eBadRegularExpression;
           } // end of catch
       
-        delete trigger_item->regexp;    // get rid of old one
-        trigger_item->regexp = regexp;
-
         } // end of option "match"  
       else if (strOptionName == "script")
         {
@@ -869,12 +902,11 @@ bool bChanged;
 
         if (GetScriptEngine () && !strValue.IsEmpty ())
           {
-          DISPID dispid = DISPID_UNKNOWN;
           CString strMessage;
-          dispid = GetProcedureDispid (strValue, "trigger", TriggerName, strMessage);
-          if (dispid == DISPID_UNKNOWN)
+          newDispid = GetProcedureDispid (strValue, "trigger", TriggerName, strMessage);
+          if (newDispid == DISPID_UNKNOWN)
             return eScriptNameNotLocated;
-          trigger_item->dispid  = dispid;   // update dispatch ID
+          bUpdateDispid = true;
           }
         } // end of option "script"
 
@@ -887,6 +919,18 @@ bool bChanged;
                         (char *) trigger_item,  
                         strValue,
                         bChanged);
+
+      if (iResult != eOK)
+        return iResult;
+
+      if (newRegexp.get ())
+        {
+        delete trigger_item->regexp;
+        trigger_item->regexp = newRegexp.release ();
+        }
+
+      if (bUpdateDispid)
+        trigger_item->dispid = newDispid;
 
       if (bChanged)
         {
