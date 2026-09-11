@@ -1,0 +1,149 @@
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+using CString = std::string;
+constexpr int eSendToWorld = 0;
+constexpr int eSendToVariable = 9;
+#ifdef PANE
+constexpr int eSendToPane = 15;
+#endif
+
+struct Regexp { long long iTimeTaken = 0; };
+struct CObject { virtual ~CObject() = default; };
+struct CTrigger : CObject
+  {
+  int iSendTo = eSendToWorld;
+  CString strVariable;
+#ifdef PANE
+  CString strPane;
+#endif
+  long nInvocationCount = 0, nMatched = 0, iUserOption = 0;
+  std::vector<std::string> wildcards;
+  long long tWhenMatched = 0;
+  bool bIncluded = false, bSelected = false;
+  Regexp * regexp = nullptr;
+  };
+
+struct Dialog
+  {
+  int m_iSendTo = eSendToWorld;
+  CString m_strVariable;
+  };
+
+void LoadDialog(Dialog * dlg, CTrigger * trigger_item)
+  {
+@LOAD_DESTINATION@
+  }
+
+void UnloadDialog(Dialog * dlg, CObject * pItem)
+  {
+  auto * trigger_item = static_cast<CTrigger *>(pItem);
+@UNLOAD_DESTINATION@
+  }
+
+bool VariableControlChanged(CTrigger * trigger_item, Dialog * dlg)
+  {
+  return !(@VARIABLE_COMPARISON@);
+  }
+
+void CopyPropertyRuntimeState(CObject * pOldItem, CObject * pNewItem,
+                              bool bPropertiesChanged)
+@COPY_RUNTIME@
+
+CObject * MakeNewObject() { return new CTrigger; }
+void SetPropertyCreationNumber(CObject *) {}
+void SetInternalName(CObject *, const CString &) {}
+
+std::unique_ptr<CObject> PrepareReplacement(CObject * pItem, Dialog & dlg)
+  {
+  // Each case reaches replacement through a destination edit, another
+  // property edit, or the stored-name/control mismatch checked below.
+  bool bChanged = true;
+  const CString strMapName = "capture";
+@PREPARE_REPLACEMENT@
+  return pReplacement;
+  }
+
+int failures = 0;
+int cases = 0;
+
+void Check(bool condition, const char * name, const char * property)
+  {
+  if (!condition)
+    {
+    std::cerr << "FAIL: " << name << ": " << property << '\n';
+    ++failures;
+    }
+  }
+
+void RunCase(const char * name, int oldDestination, int destination,
+             const char * variable, const char * edit = nullptr,
+             bool unchangedDialog = false)
+  {
+  ++cases;
+  CTrigger old;
+  old.iSendTo = oldDestination;
+  old.strVariable = variable;
+#ifdef PANE
+  old.strPane = "stored_pane";
+#endif
+  Dialog dlg;
+  LoadDialog(&dlg, &old);
+  if (unchangedDialog)
+    Check(VariableControlChanged(&old, &dlg), name,
+          "the unchanged dialog must reach the replacement path");
+  dlg.m_iSendTo = destination;
+  if (edit)
+    dlg.m_strVariable = edit;
+
+  const CString expectedVariable = destination == eSendToVariable ?
+    dlg.m_strVariable : old.strVariable;
+#ifdef PANE
+  const CString expectedPane = destination == eSendToPane ?
+    dlg.m_strVariable : old.strPane;
+#endif
+  auto replacement = PrepareReplacement(&old, dlg);
+  auto * updated = static_cast<CTrigger *>(replacement.get());
+  Check(updated->strVariable == expectedVariable, name, "stored variable name");
+  Check(old.strVariable == variable, name, "original variable name remains intact");
+  Check(updated->iSendTo == destination, name, "selected destination");
+#ifdef PANE
+  Check(updated->strPane == expectedPane, name, "stored pane name");
+  Check(old.strPane == "stored_pane", name, "original pane name remains intact");
+#endif
+  }
+
+int main()
+  {
+  RunCase("World: OK without edits", eSendToWorld, eSendToWorld,
+          "capture", nullptr, true);
+  RunCase("World: another property changes", eSendToWorld, eSendToWorld,
+          "capture");
+  RunCase("World: empty stored variable", eSendToWorld, eSendToWorld, "");
+  RunCase("Variable: edit name", eSendToVariable, eSendToVariable,
+          "capture", "edited_variable");
+  RunCase("World to Variable: set name", eSendToWorld, eSendToVariable,
+          "capture", "new_variable");
+  RunCase("Variable to World: keep name", eSendToVariable, eSendToWorld,
+          "capture");
+  RunCase("Variable: another property changes", eSendToVariable, eSendToVariable,
+          "capture");
+#ifdef PANE
+  RunCase("World to Pane: set name", eSendToWorld, eSendToPane,
+          "capture", "new_pane");
+  RunCase("Pane: edit name", eSendToPane, eSendToPane,
+          "capture", "edited_pane");
+  RunCase("Pane to World: keep names", eSendToPane, eSendToWorld, "capture");
+  RunCase("Pane to Variable: edit variable", eSendToPane, eSendToVariable,
+          "capture", "edited_variable");
+  RunCase("Variable to Pane: edit pane", eSendToVariable, eSendToPane,
+          "capture", "edited_pane");
+  std::cout << "PANE: ";
+#else
+  std::cout << "Normal: ";
+#endif
+  std::cout << cases << " cases, " << failures << " failed checks\n";
+  return failures ? 1 : 0;
+  }

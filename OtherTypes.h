@@ -358,6 +358,7 @@ class CAlias : public CObject
    bEnabled = TRUE;
    dispid = DISPID_UNKNOWN;
    nUpdateNumber = 0;
+   nCreationNumber = 0;
    nInvocationCount = 0;
    nMatched = 0;
    bExpandVariables = FALSE;
@@ -384,6 +385,7 @@ class CAlias : public CObject
    wildcards.resize (MAX_WILDCARDS);
    bExecutingScript = false;
    bOneShot = false;
+   pNextRetired = NULL;
 
   };
 
@@ -431,6 +433,7 @@ class CAlias : public CObject
   
   DISPID dispid;                    // dispatch ID for calling the script
   __int64 nUpdateNumber;            // for detecting update clashes
+  __int64 nCreationNumber;          // immutable identity for this object instance
   long  nInvocationCount; // how many times procedure called
   long  nMatched;         // how many times the alias matched
   vector<string> wildcards;   // matching wildcards
@@ -440,17 +443,33 @@ class CAlias : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CAlias * pNextRetired;    // next replaced alias waiting for active script to finish
   CString strInternalName;  // name it is stored in the alias map under
+  };
+
+// Reserve pointer storage without publishing additional evaluation entries.
+// SetSize(0) frees MFC storage, so restore only the logical size after growing.
+template <class T>
+class CScriptItemArray : public CTypedPtrArray<CPtrArray, T *>
+  {
+  public:
+  void Reserve (INT_PTR count)
+    {
+    const INT_PTR oldSize = this->GetSize ();
+    if (count > oldSize)
+      {
+      this->SetSize (count);
+      this->m_nSize = oldSize;
+      }
+    }
   };
 
 // map for lookup by name
 typedef CTypedPtrMap <CMapStringToPtr, CString, CAlias*> CAliasMap;
 // array for saving in order
-typedef CTypedPtrArray <CPtrArray, CAlias*> CAliasArray;
+typedef CScriptItemArray<CAlias> CAliasArray;
 // list for alias evaluation
 typedef CTypedPtrList <CPtrList, CAlias*> CAliasList;
-// map for lookup name from pointer
-typedef map <CAlias*, string> CAliasRevMap;
 
 /////////////////////////////////////////////////////////////////////////////
 //  CTrigger
@@ -477,6 +496,7 @@ class CTrigger : public CObject
      bEnabled = TRUE;
      dispid = DISPID_UNKNOWN;
      nUpdateNumber = 0;
+     nCreationNumber = 0;
      colour = 0;    // custom colour 1
      nInvocationCount = 0;
      iClipboardArg = 0;
@@ -502,6 +522,7 @@ class CTrigger : public CObject
      wildcards.resize (MAX_WILDCARDS);
      bExecutingScript = false;
      bOneShot = FALSE;
+     pNextRetired = NULL;
 
     };
 
@@ -568,6 +589,7 @@ class CTrigger : public CObject
   
   DISPID dispid;                  // dispatch ID for calling the script
   __int64 nUpdateNumber;          // for detecting update clashes
+  __int64 nCreationNumber;        // immutable identity for this object instance
   long  nInvocationCount;         // how many times procedure called
   long  nMatched;         // how many times the trigger fired
   vector<string> wildcards;   // matching wildcards
@@ -577,17 +599,16 @@ class CTrigger : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CTrigger * pNextRetired;  // next replaced trigger waiting for active script to finish
   CString strInternalName;  // name it is stored in the trigger map under
   };
 
 // map for lookup by name
 typedef CTypedPtrMap <CMapStringToPtr, CString, CTrigger*> CTriggerMap;
 // array for sequencing evaluation
-typedef CTypedPtrArray <CPtrArray, CTrigger*> CTriggerArray;
+typedef CScriptItemArray<CTrigger> CTriggerArray;
 // list for trigger evaluation
 typedef CTypedPtrList <CPtrList, CTrigger*> CTriggerList;
-// map for lookup name from pointer
-typedef map <CTrigger*, string> CTriggerRevMap;
 
 /////////////////////////////////////////////////////////////////////////////
 //  CTimer
@@ -633,6 +654,8 @@ class CTimer : public CObject
      bOmitFromOutput = false;
      bOmitFromLog = false;
      bExecutingScript = false;
+     nCreationNumber = 0;
+     pNextRetired = NULL;
     };
 
   bool operator== (const CTimer & rhs) const;
@@ -682,6 +705,7 @@ class CTimer : public CObject
 
   DISPID dispid;                  // dispatch ID for calling the script
   __int64 nUpdateNumber;          // for detecting update clashes
+  __int64 nCreationNumber;        // immutable identity for this object instance
   long  nInvocationCount; // how many times procedure called
   long  nMatched;         // how many times the timer fired
 
@@ -695,6 +719,7 @@ class CTimer : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  CTimer * pNextRetired;    // next replaced timer waiting for active script to finish
 
   static unsigned long GetNextTimerSequence () { return nNextCreateSequence++; }
 
@@ -705,8 +730,6 @@ class CTimer : public CObject
 
 typedef CTypedPtrMap <CMapStringToPtr, CString, CTimer*> CTimerMap;
 
-// map for lookup name from pointer
-typedef map <CTimer*, string> CTimerRevMap;
 
 
 /////////////////////////////////////////////////////////////////////////////

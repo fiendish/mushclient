@@ -693,11 +693,10 @@ void CMUSHclientDoc::OutputOutstandingLines (void)
   if (m_OutstandingLines.empty ())
     return;
 
-  // save old colours
-  bool bOldNotesInRGB = m_bNotesInRGB;
-  COLORREF iOldNoteColourFore = m_iNoteColourFore;
-  COLORREF iOldNoteColourBack = m_iNoteColourBack;
-  unsigned short  iOldNoteStyle = m_iNoteStyle;
+  CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+  CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+  CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
+  CValueStateGuard<unsigned short> noteStyleGuard (m_iNoteStyle, m_iNoteStyle);
 
   m_bNotesInRGB = true;
 
@@ -714,18 +713,6 @@ void CMUSHclientDoc::OutputOutstandingLines (void)
     }
 
   m_OutstandingLines.clear ();
-
-  // put the colours back
-  if (bOldNotesInRGB)
-    {
-    m_iNoteColourFore = iOldNoteColourFore;
-    m_iNoteColourBack = iOldNoteColourBack;
-    }
-  else  
-    m_bNotesInRGB = false;
-
-  m_iNoteStyle = iOldNoteStyle;
-
 
   } // end of CMUSHclientDoc::OutputOutstandingLines
 
@@ -1280,13 +1267,9 @@ CString str = strText;
 
   if (!m_bPluginProcessingSend)
     {
-    m_bPluginProcessingSend = true;  // so we don't go into a loop
+    CBoolStateGuard processingGuard (m_bPluginProcessingSend, true);
     if (!SendToAllPluginCallbacks (ON_PLUGIN_SEND, str.Left (str.GetLength () - 2)))
-      {
-      m_bPluginProcessingSend = false;
       return;     // plugin declines to send this line
-      }
-    m_bPluginProcessingSend = false;
     }
 
 // count number of times we sent this
@@ -1319,9 +1302,8 @@ CString str = strText;
 
   if (!m_bPluginProcessingSent)
     {
-    m_bPluginProcessingSent = true;  // so we don't go into a loop
+    CBoolStateGuard processingGuard (m_bPluginProcessingSent, true);
     SendToAllPluginCallbacks (ON_PLUGIN_SENT, str.Left (str.GetLength () - 2));
-    m_bPluginProcessingSent = false;
     }
 
 // echo sent text if required
@@ -1926,13 +1908,14 @@ CString strLine (lpszText, size);
     if (m_bDebugIncomingPackets && !fake)
       Debug_Packets ("Incoming", lpszText, size, m_iInputPacketCount);
 
-    m_iCurrentActionSource = eInputFromServer;
+    {
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (m_iCurrentActionSource, eInputFromServer);
 
     // let plugin change the input packet unless we have faked an input line from MXP processing or similar
     if (!fake)
       SendToAllPluginCallbacksRtn (ON_PLUGIN_PACKET_RECEIVED, strLine);
-
-    m_iCurrentActionSource = eUnknownActionSource;
+    }
 
     // change line to what the plugin(s) left it at
     lpszText = strLine;
@@ -2724,7 +2707,7 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
   // get unlabelled trigger's internal name
   const char * pLabel = trigger_item->strLabel;
   if (pLabel [0] == 0)
-     pLabel = GetTriggerRevMap () [trigger_item].c_str ();
+     pLabel = trigger_item->strInternalName;
 
   if (GetScriptEngine () && GetScriptEngine ()->IsLua ())
     {
@@ -2732,7 +2715,7 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
     list<string> sparams;
     sparams.push_back (pLabel);
     sparams.push_back ((LPCTSTR) strCurrentLine);
-    trigger_item->bExecutingScript = true;     // cannot be deleted now
+    CTriggerExecutionGuard executingGuard (this, trigger_item);
     GetScriptEngine ()->ExecuteLua (trigger_item->dispid, 
                                    trigger_item->strProcedure, 
                                    eTriggerFired,
@@ -2744,7 +2727,6 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
                                    trigger_item->regexp,
                                    NULL,        // no map of strings
                                    &StyledLine);  // but we *do* have a styled line
-    trigger_item->bExecutingScript = false;     // can be deleted now
     return;
     }   // end of Lua
 
@@ -2788,7 +2770,7 @@ long i = 1;
   sa.PutElement (&i, &v);
   args [eWildcards] = sa;
 
-  trigger_item->bExecutingScript = true;     // cannot be deleted now
+  CTriggerExecutionGuard executingGuard (this, trigger_item);
   ExecuteScript (trigger_item->dispid,  
                  trigger_item->strProcedure,
                  eTriggerFired,
@@ -2796,8 +2778,6 @@ long i = 1;
                  strReason,
                  params, 
                  trigger_item->nInvocationCount); 
-  trigger_item->bExecutingScript = false;     // can be deleted now
-
   } // end of CMUSHclientDoc::ExecuteTriggerScript 
 
 void CMUSHclientDoc::ExecuteHotspotScript (DISPID & dispid,  // dispatch ID, will be set to DISPID_UNKNOWN on an error
@@ -6225,32 +6205,44 @@ int CompareTrigger (const void * elem1, const void * elem2)
   }   // end of CompareTrigger
 
 
-void  CMUSHclientDoc::SortTriggers (void)
+void CMUSHclientDoc::BuildTriggerIndexes (
+  vector<CTrigger *> & triggerArray,
+  const set<CTrigger *> * pExclude,
+  CTriggerMap * pObjectMap)
   {
-
-int iCount = GetTriggerMap ().GetCount ();
-int i;
+CTriggerMap & objectMap = pObjectMap ? *pObjectMap : GetTriggerMap ();
 CString strTriggerName;
 CTrigger * pTrigger;
 POSITION pos;
 
-  GetTriggerArray ().SetSize (iCount);
-  GetTriggerRevMap ().clear ();
+  triggerArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (i = 0, pos = GetTriggerMap ().GetStartPosition(); pos; i++)
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetTriggerMap ().GetNextAssoc (pos, strTriggerName, pTrigger);
-     GetTriggerArray ().SetAt (i, pTrigger);
-     GetTriggerRevMap () [pTrigger] = strTriggerName;
+     objectMap.GetNextAssoc (pos, strTriggerName, pTrigger);
+     if (pExclude && pExclude->find (pTrigger) != pExclude->end ())
+       continue;
+     triggerArray.push_back (pTrigger);
     }
 
-
   // sort the array
-  qsort (GetTriggerArray ().GetData (), 
-         iCount,
-         sizeof (CTrigger *),
-         CompareTrigger);
+  if (triggerArray.size () > 1)
+    qsort (&triggerArray [0],
+           triggerArray.size (),
+           sizeof (CTrigger *),
+           CompareTrigger);
+  }
+
+void  CMUSHclientDoc::SortTriggers (const set<CTrigger *> * pExclude)
+  {
+  vector<CTrigger *> newTriggerArray;
+  BuildTriggerIndexes (newTriggerArray, pExclude);
+
+  // Build the sorted replacement before changing the live array.
+  GetTriggerArray ().SetSize (newTriggerArray.size ());
+  for (size_t i = 0; i < newTriggerArray.size (); i++)
+    GetTriggerArray ().SetAt (i, newTriggerArray [i]);
 
   } // end of CMUSHclientDoc::SortTriggers
 
@@ -6277,34 +6269,133 @@ static int CompareAlias (const void * elem1, const void * elem2)
   }   // end of CompareAlias
 
 
-void  CMUSHclientDoc::SortAliases (void)
+void CMUSHclientDoc::BuildAliasIndexes (
+  vector<CAlias *> & aliasArray,
+  const set<CAlias *> * pExclude,
+  CAliasMap * pObjectMap)
   {
-
-int iCount = GetAliasMap ().GetCount ();
-int i;
+CAliasMap & objectMap = pObjectMap ? *pObjectMap : GetAliasMap ();
 CString strAliasName;
 CAlias * pAlias;
 POSITION pos;
 
-  GetAliasArray ().SetSize (iCount);
-  GetAliasRevMap ().clear ();
+  aliasArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (i = 0, pos = GetAliasMap ().GetStartPosition(); pos; i++)
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
-     GetAliasArray ().SetAt (i, pAlias); 
-     GetAliasRevMap () [pAlias] = strAliasName;
+     objectMap.GetNextAssoc (pos, strAliasName, pAlias);
+     if (pExclude && pExclude->find (pAlias) != pExclude->end ())
+       continue;
+     aliasArray.push_back (pAlias);
     }
 
-
   // sort the array
-  qsort (GetAliasArray ().GetData (), 
-         iCount,
-         sizeof (CAlias *),
-         CompareAlias);
+  if (aliasArray.size () > 1)
+    qsort (&aliasArray [0],
+           aliasArray.size (),
+           sizeof (CAlias *),
+           CompareAlias);
+  }
+
+void  CMUSHclientDoc::SortAliases (const set<CAlias *> * pExclude)
+  {
+  vector<CAlias *> newAliasArray;
+  BuildAliasIndexes (newAliasArray, pExclude);
+
+  // Build the sorted replacement before changing the live array.
+  GetAliasArray ().SetSize (newAliasArray.size ());
+  for (size_t i = 0; i < newAliasArray.size (); i++)
+    GetAliasArray ().SetAt (i, newAliasArray [i]);
 
   } // end of CMUSHclientDoc::SortAliases
+
+void CMUSHclientDoc::RetireAlias (CAlias * pAlias)
+  {
+  if (!pAlias)
+    return;
+  if (!pAlias->bExecutingScript)
+    {
+    delete pAlias;
+    return;
+    }
+  pAlias->pNextRetired = m_pRetiredAliases;
+  m_pRetiredAliases = pAlias;
+  }
+
+void CMUSHclientDoc::RetireTrigger (CTrigger * pTrigger)
+  {
+  if (!pTrigger)
+    return;
+  if (!pTrigger->bExecutingScript)
+    {
+    delete pTrigger;
+    return;
+    }
+  pTrigger->pNextRetired = m_pRetiredTriggers;
+  m_pRetiredTriggers = pTrigger;
+  }
+
+void CMUSHclientDoc::RetireTimer (CTimer * pTimer)
+  {
+  if (!pTimer)
+    return;
+  if (!pTimer->bExecutingScript)
+    {
+    delete pTimer;
+    return;
+    }
+  pTimer->pNextRetired = m_pRetiredTimers;
+  m_pRetiredTimers = pTimer;
+  }
+
+void CMUSHclientDoc::DeleteRetiredAliases ()
+  {
+  CAlias ** ppAlias = &m_pRetiredAliases;
+  while (*ppAlias)
+    {
+    CAlias * pAlias = *ppAlias;
+    if (pAlias->bExecutingScript)
+      ppAlias = &pAlias->pNextRetired;
+    else
+      {
+      *ppAlias = pAlias->pNextRetired;
+      delete pAlias;
+      }
+    }
+  }
+
+void CMUSHclientDoc::DeleteRetiredTriggers ()
+  {
+  CTrigger ** ppTrigger = &m_pRetiredTriggers;
+  while (*ppTrigger)
+    {
+    CTrigger * pTrigger = *ppTrigger;
+    if (pTrigger->bExecutingScript)
+      ppTrigger = &pTrigger->pNextRetired;
+    else
+      {
+      *ppTrigger = pTrigger->pNextRetired;
+      delete pTrigger;
+      }
+    }
+  }
+
+void CMUSHclientDoc::DeleteRetiredTimers ()
+  {
+  CTimer ** ppTimer = &m_pRetiredTimers;
+  while (*ppTimer)
+    {
+    CTimer * pTimer = *ppTimer;
+    if (pTimer->bExecutingScript)
+      ppTimer = &pTimer->pNextRetired;
+    else
+      {
+      *ppTimer = pTimer->pNextRetired;
+      delete pTimer;
+      }
+    }
+  }
 
 
 
@@ -6579,14 +6670,10 @@ void CMUSHclientDoc::SendTo (
 
     case eSendToExecute:
         {
-        // save log-my-input flag
-        short bSavedLogFlag = m_log_input;
         // if alias (or whatever) doesn't want to be logged, turn it off
-        if (bOmitFromLog)
-           m_log_input = false;
+        CValueStateGuard<short> logInputGuard
+          (m_log_input, bOmitFromLog ? false : m_log_input);
         Execute (strSendText);    // execute it
-        // put flag back
-        m_log_input = bSavedLogFlag;
         }
         break;
 
@@ -7856,21 +7943,17 @@ void CMUSHclientDoc::Screendraw  (const long iType,
                                   const long iLog,
                                   const char * sText)
   {
-static bool bInScreendraw = false;
-
   // don't recurse into infinite loops
-  if (bInScreendraw)
+  if (m_bInScreendraw)
     return;
 
-  bInScreendraw = true;
+  CBoolStateGuard screendrawGuard (m_bInScreendraw, true);
   SendToAllPluginCallbacks (ON_PLUGIN_SCREENDRAW,
                             iType,
                             iLog,
                             sText,
                             false,
                             false);
-  bInScreendraw = false;
-
   }  // end of CMUSHclientDoc::Screendraw 
 
 
@@ -7880,15 +7963,10 @@ bool CMUSHclientDoc::PlaySoundFile (CString strSound)
   // stop infinite loops
   if (!m_bInPlaySoundFilePlugin)
     {
-    m_bInPlaySoundFilePlugin = true;
+    CBoolStateGuard playSoundGuard (m_bInPlaySoundFilePlugin, true);
     
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInPlaySoundFilePlugin = false;
-        return true;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInPlaySoundFilePlugin = false;
+      return true;   // handled by plugin? don't do our own sound
     }   // of not in plugin already
 
   // default sound-play mechanism
@@ -7902,16 +7980,11 @@ void CMUSHclientDoc::CancelSound (void)
   // stop infinite loops
   if (!m_bInCancelSoundFilePlugin)
     {
-    m_bInCancelSoundFilePlugin = true;
+    CBoolStateGuard cancelSoundGuard (m_bInCancelSoundFilePlugin, true);
 
     CString strSound;   // deliberately the empty string
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInCancelSoundFilePlugin = false;
-        return;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInCancelSoundFilePlugin = false;
+      return;   // handled by plugin? don't do our own sound
     } // end of not in plugin already
 
   // default sound-cancel mechanism

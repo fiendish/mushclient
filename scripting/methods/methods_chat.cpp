@@ -468,9 +468,9 @@ void CMUSHclientDoc::ChatNote(short NoteType, LPCTSTR Message)
 
 
 // save old colours - because we switch to the chat colour below
-bool bOldNotesInRGB = m_bNotesInRGB;
-COLORREF iOldNoteColourFore = m_iNoteColourFore;
-COLORREF iOldNoteColourBack = m_iNoteColourBack;
+CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
 
   if (m_cChatForegroundColour == m_cChatBackgroundColour) 
     NoteColourRGB (RGB (255, 0, 0), RGB (0, 0, 0));
@@ -482,15 +482,6 @@ COLORREF iOldNoteColourBack = m_iNoteColourBack;
     strMessage = ::StripAnsi (strMessage);
   
   AnsiNote (m_strChatMessagePrefix + strMessage);
-
-  // put the colours back
-  if (bOldNotesInRGB)
-    {
-    m_iNoteColourFore = iOldNoteColourFore;
-    m_iNoteColourBack = iOldNoteColourBack;
-    }
-  else  
-    m_bNotesInRGB = false;
 
 }  // end of  CMUSHclientDoc::ChatNote
 

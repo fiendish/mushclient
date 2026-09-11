@@ -277,6 +277,7 @@ CSendView::CSendView()
   m_pHistoryFindInfo->m_strTitle = "Find in command history...";
   m_iHistoryStatus = eAtBottom;
   m_backbr = NULL;
+  m_bNotifyingPluginCommandChanged = false;
 }
 
 CSendView::~CSendView()
@@ -335,7 +336,8 @@ ASSERT_VALID(pDoc);
 	if (nChar == VK_RETURN)
   	{
 
-    pDoc->m_iCurrentActionSource = eUserTyping;
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (pDoc->m_iCurrentActionSource, eUserTyping);
 
 		CString strText;
 		GetEditCtrl().GetWindowText(strText);
@@ -383,7 +385,6 @@ ASSERT_VALID(pDoc);
 // cancel any previous message on the status line
     pDoc->ShowStatusLine ();
 
-    pDoc->m_iCurrentActionSource = eUnknownActionSource;
     return;
 
   	} // end of return key
@@ -1210,15 +1211,12 @@ void CSendView::NotifyPluginCommandChanged ()
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
 
-  static bool doing_change = false;
-
   // tell each plugin the edit window has changed. Hello, Worstje!
 
-  if (!doing_change)      // don't recurse
+  if (!m_bNotifyingPluginCommandChanged)      // don't recurse
     {
-    doing_change = true;
+    CBoolStateGuard notifyGuard (m_bNotifyingPluginCommandChanged, true);
     pDoc->SendToAllPluginCallbacks (ON_PLUGIN_COMMAND_CHANGED);
-    doing_change = false;
     }
 
   }  // end of CSendView::NotifyPluginCommandChanged
@@ -2586,11 +2584,12 @@ void CSendView::OnAcceleratorCommand (UINT nID)
 
 // turn auto-say off, they obviously don't want to say west, QUIT, etc.
 
-  BOOL bSavedAutoSay = pDoc->m_bEnableAutoSay;
-  pDoc->m_bEnableAutoSay = FALSE;
+  CValueStateGuard<unsigned short> autoSayGuard
+    (pDoc->m_bEnableAutoSay, FALSE);
 
 
-  pDoc->m_iCurrentActionSource = eUserAccelerator;
+  CValueStateGuard<unsigned short> actionSourceGuard
+    (pDoc->m_iCurrentActionSource, eUserAccelerator);
 
   // for backwards compatability, call the same thing as before
   if (pDoc->m_CommandToSendToMap [nID] == eSendToExecute)
@@ -2612,15 +2611,14 @@ void CSendView::OnAcceleratorCommand (UINT nID)
       key = KeyCodeToString (it->first >> 16, it->first);
 
     CString strExtraOutput;
-    pDoc->m_iCurrentActionSource = eUserAccelerator;  
-
-    CPlugin * pSavedPlugin = pDoc->m_CurrentPlugin;
-
     // which plugin wanted it
-    pDoc->m_CurrentPlugin = pDoc->GetPlugin (pDoc->m_CommandToPluginMap [nID].c_str ());
+    const string sPluginID = pDoc->m_CommandToPluginMap [nID];
+    CPlugin * pPlugin = pDoc->GetPlugin (sPluginID.c_str ());
+    CPluginContextGuard pluginContextGuard (pDoc, pPlugin);
+    CPluginCallGuard pluginCallGuard (pPlugin, true);
 
     if (pDoc->m_CurrentPlugin != NULL ||
-        pDoc->m_CommandToPluginMap [nID].empty ())
+        sPluginID.empty ())
       {
       // ok let's do it now
       pDoc->SendTo (pDoc->m_CommandToSendToMap [nID], 
@@ -2633,20 +2631,12 @@ void CSendView::OnAcceleratorCommand (UINT nID)
               );
       }
 
-    pDoc->m_CurrentPlugin = pSavedPlugin;
-
     // display any stuff sent to output window
 
     if (!strExtraOutput.IsEmpty ())
        pDoc->DisplayMsg (strExtraOutput, strExtraOutput.GetLength (), COMMENT);
 
   }
-
-  pDoc->m_iCurrentActionSource = eUnknownActionSource;
-
-// restore auto-say
-
-  pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   }
 

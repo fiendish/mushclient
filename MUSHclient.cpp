@@ -1020,6 +1020,22 @@ BOOL CMUSHclientApp::OnIdle(LONG lCount)
 	if (CWinApp::OnIdle(lCount))
     return 1;
 
+  POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CMUSHclientDoc* pDoc =
+      (CMUSHclientDoc*) m_pWorldDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_bPluginListChangedPending &&
+        !pDoc->m_bInPluginListChanged)
+      {
+      pDoc->PluginListChanged ();
+      return 1;
+      }
+
+    }
+
 CWnd* wnd = Frame.GetForegroundWindow( );
 
   if (!wnd)
