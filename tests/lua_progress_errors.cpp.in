@@ -1,0 +1,360 @@
+// Real Lua C protected calls; only MFC dialog/exception behavior is substituted.
+// This finalizer is a fixture helper, not the production close implementation.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <memory>
+#include <new>
+#include <string>
+#include <stdexcept>
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
+}
+using std::string;
+using BOOL = int;
+using UINT = unsigned int;
+const BOOL TRUE = 1;
+const BOOL FALSE = 0;
+
+[[noreturn]] static void fail(const char *condition, int line) {
+  std::fprintf(stderr, "CHECK failed at line %d: %s\n", line, condition);
+  std::exit(EXIT_FAILURE);
+}
+// These checks remain active when the runner compiles with NDEBUG.
+#define CHECK(condition) do { if (!(condition)) fail(#condition, __LINE__); } while (0)
+
+static char longTitle[65537];
+static std::size_t cppLive;
+static bool watchTitleAllocation;
+static bool sawTitleAllocation;
+static int allocationsBeforeFailure = -1;
+static std::size_t failedAllocationSize;
+[[noreturn]] static void throwBadAlloc();
+
+// Observe real std::string allocations. Lua uses its real C allocator, so its
+// retained strings do not affect this count. No STL objects are substituted.
+void *operator new(std::size_t size) {
+  if (watchTitleAllocation && size >= sizeof longTitle) sawTitleAllocation = true;
+  if (allocationsBeforeFailure == 0) {
+    allocationsBeforeFailure = -1;  // Fail once; error reporting must still work.
+    failedAllocationSize = size;
+    throwBadAlloc();
+  }
+  if (allocationsBeforeFailure > 0) --allocationsBeforeFailure;
+  void *p = std::malloc(size ? size : 1);
+  if (!p) throw std::bad_alloc();
+  ++cppLive;
+  return p;
+}
+void operator delete(void *p) noexcept {
+  if (p) {
+    CHECK(cppLive > 0);
+    --cppLive;
+    std::free(p);
+  }
+}
+void *operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete[](void *p) noexcept { ::operator delete(p); }
+#if defined(__cpp_sized_deallocation)
+void operator delete(void *p, std::size_t) noexcept { ::operator delete(p); }
+void operator delete[](void *p, std::size_t) noexcept { ::operator delete(p); }
+#endif
+
+enum class Fault { success, create_false, create_exception, title_exception,
+                   constructor_exception, message_failure, message_empty,
+                   string_allocation, dialog_allocation, constructor_bad_alloc,
+                   create_bad_alloc, title_bad_alloc, unknown_std_exception,
+                   unknown_exception };
+static Fault fault;
+static const char *caseName;
+static const char *exceptionMessage;
+static lua_State *activeLua;
+struct CProgressDlg;
+static CProgressDlg **lastUserdata;
+static std::size_t heapBefore;
+static struct {
+  int constructorCalls, constructed, destroyed, liveDialogs;
+  int memberConstructed, memberDestroyed;
+  int createCalls, titleCalls;
+  int exceptionConstructed, exceptionDeleted, exceptionDestroyed, messageCalls;
+  int gcCalls, nullGcCalls;
+  int badAllocThrown, unknownPropagated;
+} counts;
+
+[[noreturn]] static void throwBadAlloc() {
+  ++counts.badAllocThrown;
+  // Allocation can fail before the dialog constructor records the userdata.
+  CHECK(lua_type(activeLua, -1) == LUA_TUSERDATA);
+  CHECK(lua_objlen(activeLua, -1) == sizeof(CProgressDlg *));
+  lastUserdata = static_cast<CProgressDlg **>(lua_touserdata(activeLua, -1));
+  CHECK(lastUserdata && *lastUserdata == nullptr);
+  throw std::bad_alloc();
+}
+
+struct UnexpectedException { int marker; };
+
+struct CException {
+  char message[160];
+  CException() {
+    ++counts.exceptionConstructed;
+    std::snprintf(message, sizeof message, "%s", exceptionMessage);
+  }
+  virtual ~CException() {
+    CHECK(counts.exceptionDeleted == counts.exceptionDestroyed + 1);
+    ++counts.exceptionDestroyed;
+    std::memset(message, '#', sizeof message);
+  }
+  virtual BOOL GetErrorMessage(char *buffer, UINT size, UINT * = nullptr) const {
+    ++counts.messageCalls;
+    CHECK(size > 0);
+    if (fault == Fault::message_failure) {
+      std::snprintf(buffer, size, "%s", "discard this partial error message");
+      return FALSE;
+    }
+    std::snprintf(buffer, size, "%s", fault == Fault::message_empty ? "" : message);
+    return TRUE;
+  }
+  void Delete() {
+    ++counts.exceptionDeleted;
+    CHECK(counts.exceptionDeleted == counts.exceptionConstructed);
+    delete this;
+  }
+};
+struct CResourceException : CException {};
+[[noreturn]] static void AfxThrowResourceException() { throw new CResourceException; }
+
+struct DialogMember {
+  DialogMember() { ++counts.memberConstructed; }
+  ~DialogMember() { ++counts.memberDestroyed; }
+};
+struct CProgressDlg {
+  DialogMember member;  // Also checks unwinding when the dialog constructor fails.
+  CProgressDlg() {
+    ++counts.constructorCalls;
+    CHECK(lua_type(activeLua, -1) == LUA_TUSERDATA);
+    CHECK(lua_objlen(activeLua, -1) == sizeof(CProgressDlg *));
+    lastUserdata = static_cast<CProgressDlg **>(lua_touserdata(activeLua, -1));
+    CHECK(lastUserdata && *lastUserdata == nullptr);
+    if (fault == Fault::constructor_exception) throw new CException;
+    if (fault == Fault::constructor_bad_alloc) throwBadAlloc();
+    ++counts.constructed;
+    ++counts.liveDialogs;
+  }
+  ~CProgressDlg() {
+    ++counts.destroyed;
+    --counts.liveDialogs;
+  }
+  BOOL Create() {
+    ++counts.createCalls;
+    CHECK(*lastUserdata == nullptr);
+    if (fault == Fault::create_bad_alloc) throwBadAlloc();
+    if (fault == Fault::create_exception || fault == Fault::message_failure ||
+        fault == Fault::message_empty) throw new CException;
+    return fault == Fault::create_false ? FALSE : TRUE;
+  }
+  void SetWindowText(const char *title) {
+    ++counts.titleCalls;
+    CHECK(*lastUserdata == nullptr);
+    CHECK(std::strcmp(title, longTitle) == 0);
+    if (fault == Fault::title_exception) throw new CException;
+    if (fault == Fault::title_bad_alloc) throwBadAlloc();
+    if (fault == Fault::unknown_std_exception) throw std::logic_error(exceptionMessage);
+    if (fault == Fault::unknown_exception) throw UnexpectedException{397};
+  }
+};
+const char progress_dlg_handle[] = "mushclient.progress_dialog_handle";
+
+@LPROGRESS_NEW@
+
+// Catch the two expected unknown exceptions before they cross Lua's C frames.
+// This wrapper is used only for propagation cases. A production catch-all would
+// bypass it with luaL_error, leave unknownPropagated at zero, and fail the test.
+static int checkUnknownPropagation(lua_State *L) {
+  try {
+    return Lprogress_new(L);
+  } catch (const std::logic_error &error) {
+    CHECK(fault == Fault::unknown_std_exception);
+    CHECK(std::strcmp(error.what(), exceptionMessage) == 0);
+    ++counts.unknownPropagated;
+  } catch (const UnexpectedException &error) {
+    CHECK(fault == Fault::unknown_exception && error.marker == 397);
+    ++counts.unknownPropagated;
+  }
+  CHECK(!std::current_exception());
+  CHECK(cppLive == heapBefore);
+  return luaL_error(L, "%s", exceptionMessage);
+}
+
+static int collectDialog(lua_State *L) {
+  auto ud = static_cast<CProgressDlg **>(luaL_checkudata(L, 1, progress_dlg_handle));
+  ++counts.gcCalls;
+  if (!*ud) ++counts.nullGcCalls;
+  delete *ud;
+  *ud = nullptr;
+  return 0;
+}
+
+static void attempt(lua_State *L, Fault requested) {
+  counts = {};
+  fault = requested;
+  lastUserdata = nullptr;
+  heapBefore = cppLive;
+  sawTitleAllocation = false;
+  failedAllocationSize = 0;
+  CHECK(allocationsBeforeFailure == -1);
+  CHECK(lua_gettop(L) == 0);
+  CHECK(luaL_loadstring(L, "return pcall(progress.new, test_title)") == 0);
+  watchTitleAllocation = true;
+  // Lua uses malloc. The first two C++ allocations are the real title string
+  // buffer and the substitute dialog object. Check their sizes below.
+  if (fault == Fault::string_allocation) allocationsBeforeFailure = 0;
+  if (fault == Fault::dialog_allocation) allocationsBeforeFailure = 1;
+  int status = lua_pcall(L, 0, 2, 0);
+  watchTitleAllocation = false;
+  // A longjmp from inside a C++ catch skips __cxa_end_catch (or its ABI
+  // equivalent). This standard C++ query detects the still-active exception.
+  CHECK(!std::current_exception());
+  CHECK(status == 0);
+  CHECK(lua_gettop(L) == 2 && lua_isboolean(L, 1));
+  const bool success = fault == Fault::success;
+  CHECK((lua_toboolean(L, 1) != 0) == success);
+  CHECK(sawTitleAllocation);
+  const bool earlyAllocation = fault == Fault::string_allocation || fault == Fault::dialog_allocation;
+  const bool constructorFailure = fault == Fault::constructor_exception || fault == Fault::constructor_bad_alloc;
+  const bool badAlloc = earlyAllocation || fault == Fault::constructor_bad_alloc ||
+                        fault == Fault::create_bad_alloc || fault == Fault::title_bad_alloc;
+  const bool unknown = fault == Fault::unknown_std_exception || fault == Fault::unknown_exception;
+  const int expectedConstructors = earlyAllocation ? 0 : 1;
+  const int expectedDialogs = earlyAllocation || constructorFailure ? 0 : 1;
+  const int expectedTitles = success || fault == Fault::title_exception ||
+                             fault == Fault::title_bad_alloc || unknown ? 1 : 0;
+  CHECK(allocationsBeforeFailure == -1);
+  CHECK(counts.badAllocThrown == (badAlloc ? 1 : 0));
+  CHECK(counts.unknownPropagated == (unknown ? 1 : 0));
+  if (fault == Fault::string_allocation) CHECK(failedAllocationSize >= sizeof longTitle);
+  else if (fault == Fault::dialog_allocation) CHECK(failedAllocationSize == sizeof(CProgressDlg));
+  else CHECK(failedAllocationSize == 0);
+  CHECK(counts.constructorCalls == expectedConstructors);
+  CHECK(counts.memberConstructed == expectedConstructors);
+  CHECK(counts.gcCalls == 0);  // Cleanup must occur before garbage collection.
+  CHECK(counts.createCalls == expectedDialogs);
+  CHECK(counts.titleCalls == expectedTitles);
+  if (success) {
+    CHECK(lua_type(L, 2) == LUA_TUSERDATA);
+    CHECK(lua_touserdata(L, 2) == lastUserdata && *lastUserdata != nullptr);
+    CHECK(counts.constructed == 1 && counts.liveDialogs == 1);
+    CHECK(counts.destroyed == 0 && counts.memberDestroyed == 0);
+    CHECK(counts.exceptionConstructed == 0 && counts.exceptionDeleted == 0);
+    CHECK(counts.exceptionDestroyed == 0 && counts.messageCalls == 0);
+    CHECK(cppLive == heapBefore + 1);  // Only the published dialog remains.
+  } else {
+    CHECK(lastUserdata && *lastUserdata == nullptr);
+    CHECK(lua_type(L, 2) == LUA_TSTRING);
+    const char *expected = (badAlloc || fault == Fault::message_failure || fault == Fault::message_empty)
+                           ? "Unable to create progress dialog" : exceptionMessage;
+    const char *actual = lua_tostring(L, 2);
+    std::printf("Lua error (%s): %s\n", caseName, actual);
+    CHECK(std::strcmp(actual, expected) == 0);
+    CHECK(counts.constructed == expectedDialogs);
+    CHECK(counts.destroyed == counts.constructed && counts.liveDialogs == 0);
+    CHECK(counts.memberDestroyed == expectedConstructors);
+    const int expectedMfcExceptions = badAlloc || unknown ? 0 : 1;
+    CHECK(counts.exceptionConstructed == expectedMfcExceptions);
+    CHECK(counts.messageCalls == expectedMfcExceptions);
+    CHECK(counts.exceptionDeleted == expectedMfcExceptions);
+    CHECK(counts.exceptionDestroyed == expectedMfcExceptions);
+    // Lua longjmp does not unwind C++ objects. Zero retained allocations and
+    // closed catch state here require cleanup before Lua's error transfer.
+    CHECK(cppLive == heapBefore);
+  }
+}
+
+static void run(Fault requested) {
+  lua_State *L = luaL_newstate();
+  CHECK(L);
+  activeLua = L;
+  luaL_openlibs(L);
+  luaL_newmetatable(L, progress_dlg_handle);
+  lua_pushcfunction(L, collectDialog);
+  lua_setfield(L, -2, "__gc");
+  lua_pop(L, 1);
+  lua_newtable(L);
+  lua_pushcfunction(L, requested == Fault::unknown_std_exception || requested == Fault::unknown_exception
+                      ? checkUnknownPropagation : Lprogress_new);
+  lua_setfield(L, -2, "new");
+  lua_setglobal(L, "progress");
+  std::memset(longTitle, 't', sizeof longTitle - 1);
+  longTitle[sizeof longTitle - 1] = '\0';
+  lua_pushstring(L, longTitle);
+  lua_setglobal(L, "test_title");
+  // Keep failed userdata alive until its NULL value has been checked.
+  lua_gc(L, LUA_GCSTOP, 0);
+  attempt(L, requested);
+  lua_settop(L, 0);
+  lua_gc(L, LUA_GCCOLLECT, 0);
+  CHECK(counts.gcCalls == 1);
+  CHECK(counts.nullGcCalls == (requested == Fault::success ? 0 : 1));
+  CHECK(counts.liveDialogs == 0 && counts.destroyed == counts.constructed);
+  CHECK(counts.memberDestroyed == counts.memberConstructed && cppLive == heapBefore);
+
+  // A second protected progress.new and ordinary Lua execution must work in
+  // the same state. Leave the new handle rooted so lua_close finalizes it.
+  attempt(L, Fault::success);
+  CHECK(luaL_loadstring(L, "return 6 * 7") == 0);
+  CHECK(lua_pcall(L, 0, 1, 0) == 0);
+  CHECK(lua_gettop(L) == 3 && lua_tointeger(L, -1) == 42);
+  lua_close(L);
+  CHECK(counts.gcCalls == 1 && counts.nullGcCalls == 0);
+  CHECK(counts.destroyed == 1 && counts.liveDialogs == 0);
+  CHECK(counts.memberDestroyed == 1 && cppLive == heapBefore);
+}
+
+int main(int argc, char **argv) {
+  CHECK(argc == 2);
+  caseName = argv[1];
+  const struct { const char *name; Fault value; const char *message; } cases[] = {
+    {"success", Fault::success, "unused"},
+    {"create_false", Fault::create_false, "fixture: Create returned FALSE (%s)"},
+    {"create_exception", Fault::create_exception, "fixture: Create exception (%s)"},
+    {"title_exception", Fault::title_exception, "fixture: title exception (%s)"},
+    {"constructor_exception", Fault::constructor_exception, "fixture: constructor exception (%s)"},
+    {"message_failure", Fault::message_failure, "unused"},
+    {"message_empty", Fault::message_empty, "unused"},
+    {"string_allocation", Fault::string_allocation, "unused"},
+    {"dialog_allocation", Fault::dialog_allocation, "unused"},
+    {"constructor_bad_alloc", Fault::constructor_bad_alloc, "unused"},
+    {"create_bad_alloc", Fault::create_bad_alloc, "unused"},
+    {"title_bad_alloc", Fault::title_bad_alloc, "unused"},
+    {"unknown_std_exception", Fault::unknown_std_exception, "fixture: unknown standard exception (%s)"},
+    {"unknown_exception", Fault::unknown_exception, "fixture: unknown exception (%s)"},
+  };
+  for (const auto &entry : cases) {
+    if (std::strcmp(caseName, entry.name) != 0) continue;
+    exceptionMessage = entry.message;
+    try {
+      run(entry.value);
+    } catch (CException *) {
+      std::fprintf(stderr, "FAIL: %s: CException* escaped real Lua pcall; "
+                   "dialogs=%d, Delete=%d, destroyed_exceptions=%d\n", caseName,
+                   counts.liveDialogs, counts.exceptionDeleted, counts.exceptionDestroyed);
+      // The foreign exception bypassed Lua frame restoration. Do not reuse or
+      // close that corrupt state, or run leak checks on this deliberate failure.
+      std::fflush(nullptr);
+      std::_Exit(EXIT_FAILURE);
+    } catch (const std::exception &error) {
+      std::fprintf(stderr, "FAIL: %s: C++ exception escaped Lua: %s\n", caseName, error.what());
+      std::fflush(nullptr);
+      std::_Exit(EXIT_FAILURE);
+    } catch (...) {
+      std::fprintf(stderr, "FAIL: %s: unknown C++ exception escaped Lua\n", caseName);
+      std::fflush(nullptr);
+      std::_Exit(EXIT_FAILURE);
+    }
+    std::printf("PASS: %s\n", caseName);
+    return 0;
+  }
+  fail("unknown case", __LINE__);
+}

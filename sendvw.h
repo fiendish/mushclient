@@ -18,6 +18,8 @@ enum  {
     eAtBottom,
   };
 
+class COutputSearchSnapshot;
+
 class CSendView : public CEditView
 {
 protected:
@@ -109,6 +111,9 @@ protected:
 #endif
 
 // for finding
+
+  // Also identifies the latest invocation when a progress callback starts a find.
+  std::shared_ptr<COutputSearchSnapshot> m_pOutputSearchSnapshot;
 
   static void InitiateSearch (const CObject * pObject,
                               CFindInfo & FindInfo);

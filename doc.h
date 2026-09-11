@@ -1216,6 +1216,11 @@ public:
   int m_lastGoTo;         // last line we went to
 
   bool  m_bWorldClosing;    // true if world is closing
+  bool  m_bWorldCloseQueued;
+  bool  m_bWorldClosePending;
+  int   m_iActiveProgressOperations;
+  void BeginProgressOperation ();
+  void EndProgressOperation ();
 
 // we save the current style here on any style change *from the mud*
 // we don't want to mix up notes/user input with mud-set styles
@@ -1255,7 +1260,9 @@ public:
 
   HANDLE      m_hNameLookup;
   char *      m_pGetHostStruct;
+  unsigned long m_iNameLookupGeneration;
   int         m_iConnectPhase;    // see enum above
+  unsigned long m_iConnectionAttemptNumber;
 
 
 // chatting
@@ -1301,9 +1308,9 @@ public:
 
   CString m_strLastImmediateExpression;
 
-	HANDLE	m_pThread;			// Notification thread
-	CEvent  m_eventScriptFileChanged;		// script file changed thread event
+  __int64 m_iMonitorToken;  // Current monitor generation; zero means stopped.
   bool m_bInScriptFileChanged;
+  bool m_bScriptFileChangedPending;
   CTime m_timeScriptFileMod;
 
   CString m_strStatusMessage;   // "ready" or user-supplied message
@@ -2034,7 +2041,6 @@ public:
   bool CreateScriptEngine();
   void DisableScripting (void);
   void CreateMonitoringThread();
-	static void ThreadFunc(LPVOID pParam);
   void OnScriptFileChanged(const bool bForce = false);
   DISPID GetProcedureDispid (const CString & strName, 
                              const CString & strType,
@@ -2382,6 +2388,7 @@ public:
 	// ClassWizard generated virtual function overrides
 	//{{AFX_VIRTUAL(CMUSHclientDoc)
 	public:
+	virtual void OnCloseDocument();
 	virtual BOOL OnNewDocument();
 	virtual BOOL OnOpenDocument(LPCTSTR lpszPathName);
 	protected:
@@ -3178,3 +3185,16 @@ class timer
 
       }
   };    // end of class timer
+
+// Retain a world until a synchronous operation and its callbacks unwind.
+class CWorldDocumentOperationGuard
+  {
+  public:
+    explicit CWorldDocumentOperationGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc)
+      { m_pDoc->BeginProgressOperation (); }
+    ~CWorldDocumentOperationGuard () { m_pDoc->EndProgressOperation (); }
+  private:
+    CMUSHclientDoc * m_pDoc;
+    CWorldDocumentOperationGuard (const CWorldDocumentOperationGuard &);
+    CWorldDocumentOperationGuard & operator= (const CWorldDocumentOperationGuard &);
+  };

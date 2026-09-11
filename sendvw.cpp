@@ -1382,182 +1382,347 @@ CString strCurrent;
   return false;
   }
 
-void CSendView::DoFind (bool bAgain)
+// Output find callbacks read only this invocation's source and find state.
+// Keep the last snapshot to validate pending Find Again matches before reuse.
+class COutputSearchSnapshot : public CObject
   {
+  public:
+  struct Line
+    {
+    __int64 iCreationNumber;
+    const char * text;
+    int length;
+    bool bHardReturn;
 
-CMUSHclientDoc* pDoc = GetDocument();
-ASSERT_VALID(pDoc);
+    explicit Line (const CLine * pLine) :
+      iCreationNumber (pLine->nCreationNumber),
+      text (pLine->text), length (pLine->len),
+      bHardReturn (pLine->hard_return) {}
 
-pDoc->m_DisplayFindInfo.m_bAgain = bAgain;
+    bool IsUnchanged (const CLine * pLine) const
+      {
+      return iCreationNumber == pLine->nCreationNumber &&
+             bHardReturn == pLine->hard_return &&
+             length == pLine->len &&
+             memcmp (text, pLine->text, pLine->len) == 0;
+      }
+    };
 
-// we can find multiple instances on the same line
-pDoc->m_DisplayFindInfo.m_bRepeatOnSameLine = true;
+  vector<Line> m_Lines;
+  vector<std::unique_ptr<char []> > m_TextBlocks;
+  CFindInfo m_FindInfo;
+  const __int64 m_iOutputGeneration;
+  long m_nFirstLine, m_nLastLine;
+  bool m_bFound, m_bRestart;
 
-bool found = FindRoutine (pDoc,                    // passed back to callback routines
-                          pDoc->m_DisplayFindInfo, // finding structure
-                          InitiateSearch,          // how to re-initiate a find
-                          GetNextLine);            // get the next line
-	
+  // Copy complete lines into bounded blocks, as RecallText does. All source
+  // pointers stay within this non-yielding copy; readers use only owned text.
+  static void CopyText (vector<Line> & lines,
+                        vector<std::unique_ptr<char []> > & textBlocks)
+    {
+    size_t textBytesRemaining = 0;
+    for (const Line & line : lines)
+      textBytesRemaining += line.length;
 
-if (found)
-  {
-
-// because find now finds batches of lines, we must work out which line it is 
-// really on, so we highlight the correct columns
-
-  POSITION pos = pDoc->GetLinePosition (pDoc->m_DisplayFindInfo.m_nCurrentLine);
-  POSITION prevpos = NULL;
-  CLine * pLine;
-
-// select the found text, so it is highlighted
-
-  m_topview->m_selstart_line = pDoc->m_DisplayFindInfo.m_nCurrentLine;
-  m_topview->m_selend_line = pDoc->m_DisplayFindInfo.m_nCurrentLine;
-  m_topview->m_selstart_col =  pDoc->m_DisplayFindInfo.m_iStartColumn;
-  m_topview->m_selend_col = pDoc->m_DisplayFindInfo.m_iEndColumn;
-
-  pLine = pDoc->m_LineList.GetPrev (pos);
-  while (pos)
-   {
-   prevpos = pos;   // remember line which did have a hard return
-   pLine = pDoc->m_LineList.GetPrev (pos);
-   if (pLine->hard_return)
-     break;
-   m_topview->m_selstart_line--;
-   m_topview->m_selend_line--;
-   }
-
- // if prevpos is non-null it is now the position of the last line with a hard return
- // so, get the next one, that is the one which starts *our* sequence
-
-
-   if (prevpos)
-      pDoc->m_LineList.GetNext (prevpos);
-   else       // must be the only line in the buffer
-      prevpos = pDoc->m_LineList.GetHeadPosition ();
-
-  pos = prevpos;
-  while (pos)
-   {
-   pLine = pDoc->m_LineList.GetNext (pos);
-   if (m_topview->m_selstart_col < pLine->len)
-     break;
-   m_topview->m_selstart_col -= pLine->len;
-   m_topview->m_selend_col -= pLine->len;
-   m_topview->m_selstart_line ++;
-   m_topview->m_selend_line ++;
-   }
-
-  // if selendcol is > line length, selection must extend over multiple lines
-
-  if (m_topview->m_selend_col > pLine->len)
-    {       
-    while (pos)
-     {
-     // first subtract out the line we were on (and subsequent ones)
-     m_topview->m_selend_col -= pLine->len;
-     m_topview->m_selend_line ++;
-
-     // now check out the next ones
-     pLine = pDoc->m_LineList.GetNext (pos);
-     if (m_topview->m_selend_col < pLine->len)
-       break;
-     }
+    char * nextText = NULL;
+    size_t blockBytesRemaining = 0;
+    for (Line & line : lines)
+      {
+      if (line.length == 0)
+        {
+        line.text = "";
+        continue;
+        }
+      const size_t length = line.length;
+      if (blockBytesRemaining < length)
+        {
+        const size_t blockSize = (std::max) (length,
+          (std::min) (textBytesRemaining, size_t (64 * 1024)));
+        std::unique_ptr<char []> block (new char [blockSize]);
+        textBlocks.push_back (std::move (block));
+        nextText = textBlocks.back ().get ();
+        blockBytesRemaining = blockSize;
+        }
+      memcpy (nextText, line.text, length);
+      line.text = nextText;
+      nextText += length;
+      blockBytesRemaining -= length;
+      textBytesRemaining -= length;
+      }
     }
 
-  // make sure selection visible
+  COutputSearchSnapshot (CMUSHclientDoc * pDoc, bool bAgain) :
+    m_iOutputGeneration (pDoc->m_iOutputGeneration),
+    m_nFirstLine (-1), m_nLastLine (-1), m_bFound (false), m_bRestart (false)
+    {
+    const CFindInfo & saved = pDoc->m_DisplayFindInfo;
+    m_FindInfo.m_strTitle = saved.m_strTitle;
+    m_FindInfo.m_bCanGoBackwards = saved.m_bCanGoBackwards;
+    m_FindInfo.m_bForwards = saved.m_bForwards;
+    m_FindInfo.m_bMatchCase = saved.m_bMatchCase;
+    m_FindInfo.m_bAgain = bAgain;
+    m_FindInfo.m_bRegexp = saved.m_bRegexp;
+    m_FindInfo.m_bUTF8 = saved.m_bUTF8;
+    m_FindInfo.m_bRepeatOnSameLine = true;
+    m_FindInfo.m_iStartColumn = saved.m_iStartColumn;
+    m_FindInfo.m_iEndColumn = saved.m_iEndColumn;
+    m_FindInfo.m_nCurrentLine = saved.m_nCurrentLine;
+    for (POSITION pos = saved.m_strFindStringList.GetHeadPosition (); pos; )
+      m_FindInfo.m_strFindStringList.AddTail (saved.m_strFindStringList.GetNext (pos));
 
-  m_topview->EnsureSelectionVisible ();
+    // CFindInfo owns its regexp. Never share it or the progress dialog.
+    if (bAgain && saved.m_bRegexp && !saved.m_strFindStringList.IsEmpty ())
+      m_FindInfo.m_regexp = regcomp (saved.m_strFindStringList.GetHead (),
+        (saved.m_bMatchCase ? 0 : PCRE_CASELESS) | (saved.m_bUTF8 ? PCRE_UTF8 : 0));
 
-  }   // end of being found
+    m_Lines.reserve (pDoc->m_LineList.GetCount ());
+    for (POSITION pos = pDoc->m_LineList.GetHeadPosition (); pos; )
+      m_Lines.push_back (Line (pDoc->m_LineList.GetNext (pos)));
+    CopyText (m_Lines, m_TextBlocks);
+    }
 
-  // Invalidate new selection rectangle
-  m_topview->NotifySelectionChanged ();
-  m_topview->Invalidate ();
+  // Verify the complete logical line, including its wrap boundaries. No yield
+  // occurs while these fresh live positions are in use.
+  bool MapMatch (CMUSHclientDoc * pDoc, long & nLiveFirst) const
+    {
+    if (m_nFirstLine < 0 || m_nLastLine < m_nFirstLine ||
+        m_nLastLine >= static_cast<long> (m_Lines.size ()))
+      return false;
 
+    bool bPreviousHardReturn = true;
+    nLiveFirst = 0;
+    POSITION pos = pDoc->m_LineList.GetHeadPosition ();
+    while (pos)
+      {
+      CLine * pLine = pDoc->m_LineList.GetNext (pos);
+      if (pLine->nCreationNumber == m_Lines [m_nFirstLine].iCreationNumber)
+        {
+        if (!bPreviousHardReturn)
+          return false;
+        for (long i = m_nFirstLine; i <= m_nLastLine; ++i)
+          {
+          if (!m_Lines [i].IsUnchanged (pLine))
+            return false;
+          if (i < m_nLastLine)
+            {
+            if (!pos)
+              return false;
+            pLine = pDoc->m_LineList.GetNext (pos);
+            }
+          }
+        // An unterminated snapshot line must still be the last logical line.
+        return m_Lines [m_nLastLine].bHardReturn || !pos;
+        }
+      bPreviousHardReturn = pLine->hard_return;
+      ++nLiveFirst;
+      }
+    return false;
+    }
+
+  bool HasSameSearch (const CFindInfo & saved) const
+    {
+    return !m_FindInfo.m_strFindStringList.IsEmpty () &&
+           !saved.m_strFindStringList.IsEmpty () &&
+           m_FindInfo.m_strFindStringList.GetHead () == saved.m_strFindStringList.GetHead () &&
+           m_FindInfo.m_bRegexp == saved.m_bRegexp &&
+           m_FindInfo.m_bMatchCase == saved.m_bMatchCase &&
+           m_FindInfo.m_bUTF8 == saved.m_bUTF8 &&
+           m_FindInfo.m_MatchesOnLine == saved.m_MatchesOnLine;
+    }
+  };
+
+void CSendView::DoFind (bool bAgain)
+  {
+  CMUSHclientDoc * pDoc = GetDocument ();
+  ASSERT_VALID (pDoc);
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+  const __int64 iDocumentNumber = pDoc->m_iUniqueDocumentNumber;
+  const HWND hSendView = GetSafeHwnd ();
+  CMUSHView * pTopView = m_topview;
+  const HWND hTopView = pTopView->GetSafeHwnd ();
+
+  std::shared_ptr<COutputSearchSnapshot> previous = m_pOutputSearchSnapshot;
+  std::shared_ptr<COutputSearchSnapshot> snapshot (new COutputSearchSnapshot (pDoc, bAgain));
+  CFindInfo & find = snapshot->m_FindInfo;
+  CFindInfo & saved = pDoc->m_DisplayFindInfo;
+
+  // Cached columns belong to a particular logical line, not to its old index.
+  if (bAgain && previous && previous->m_bRestart)
+    find.m_nCurrentLine += find.m_bForwards ? -1 : 1;
+  else if (bAgain && previous && previous->m_bFound && previous->HasSameSearch (saved))
+    {
+    long nLiveFirst;
+    if (previous->MapMatch (pDoc, nLiveFirst))
+      {
+      snapshot->m_nFirstLine = nLiveFirst;
+      snapshot->m_nLastLine = nLiveFirst + previous->m_nLastLine - previous->m_nFirstLine;
+      find.m_nCurrentLine = find.m_bForwards ? snapshot->m_nLastLine : snapshot->m_nFirstLine;
+      find.m_MatchesOnLine = saved.m_MatchesOnLine;
+      }
+    else
+      {
+      // Output changed since the last match. Search the current live line again.
+      find.m_nCurrentLine += find.m_bForwards ? -1 : 1;
+      }
+    }
+  else if (bAgain && !saved.m_MatchesOnLine.empty ())
+    find.m_nCurrentLine += find.m_bForwards ? -1 : 1;
+
+  m_pOutputSearchSnapshot = snapshot;
+  bool bCancelled = false;
+  const bool bFound = FindRoutine (snapshot.get (), find,
+                                   InitiateSearch, GetNextLine, &bCancelled);
+
+  // FindRoutine can dispatch messages from its dialogs, progress and status UI.
+  // Do not touch a dead owner, or publish over a newer nested invocation.
+  const auto IsCurrent = [&] () -> bool
+    {
+    return IsWorldDocumentLive (pDoc, iDocumentNumber) &&
+           !pDoc->m_bWorldClosePending &&
+           ::IsWindow (hSendView) && CWnd::FromHandlePermanent (hSendView) == this &&
+           ::IsWindow (hTopView) && CWnd::FromHandlePermanent (hTopView) == pTopView &&
+           m_topview == pTopView && m_pOutputSearchSnapshot == snapshot;
+    };
+  if (!IsCurrent ())
+    return;
+  if (bCancelled)
+    {
+    m_pOutputSearchSnapshot = previous;
+    return;
+    }
+  previous.reset ();
+
+  long nLiveFirst = 0;
+  const bool bMapped = bFound && snapshot->MapMatch (pDoc, nLiveFirst);
+  long nStartLine = snapshot->m_nFirstLine;
+  long nEndLine = nStartLine;
+  int iStartColumn = find.m_iStartColumn;
+  int iEndColumn = find.m_iEndColumn;
+  bool bSelect = bMapped && iStartColumn >= 0 && iEndColumn >= iStartColumn;
+  if (bSelect)
+    {
+    // Columns are byte offsets into the complete wrapped line.
+    while (nStartLine < snapshot->m_nLastLine &&
+           iStartColumn >= snapshot->m_Lines [nStartLine].length)
+      iStartColumn -= snapshot->m_Lines [nStartLine++].length;
+    while (nEndLine < snapshot->m_nLastLine &&
+           iEndColumn > snapshot->m_Lines [nEndLine].length)
+      iEndColumn -= snapshot->m_Lines [nEndLine++].length;
+    bSelect = iStartColumn <= snapshot->m_Lines [nStartLine].length &&
+              iEndColumn <= snapshot->m_Lines [nEndLine].length;
+    if (find.m_iStartColumn == find.m_iEndColumn)
+      {
+      nEndLine = nStartLine;
+      iEndColumn = iStartColumn;
+      }
+    }
+
+  if (bFound && !bSelect)
+    {
+    find.m_MatchesOnLine.clear ();
+    find.m_iStartColumn = -1;
+    find.m_bAgain = false;
+    }
+
+  // Prepare the only allocating publication steps before changing ownership.
+  list<pair<int, int> > matches (find.m_MatchesOnLine);
+  vector<COutputSearchSnapshot::Line> matchedLines;
+  vector<std::unique_ptr<char []> > matchedTextBlocks;
+  if (bSelect)
+    {
+    matchedLines.assign (snapshot->m_Lines.begin () + snapshot->m_nFirstLine,
+                         snapshot->m_Lines.begin () + snapshot->m_nLastLine + 1);
+    COutputSearchSnapshot::CopyText (matchedLines, matchedTextBlocks);
+    }
+  if (!find.m_strFindStringList.IsEmpty () &&
+      (saved.m_strFindStringList.IsEmpty () ||
+       saved.m_strFindStringList.GetHead () != find.m_strFindStringList.GetHead ()))
+    saved.m_strFindStringList.AddHead (find.m_strFindStringList.GetHead ());
+  saved.m_bForwards = find.m_bForwards;
+  saved.m_bMatchCase = find.m_bMatchCase;
+  saved.m_bRegexp = find.m_bRegexp;
+  saved.m_bAgain = find.m_bAgain;
+  saved.m_bRepeatOnSameLine = true;
+  saved.m_iStartColumn = find.m_iStartColumn;
+  saved.m_iEndColumn = find.m_iEndColumn;
+  saved.m_nTotalLines = pDoc->m_LineList.GetCount ();
+  saved.m_pFindPosition = NULL;
+  saved.m_MatchesOnLine.swap (matches);
+  delete saved.m_regexp;
+  saved.m_regexp = find.m_regexp;
+  find.m_regexp = NULL;
+  if (bSelect)
+    saved.m_nCurrentLine = nLiveFirst + (find.m_bForwards ?
+      snapshot->m_nLastLine - snapshot->m_nFirstLine : 0);
+  else if (!bFound && pDoc->m_iOutputGeneration == snapshot->m_iOutputGeneration)
+    {
+    saved.m_nCurrentLine = find.m_nCurrentLine;
+    // Find Again advances once before reading. Leave an exhausted cursor on
+    // the last searched line so newly appended output is not skipped.
+    if (find.m_nCurrentLine == static_cast<long> (snapshot->m_Lines.size ()))
+      --saved.m_nCurrentLine;
+    else if (find.m_nCurrentLine < 0)
+      ++saved.m_nCurrentLine;
+    }
+  snapshot->m_bFound = bSelect;
+  snapshot->m_bRestart = (bFound && !bSelect) ||
+    (!bFound && pDoc->m_iOutputGeneration != snapshot->m_iOutputGeneration);
+
+  if (bSelect)
+    {
+    pTopView->m_selstart_line = nLiveFirst + nStartLine - snapshot->m_nFirstLine;
+    pTopView->m_selend_line = nLiveFirst + nEndLine - snapshot->m_nFirstLine;
+    pTopView->m_selstart_col = iStartColumn;
+    pTopView->m_selend_col = iEndColumn;
+    pTopView->EnsureSelectionVisible ();
+    if (!IsCurrent ())
+      return;
+    }
+
+  // Only the matched logical line is needed to validate the next Find Again.
+  snapshot->m_Lines.swap (matchedLines);
+  snapshot->m_TextBlocks.swap (matchedTextBlocks);
+  snapshot->m_nFirstLine = bSelect ? 0 : -1;
+  snapshot->m_nLastLine = static_cast<long> (snapshot->m_Lines.size ()) - 1;
+  pTopView->Invalidate ();
+  // This notification can call plugins. Do not access either view after it.
+  pTopView->NotifySelectionChanged ();
   } // end of CSendView::DoFind
 
-
 void CSendView::InitiateSearch (const CObject * pObject,
-                                CFindInfo & FindInfo)
+                               CFindInfo & FindInfo)
   {
-CMUSHclientDoc* pDoc = (CMUSHclientDoc*) pObject;
-
-  FindInfo.m_nTotalLines = pDoc->m_LineList.GetCount ();
-
-  if (FindInfo.m_bAgain)
-    FindInfo.m_pFindPosition = pDoc->GetLinePosition (FindInfo.m_nCurrentLine);
-  else
-    if (FindInfo.m_bForwards)
-      FindInfo.m_pFindPosition = pDoc->m_LineList.GetHeadPosition ();
-    else
-      FindInfo.m_pFindPosition = pDoc->m_LineList.GetTailPosition ();
-
+  const COutputSearchSnapshot * snapshot = (const COutputSearchSnapshot *) pObject;
+  FindInfo.m_nTotalLines = static_cast<long> (snapshot->m_Lines.size ());
+  FindInfo.m_pFindPosition = NULL;
   } // end of CSendView::InitiateSearch
 
 bool CSendView::GetNextLine (const CObject * pObject,
-                             CFindInfo & FindInfo, 
-                             CString & strLine)
+                            CFindInfo & FindInfo,
+                            CString & strLine)
   {
-CMUSHclientDoc* pDoc = (CMUSHclientDoc*) pObject;
+  COutputSearchSnapshot * snapshot = (COutputSearchSnapshot *) pObject;
+  long nFirst = FindInfo.m_nCurrentLine;
+  if (nFirst < 0 || nFirst >= static_cast<long> (snapshot->m_Lines.size ()))
+    return true;
 
-CLine * pLine;
-POSITION prevpos = NULL;
-
-  if (FindInfo.m_pFindPosition == NULL)
-    return true;          // no more lines
-
-  // if doing backwards, we must go back a whole *line* (ie. the one after a hard return)
-  if (!FindInfo.m_bForwards)
-    {
-    pLine = pDoc->m_LineList.GetPrev (FindInfo.m_pFindPosition);
-    while (FindInfo.m_pFindPosition)
-     {
-     prevpos = FindInfo.m_pFindPosition;   // remember line which did have a hard return
-     pLine = pDoc->m_LineList.GetPrev (FindInfo.m_pFindPosition);
-     if (pLine->hard_return)
-       break;
-     }
-
-   // if prevpos is non-null it is now the position of the last line with a hard return
-   // so, get the next one, that is the one which starts *our* sequence
-
-     if (prevpos)
-        pDoc->m_LineList.GetNext (prevpos);
-     else       // must be the only line in the buffer
-        prevpos = pDoc->m_LineList.GetHeadPosition ();
-
-// sequence is now at the start of the batch of lines
-
-     FindInfo.m_pFindPosition = prevpos;
-    }
-
+  // Search one logical line in either direction, including all wrapped pieces.
+  while (nFirst > 0 && !snapshot->m_Lines [nFirst - 1].bHardReturn)
+    --nFirst;
+  long nLast = nFirst;
   strLine.Empty ();
-
-  // get lines until a hard return
-
-  while (FindInfo.m_pFindPosition)
+  while (true)
     {
-    pLine = pDoc->m_LineList.GetNext (FindInfo.m_pFindPosition);   // get next line
-    strLine += CString (pLine->text, pLine->len);
-    if (FindInfo.m_bForwards)
-      FindInfo.m_nCurrentLine++;
-    else
-      FindInfo.m_nCurrentLine--;
-    if (pLine->hard_return)
+    const COutputSearchSnapshot::Line & line = snapshot->m_Lines [nLast];
+    strLine.Append (line.text, line.length);
+    if (snapshot->m_Lines [nLast].bHardReturn ||
+        nLast + 1 == static_cast<long> (snapshot->m_Lines.size ()))
       break;
+    ++nLast;
     }
-
-  // adjust current line (main find loop adds/subtracts one anyway)
-  if (FindInfo.m_bForwards)
-    FindInfo.m_nCurrentLine--;
-  else
-    {
-    FindInfo.m_pFindPosition = prevpos;
-    pDoc->m_LineList.GetPrev (FindInfo.m_pFindPosition);  // go back to line prior to this batch
-    FindInfo.m_nCurrentLine++;
-    }
-
+  snapshot->m_nFirstLine = nFirst;
+  snapshot->m_nLastLine = nLast;
+  FindInfo.m_nCurrentLine = FindInfo.m_bForwards ? nLast : nFirst;
   return false;
   } // end of CSendView::GetNextLine
 

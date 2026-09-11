@@ -16,7 +16,6 @@ extern int gdoccount;
 // CMUSHclientDoc construction/destruction
 
 CMUSHclientDoc::CMUSHclientDoc()
-  :	m_eventScriptFileChanged(FALSE, TRUE)
 
 {    // constructor
 
@@ -91,12 +90,17 @@ int i;
   m_bInScreendraw = false;
   m_iLastCommandCount = 0;
   m_iExecutionDepth = 0;
+  m_iConnectionAttemptNumber = 0;
+  m_iNameLookupGeneration = 0;
   m_iNextChatID = 0;
   m_tLastMessageTime = 0;
   m_tLastGroupMessageTime = 0;
   m_bOmitFromCommandHistory = false;
   m_bUTF_8 = false;
   m_bWorldClosing = false;
+  m_bWorldCloseQueued = false;
+  m_bWorldClosePending = false;
+  m_iActiveProgressOperations = 0;
   m_bInSendToScript = true;
 
   m_bInPlaySoundFilePlugin = false;
@@ -404,7 +408,8 @@ int i;
   m_ScriptEngine = NULL;
 
   m_bInScriptFileChanged = false;
-  m_pThread = NULL;
+  m_bScriptFileChangedPending = false;
+  m_iMonitorToken = 0;
   m_bSyntaxErrorOnly = false;
 
   m_dispidWorldOpen = DISPID_UNKNOWN;

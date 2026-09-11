@@ -136,11 +136,14 @@ CChatSocket * pSocket = new CChatSocket (this);
       }
 
     if (Frame.GetSafeHwnd ())   // forget it if we don't have a window yet
+      {
+      pSocket->m_iNameLookupGeneration++;
       pSocket->m_hNameLookup = WSAAsyncGetHostByName (Frame.GetSafeHwnd (),
                                                      WM_USER_HOST_NAME_RESOLVED,
                                                      Server,
                                                      pSocket->m_pGetHostStruct,
                                                      MAXGETHOSTSTRUCT);
+      }
 
    if (!pSocket->m_hNameLookup)
      {

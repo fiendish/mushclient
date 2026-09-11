@@ -28,6 +28,7 @@ CChatSocket::CChatSocket(CMUSHclientDoc* pDoc)
 {
 	m_pDoc = pDoc;
   m_hNameLookup = NULL;
+  m_iNameLookupGeneration = 0;
   m_pGetHostStruct = NULL;
   ZeroMemory (&m_ServerAddr, sizeof m_ServerAddr);
   m_bDeleteMe = false;  
@@ -168,6 +169,7 @@ void CChatSocket::StopFileTransfer (const bool bAbort)
 
 void CChatSocket::OnReceive(int nErrorCode)
 {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
 
 char buff [1000];
 int count = Receive (buff, sizeof (buff) - 1);
@@ -1567,6 +1569,12 @@ void CChatSocket::Process_Snoop_data				  (const CString strMessage)
   bool bOldNotesInRGB = m_pDoc->m_bNotesInRGB;
   COLORREF iOldNoteColourFore = m_pDoc->m_iNoteColourFore;
   COLORREF iOldNoteColourBack = m_pDoc->m_iNoteColourBack;
+  CValueStateGuard<bool> notesRGBGuard
+    (m_pDoc->m_bNotesInRGB, m_pDoc->m_bNotesInRGB);
+  CValueStateGuard<COLORREF> noteForeGuard
+    (m_pDoc->m_iNoteColourFore, m_pDoc->m_iNoteColourFore);
+  CValueStateGuard<COLORREF> noteBackGuard
+    (m_pDoc->m_iNoteColourBack, m_pDoc->m_iNoteColourBack);
 
   m_pDoc->ColourTell ("springgreen", "black", ">");
 
@@ -1617,7 +1625,7 @@ void CChatSocket::Process_Send_command				  (const CString strMessage)
                   TFormat ("%s commands you to '%s'.",
                                 (LPCTSTR) m_strRemoteUserName,
                                 (LPCTSTR) strMessage));
-    m_pDoc->m_iExecutionDepth = 0;
+    CValueStateGuard<int> executionDepthGuard (m_pDoc->m_iExecutionDepth, 0);
     m_pDoc->Execute (strMessage);
     }   // end of allowed to send commands
   else

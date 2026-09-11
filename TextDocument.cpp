@@ -10,8 +10,10 @@ Copyright (c) 2000 Nick Gammon.
 #include "stdafx.h"
 #include "MUSHclient.h"
 #include "TextDocument.h"
+#include "dialogs\ProgDlg.h"
 #include "TextView.h"
 #include "MainFrm.h"
+#include <errno.h>
 #include <process.h>    
 #include "doc.h"
 
@@ -32,13 +34,17 @@ void ListAccelerators (CDocument * pDoc, const int iType);
 IMPLEMENT_DYNCREATE(CTextDocument, CDocument)
 
 CTextDocument::CTextDocument()
-  :	m_eventFileChanged(FALSE, TRUE)
 {
   m_bInFileChanged = false;
-  m_pThread = NULL;
+  m_bFileChangedPending = false;
+  m_iActiveOperations = 0;
+  m_bClosePending = false;
+  m_bCloseQueued = false;
+  m_iMonitorToken = 0;
   m_pRelatedWorld = NULL;
 
   m_iUniqueDocumentNumber = 0;
+  m_iTextDocumentNumber = App.GetUniqueNumber ();
   m_strFontName = App.m_strDefaultInputFont;
   m_iFontSize = App.m_iDefaultInputFontHeight;
   m_iFontWeight = App.m_iDefaultInputFontWeight;
@@ -72,13 +78,15 @@ BOOL CTextDocument::OnNewDocument()
 {
 	if (!CDocument::OnNewDocument())
 		return FALSE;
-  KillThread (m_pThread, m_eventFileChanged);
+  StopMonitoringThread (m_iMonitorToken);
+  m_bFileChangedPending = false;
 	return TRUE;
 }
 
 CTextDocument::~CTextDocument()
 {
-  KillThread (m_pThread, m_eventFileChanged);
+  StopMonitoringThread (m_iMonitorToken);
+  m_bFileChangedPending = false;
 
   if (!bWine)
   	AfxOleUnlockApp();        // not needed?
@@ -139,106 +147,297 @@ void CTextDocument::OnUpdateStatusModified(CCmdUI* pCmdUI)
 
 void CTextDocument::OnCloseDocument() 
 {
-  KillThread (m_pThread, m_eventFileChanged);
+  if (m_iActiveOperations > 0 || CProgressDlg::IsPumpingMessages ())
+    {
+    if (!m_bCloseQueued)
+      {
+      App.DeferTextDocumentClose (m_iTextDocumentNumber);
+      m_bCloseQueued = true;
+      }
+    m_bClosePending = true;
+    return;
+    }
+
+  StopMonitoringThread (m_iMonitorToken);
+  m_bFileChangedPending = false;
 	CDocument::OnCloseDocument();
 }
 
+void CTextDocument::BeginOperation (void)
+  {
+  m_iActiveOperations++;
+  }
+
+void CTextDocument::EndOperation (void)
+  {
+  ASSERT (m_iActiveOperations > 0);
+  m_iActiveOperations--;
+
+  }
 
 // ------------------- file change monitoring thread -------------------------
 
-void ThreadFunc(LPVOID pParam)
-{
-  CThreadData*	pData = (CThreadData*) pParam;
-	char * strDir = pData->m_strFilename;
-  DWORD pDoc = pData->m_pDoc;
-	char * p = strrchr (strDir, '\\');
-	if (!p)
-		p = strrchr (strDir, ':');   // why?
+// Only the UI thread changes the registry. A worker owns no document data.
+// Keep the registry alive until process exit: a blocked worker can outlive App.
+struct CMonitorContext
+  {
+  CMonitorContext * next;
+  char * filename;
+  HWND window;
+  UINT message;
+  __int64 document;
+  __int64 token;
+  HANDLE stopEvent;
+  HANDLE thread;
+  HANDLE change;
+  volatile LONG stopped;
+  unsigned reported;
+  unsigned pending;
+  const char * operations[9];
+  DWORD errors[9];
+  // The first transient post error is published while the worker is live.
+  DWORD postError;
+  volatile LONG postErrorReady;
+  // Terminal error fields are read only after confirmed worker exit.
+  const char * workerOperation;
+  DWORD workerError;
+  };
+
+static CMonitorContext * monitors = NULL;
+
+static void RecordMonitorError (CMonitorContext * context, unsigned slot,
+                                const char * operation, DWORD error)
+  {
+  const unsigned bit = 1U << slot;
+  if (!(context->reported & bit))
+    {
+    context->reported |= bit;
+    context->pending |= bit;
+    context->operations[slot] = operation;
+    context->errors[slot] = error;
+    }
+  }
+
+static void RecordMonitorWorkerError (CMonitorContext * context,
+                                      const char * operation, DWORD error)
+  {
+  context->workerOperation = operation;
+  context->workerError = error;
+  }
+
+static bool MonitorStopped (CMonitorContext * context)
+  {
+  return InterlockedCompareExchange (&context->stopped, 0, 0) != 0;
+  }
+
+static unsigned __stdcall MonitorThread (void * parameter)
+  {
+  CMonitorContext * context = (CMonitorContext *) parameter;
+  if (MonitorStopped (context))
+    return 0;
+
+  char * p = strrchr (context->filename, '\\');
+  if (!p)
+    p = strrchr (context->filename, ':');
   if (p)
     *p = 0;
-	HWND	hWnd = pData->m_hWnd;
-	HANDLE	hEvent = pData->m_hEvent;
 
-	delete pData;
+  context->change = FindFirstChangeNotification
+    (context->filename, TRUE, FILE_NOTIFY_CHANGE_LAST_WRITE);
+  if (context->change == INVALID_HANDLE_VALUE)
+    {
+    RecordMonitorWorkerError (context, "FindFirstChangeNotification", GetLastError ());
+    return 0;
+    }
 
-  // Get a handle to a file change notification object.
-  HANDLE	hChange = ::FindFirstChangeNotification(strDir, TRUE, FILE_NOTIFY_CHANGE_LAST_WRITE);
+  HANDLE handles[2] = { context->stopEvent, context->change };
+  while (!MonitorStopped (context))
+    {
+    // The finite wait also observes stopped if SetEvent fails.
+    DWORD result = WaitForMultipleObjects (2, handles, FALSE, 250);
+    if (MonitorStopped (context) || result == WAIT_OBJECT_0)
+      break;
+    if (result == WAIT_TIMEOUT)
+      continue;
+    if (result != WAIT_OBJECT_0 + 1)
+      {
+      RecordMonitorWorkerError (context, "WaitForMultipleObjects", GetLastError ());
+      break;
+      }
 
-  delete [] strDir;
+    CFileChangeNotification * notification = NULL;
+    try
+      {
+      notification = new CFileChangeNotification;
+      }
+    catch (CException * e)
+      {
+      e->Delete ();
+      RecordMonitorWorkerError (context, "notification allocation", ERROR_NOT_ENOUGH_MEMORY);
+      return 0;
+      }
+    catch (...)
+      {
+      RecordMonitorWorkerError (context, "notification allocation", ERROR_NOT_ENOUGH_MEMORY);
+      return 0;
+      }
+    notification->m_iDocumentNumber = context->document;
+    notification->m_iMonitorToken = context->token;
+    if (MonitorStopped (context))
+      {
+      delete notification;
+      break;
+      }
+    if (!PostMessage (context->window, context->message, (WPARAM) notification, 0))
+      {
+      DWORD error = GetLastError ();
+      if (!InterlockedCompareExchange (&context->postErrorReady, 0, 0))
+        {
+        context->postError = error;
+        InterlockedExchange (&context->postErrorReady, 1);
+        }
+      delete notification;
+      }
+    if (MonitorStopped (context))
+      break;
+    if (!FindNextChangeNotification (context->change))
+      {
+      RecordMonitorWorkerError (context, "FindNextChangeNotification", GetLastError ());
+      break;
+      }
+    }
+  // Only the collector closes handles, after confirming thread exit.
+  return 0;
+  }
 
-  // Return now if ::FindFirstChangeNotification failed.
-  if (hChange == INVALID_HANDLE_VALUE)
-    return;
-
-	HANDLE	aHandles[2];
-	aHandles[0] = hChange;
-	aHandles[1] = hEvent;
-	BOOL	bContinue = TRUE;
-
-    // Sleep until a file change notification wakes this thread or
-    // m_eventScriptFileChanged becomes set indicating it's time for the thread to end.
-    while (bContinue)
-	{
-		switch ((::WaitForMultipleObjects(2, aHandles, FALSE, INFINITE)))
-		{
-		case 0:
-			// Respond to a change notification.
-			::PostMessage(hWnd, WM_USER_FILE_CONTENTS_CHANGED, (WPARAM) pDoc, 0);
-			::FindNextChangeNotification(hChange);
-			break;
-
-		default:
-			// Kill this thread (m_event became signaled).
-            bContinue = FALSE;
-			break;
-		}
-	}
-
-	// Close the file change notification handle and return.
-	::FindCloseChangeNotification(hChange);
-	return;
-}
-
-void KillThread (HANDLE & pThread, CEvent & eventFileChanged)
+void StopMonitoringThread (__int64 & token)
   {
-	// Kill the file change notification thread
-	if (pThread)
-	  {
-    // setting this event *should* cause the thread to wrapup gracefully
-		eventFileChanged.SetEvent();
+  const __int64 oldToken = token;
+  token = 0;
+  if (!oldToken)
+    return;
+  for (CMonitorContext * context = monitors; context; context = context->next)
+    if (context->token == oldToken)
+      {
+      InterlockedExchange (&context->stopped, 1);
+      if (context->thread && context->stopEvent && !SetEvent (context->stopEvent))
+        RecordMonitorError (context, 0, "SetEvent", GetLastError ());
+      return;
+      }
+  }
 
-    // wait for thread to go away, or 10 seconds, whichever is sooner
-		DWORD waitstatus = ::WaitForSingleObject(pThread, 10000L);
+void CollectMonitoringThreads ()
+  {
+  const char * reportOperation = NULL;
+  DWORD reportError = 0;
+  CMonitorContext ** link = &monitors;
+  while (*link)
+    {
+    CMonitorContext * context = *link;
+    bool exited = context->thread == NULL;
+    if (context->thread)
+      {
+      DWORD result = WaitForSingleObject (context->thread, 0);
+      exited = result == WAIT_OBJECT_0;
+      if (!exited && result != WAIT_TIMEOUT)
+        RecordMonitorError (context, 1, "WaitForSingleObject", GetLastError ());
+      }
+    if (InterlockedCompareExchange (&context->postErrorReady, 0, 0))
+      RecordMonitorError (context, 7, "PostMessage", context->postError);
+    if (exited)
+      {
+      if (context->workerOperation)
+        RecordMonitorError (context, 8, context->workerOperation, context->workerError);
+      // No thread means startup failed, or its handle was already closed.
+      // Retain every failed-close handle for a later idle pass.
+      if (context->change && context->change != INVALID_HANDLE_VALUE)
+        {
+        if (FindCloseChangeNotification (context->change))
+          context->change = NULL;
+        else
+          RecordMonitorError (context, 2, "FindCloseChangeNotification", GetLastError ());
+        }
+      if (context->stopEvent)
+        {
+        if (CloseHandle (context->stopEvent))
+          context->stopEvent = NULL;
+        else
+          RecordMonitorError (context, 3, "CloseHandle(stop event)", GetLastError ());
+        }
+      if (context->thread)
+        {
+        if (CloseHandle (context->thread))
+          context->thread = NULL;
+        else
+          RecordMonitorError (context, 4, "CloseHandle(thread)", GetLastError ());
+        }
+      }
+    if (!reportOperation && context->pending)
+      for (unsigned slot = 0; slot < 9; ++slot)
+        if (context->pending & (1U << slot))
+          {
+          reportOperation = context->operations[slot];  // Static literal.
+          reportError = context->errors[slot];
+          context->pending &= ~(1U << slot);
+          break;
+          }
+    if (!exited || context->thread || context->stopEvent || context->pending ||
+        (context->change && context->change != INVALID_HANDLE_VALUE))
+      {
+      link = &context->next;
+      continue;
+      }
+    *link = context->next;
+    free (context->filename);
+    free (context);
+    }
+  // A modal callback can stop/start monitors or enter this collector again.
+  // All registry access is complete, and these values do not refer to a context.
+  if (reportOperation)
+    {
+    char message[192];
+    snprintf (message, sizeof message, "File monitor: %s failed (error %lu).", reportOperation, reportError);
+    ::MessageBoxA (NULL, message, "File monitor error", MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    }
+  }
 
-    // if unable to terminate thread properly, get rid of the blasted thing
-    if (waitstatus == WAIT_TIMEOUT || waitstatus == WAIT_FAILED)   
-      TerminateThread (pThread, 1);
-
-		pThread = NULL;
-	  }
-  } // end of KillThread
-
-// Create script source file monitoring thread
-//
-HANDLE CreateMonitoringThread(const char * sName, DWORD pDoc, CEvent & eventFileChanged)
-{
-  HANDLE pThread;
-
-	CThreadData*	pData = new CThreadData;
-	pData->m_strFilename = new char [strlen (sName) + 1];
-  strcpy (pData->m_strFilename, sName);
-	pData->m_hWnd = Frame.GetSafeHwnd ();
-	pData->m_hEvent = eventFileChanged;
-  pData->m_pDoc = pDoc;
-	eventFileChanged.ResetEvent();
-
-	pThread = (HANDLE) _beginthread (ThreadFunc, 0, pData);
-  SetThreadPriority (pThread, THREAD_PRIORITY_IDLE);
-
-  return pThread;
-
-	// Thread will delete data object
-}
+__int64 CreateMonitoringThread (const char * name, __int64 document, UINT message)
+  {
+  CMonitorContext * context = (CMonitorContext *) calloc (1, sizeof *context);
+  if (!context)
+    AfxThrowResourceException ();
+  context->filename = (char *) malloc (strlen (name) + 1);
+  if (!context->filename)
+    {
+    free (context);
+    AfxThrowResourceException ();
+    }
+  strcpy (context->filename, name);
+  context->document = document;
+  context->token = App.GetUniqueNumber ();
+  if (!context->token)
+    context->token = App.GetUniqueNumber ();
+  context->window = Frame.GetSafeHwnd ();
+  context->message = message;
+  // Register before acquiring handles so failed startup cannot lose ownership.
+  context->next = monitors;
+  monitors = context;
+  context->stopEvent = CreateEvent (NULL, TRUE, FALSE, NULL);
+  if (!context->stopEvent)
+    {
+    RecordMonitorError (context, 5, "CreateEvent", GetLastError ());
+    AfxThrowResourceException ();
+    }
+  context->thread = (HANDLE) _beginthreadex (NULL, 0, MonitorThread, context, 0, NULL);
+  if (!context->thread)
+    {
+    RecordMonitorError (context, 5, "_beginthreadex (errno)", errno);
+    AfxThrowResourceException ();
+    }
+  if (!SetThreadPriority (context->thread, THREAD_PRIORITY_IDLE))
+    RecordMonitorError (context, 6, "SetThreadPriority", GetLastError ());
+  return context->token;
+  }
 
 
 // ------------------- handle change to file -------------------------
@@ -250,7 +449,8 @@ void CTextDocument::OnFileChanged(void)
 	if (m_bInFileChanged)
 		return;
 
-  m_bInFileChanged = true;
+	CTextDocumentOperationGuard operationGuard (this);
+	CBoolStateGuard fileChangedGuard (m_bInFileChanged, true);
 
 	// Check if this file has changed
 	CFileStatus	status;
@@ -265,7 +465,12 @@ void CTextDocument::OnFileChanged(void)
 		CString	strText;
     strText = TFormat ("The file \"%s\" has been modified. Do you wish to reload it?",
       (LPCTSTR) GetPathName ());
-    if (::TMessageBox (strText, MB_YESNO | MB_ICONQUESTION) == IDYES)
+    int iAnswer = ::TMessageBox (strText, MB_YESNO | MB_ICONQUESTION);
+
+    if (m_bClosePending)
+      return;
+
+    if (iAnswer == IDYES)
       {
 		  CWaitCursor	wait;
 
@@ -287,16 +492,20 @@ void CTextDocument::OnFileChanged(void)
       } // end of approving modification or wanting it anyway
     } // end of time changing
 
-	m_bInFileChanged = false;
 }
 
 
 // kill the monitoring thread during the save
 BOOL CTextDocument::DoSave(LPCTSTR lpszPathName, BOOL bReplace)
   {
-  KillThread (m_pThread, m_eventFileChanged);
+  CTextDocumentOperationGuard operationGuard (this);
+  StopMonitoringThread (m_iMonitorToken);
+  m_bFileChangedPending = false;
 
   BOOL bResult = CDocument::DoSave (lpszPathName, bReplace);
+
+  if (m_bClosePending)
+    return bResult;
 
   // monitor this file again
   if (!GetPathName ().IsEmpty ())
@@ -309,7 +518,8 @@ BOOL CTextDocument::DoSave(LPCTSTR lpszPathName, BOOL bReplace)
 void CTextDocument::CreateMonitoringThread(const char * sName)
 {
   // kill any old thread
-  KillThread (m_pThread, m_eventFileChanged);
+  StopMonitoringThread (m_iMonitorToken);
+  m_bFileChangedPending = false;
 
   // find when the file was last modified
 
@@ -318,13 +528,16 @@ void CTextDocument::CreateMonitoringThread(const char * sName)
   m_timeFileMod = status.m_mtime;
 
   // create the thread
-  m_pThread = ::CreateMonitoringThread (sName, (DWORD) this, m_eventFileChanged);
+  m_iMonitorToken = ::CreateMonitoringThread
+    (sName, m_iTextDocumentNumber, WM_USER_FILE_CONTENTS_CHANGED);
 
   UpdateAllViews  (NULL);     // force window title to be redrawn
 }
 
 void CTextDocument::OnFileOpen() 
 {
+	CTextDocumentOperationGuard operationGuard (this);
+
 	CString title;
 	VERIFY(title.LoadString(AFX_IDS_OPENFILE));
 
@@ -464,6 +677,8 @@ CMUSHclientDoc * pDoc = FindWorld ();
 
 BOOL CTextDocument::SaveModified() 
 {
+	CTextDocumentOperationGuard operationGuard (this);
+
 // don't bother asking if they want to save an empty document
 CTextView* pView = (CTextView*) m_viewList.GetHead();
   

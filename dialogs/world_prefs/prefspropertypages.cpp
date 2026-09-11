@@ -9106,15 +9106,32 @@ CalculateMemoryUsage ();
 
 void CPrefsP15::CalculateMemoryUsage ()
   {
-
-  CProgressDlg * pProgressDlg = NULL;
-
-  if (m_doc->m_LineList.GetCount () > 1000)
+  CWorldDocumentOperationGuard operationGuard (m_doc);
+  struct CLineMemory
     {
-    pProgressDlg = new CProgressDlg; 
-    pProgressDlg->Create ();                           
+    long bytes;
+    int styles;
+    };
+  vector<CLineMemory> lines;
+  for (POSITION pos = m_doc->m_LineList.GetHeadPosition (); pos; )
+    {
+    const CLine * pLine = m_doc->m_LineList.GetNext (pos);
+    CLineMemory line;
+    line.styles = (int) pLine->styleList.GetCount ();
+    line.bytes = sizeof (CLine) + pLine->iMemoryAllocated + sizeof (void *) * 3 +
+      line.styles * (sizeof (CStyle) + sizeof (void *) * 3);
+    lines.push_back (line);
+    }
+  const long nLines = (long) lines.size ();
+  std::unique_ptr<CProgressDlg> pProgressDlg;
+
+  if (nLines > 1000)
+    {
+    pProgressDlg.reset (new CProgressDlg);
+    if (!pProgressDlg->Create ())
+      AfxThrowResourceException ();
     pProgressDlg->SetStatus (Translate ("Calculating memory usage..."));               
-    pProgressDlg->SetRange (0, m_doc->m_LineList.GetCount ());
+    pProgressDlg->SetRange (0, nLines);
     pProgressDlg->SetWindowText (Translate ("Memory used by output buffer"));                              
     }
 
@@ -9126,37 +9143,22 @@ void CPrefsP15::CalculateMemoryUsage ()
 
   Frame.SetStatusMessageNow (Translate ("Calculating size of output buffer..."));
 
-  for (POSITION pos = m_doc->m_LineList.GetHeadPosition (); pos; )
+  for (size_t i = 0; i < lines.size (); ++i)
     {
     iCount++;
-
     if (pProgressDlg)
       {
       if ((iCount & 63) == 0)
-        pProgressDlg->SetPos (iCount); 
-
-      if (pProgressDlg->CheckCancelButton())     // abort if user cancels
-        {
-        delete pProgressDlg;
+        pProgressDlg->SetPos (iCount);
+      if (pProgressDlg->CheckCancelButton ())
         return;
-        }
       }
-
-    CLine * pLine = m_doc->m_LineList.GetNext (pos);
-    nMemory += sizeof CLine;          // add the class itself
-    nMemory += pLine->iMemoryAllocated;  // and the text
-
-    // count styles and work out how much memory they take too
-    for (POSITION pos2 = pLine->styleList.GetHeadPosition(); pos2; iStyles++)
-      {
-      pLine->styleList.GetNext (pos2);
-      nMemory += sizeof CStyle;   // length of style class
-      nMemory += sizeof (void *) * 3;   // and the list item
-      }
-
-    nMemory += sizeof (void *) * 3;   // and the list item
+    nMemory += lines [i].bytes;
+    iStyles += lines [i].styles;
     }
 
+  if (!::IsWindow (m_hWnd) || CWnd::FromHandlePermanent (m_hWnd) != this)
+    return;
   m_strBufferLines += TFormat (" (%i styles)", iStyles);
 	SetDlgItemText(IDC_BUFFER_LINES, m_strBufferLines);
 
@@ -9168,9 +9170,9 @@ void CPrefsP15::CalculateMemoryUsage ()
     strKb.Format ("%5.1f Mb", nMemory / (1024.0 * 1024.0));    // show as Mb
 
   // at new document time we won't have a line yet
-  if (m_doc->m_LineList.GetCount ())
+  if (nLines)
     strMemory.Format ("%s (%i bytes/line)", (LPCTSTR) strKb,
-                      nMemory / m_doc->m_LineList.GetCount ());
+                      nMemory / nLines);
   else
     strMemory.Format ("%s", (LPCTSTR) strKb);
 
@@ -9181,7 +9183,7 @@ void CPrefsP15::CalculateMemoryUsage ()
   GetDlgItem (IDC_CALCULATE_MEMORY)->EnableWindow (FALSE);  // only do it once
 
 
-  delete pProgressDlg;
+
 
   } // end of  CPrefsP15::CalculateMemoryUsage 
 

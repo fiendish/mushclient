@@ -10,6 +10,19 @@
 static char BASED_CODE THIS_FILE[] = __FILE__;
 #endif
 
+// Counts nested progress message loops on the UI thread.
+static int s_iProgressMessageDepth = 0;
+
+class CProgressMessageScope
+  {
+  public:
+    CProgressMessageScope () { ++s_iProgressMessageDepth; }
+    ~CProgressMessageScope () { --s_iProgressMessageDepth; }
+  private:
+    CProgressMessageScope (const CProgressMessageScope &);
+    CProgressMessageScope & operator= (const CProgressMessageScope &);
+  };
+
 /////////////////////////////////////////////////////////////////////////////
 // CProgressDlg dialog
 
@@ -28,12 +41,50 @@ CProgressDlg::CProgressDlg(UINT nCaptionID)
     //}}AFX_DATA_INIT
     m_bParentDisabled = FALSE;
     m_bHideCancel = FALSE;
+    m_iActiveOperations = 0;
+    m_bDeletePending = false;
+    m_hParentWindow = NULL;
+    m_pParentWindowIdentity = NULL;
 }
 
 CProgressDlg::~CProgressDlg()
 {
     if(m_hWnd!=NULL)
       DestroyWindow();
+}
+
+bool CProgressDlg::IsPumpingMessages ()
+{
+    return s_iProgressMessageDepth != 0;
+}
+
+bool CProgressDlg::IsUsable () const
+{
+    return !m_bDeletePending && m_hWnd != NULL && ::IsWindow (m_hWnd) &&
+      CWnd::FromHandlePermanent (m_hWnd) == this;
+}
+
+void CProgressDlg::BeginOperation ()
+{
+    ++m_iActiveOperations;
+}
+
+void CProgressDlg::EndOperation ()
+{
+    ASSERT (m_iActiveOperations > 0);
+    if (--m_iActiveOperations == 0 && m_bDeletePending)
+      delete this;
+}
+
+void CProgressDlg::RequestDelete ()
+{
+    if (m_iActiveOperations != 0)
+    {
+      m_bDeletePending = true;
+      m_bCancel = TRUE;
+      return;
+    }
+    delete this;
 }
 
 BOOL CProgressDlg::DestroyWindow()
@@ -44,15 +95,19 @@ BOOL CProgressDlg::DestroyWindow()
 
 void CProgressDlg::ReEnableParent()
 {
-    if(m_bParentDisabled && (m_pParentWnd!=NULL))
-      m_pParentWnd->EnableWindow(TRUE);
+    const bool bEnable = m_bParentDisabled && ::IsWindow (m_hParentWindow) &&
+      CWnd::FromHandlePermanent (m_hParentWindow) == m_pParentWindowIdentity;
     m_bParentDisabled=FALSE;
+    if (bEnable)
+      ::EnableWindow (m_hParentWindow, TRUE);
 }
 
 BOOL CProgressDlg::Create(CWnd *pParent)
 {
     // Get the true parent of the dialog
     m_pParentWnd = CWnd::GetSafeOwner(pParent);
+    m_hParentWindow = m_pParentWnd ? m_pParentWnd->GetSafeHwnd () : NULL;
+    m_pParentWindowIdentity = CWnd::FromHandlePermanent (m_hParentWindow);
 
     // m_bParentDisabled is used to re-enable the parent window
     // when the dialog is destroyed. So we don't want to set
@@ -88,8 +143,8 @@ END_MESSAGE_MAP()
 
 void CProgressDlg::SetStatus(LPCTSTR lpszMessage)
 {
-    ASSERT(m_hWnd); // Don't call this _before_ the dialog has
-                    // been created. Can be called from OnInitDialog
+    if (!IsUsable ())
+      return;
     CWnd *pWndStatus = GetDlgItem(CG_IDC_PROGDLG_STATUS);
 
     // Verify that the static text control exists
@@ -104,6 +159,8 @@ void CProgressDlg::OnCancel()
 
 void CProgressDlg::SetRange(int nLower,int nUpper)
 {
+    if (!IsUsable ())
+      return;
     m_nLower = nLower;
     m_nUpper = nUpper;
     m_Progress.SetRange32(nLower,nUpper);
@@ -112,6 +169,8 @@ void CProgressDlg::SetRange(int nLower,int nUpper)
 int CProgressDlg::SetPos(int nPos)
 {
     PumpMessages();
+    if (!IsUsable ())
+      return 0;
     int iResult = m_Progress.SetPos(nPos);
     UpdatePercent(nPos);
     return iResult;
@@ -119,6 +178,8 @@ int CProgressDlg::SetPos(int nPos)
 
 int CProgressDlg::SetStep(int nStep)
 {
+    if (!IsUsable ())
+      return 0;
     m_nStep = nStep; // Store for later use in calculating percentage
     return m_Progress.SetStep(nStep);
 }
@@ -126,6 +187,8 @@ int CProgressDlg::SetStep(int nStep)
 int CProgressDlg::OffsetPos(int nPos)
 {
     PumpMessages();
+    if (!IsUsable ())
+      return 0;
     int iResult = m_Progress.OffsetPos(nPos);
     UpdatePercent(iResult+nPos);
     return iResult;
@@ -134,6 +197,8 @@ int CProgressDlg::OffsetPos(int nPos)
 int CProgressDlg::StepIt()
 {
     PumpMessages();
+    if (!IsUsable ())
+      return 0;
     int iResult = m_Progress.StepIt();
     UpdatePercent(iResult+m_nStep);
     return iResult;
@@ -141,19 +206,43 @@ int CProgressDlg::StepIt()
 
 void CProgressDlg::PumpMessages()
 {
-    // Must call Create() before using the dialog
-    ASSERT(m_hWnd!=NULL);
-
-    MSG msg;
-    // Handle dialog messages
-    while(PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+    if (!IsUsable ())
     {
-      if(!IsDialogMessage(&msg))
+      m_bCancel = TRUE;
+      return;
+    }
+    CProgressMessageScope messageScope;
+    MSG msg;
+    // Preserve a request to terminate the application.
+    if(::PeekMessage(&msg, NULL, WM_QUIT, WM_QUIT, PM_REMOVE))
+    {
+      m_bCancel = TRUE;
+      ::PostQuitMessage((int) msg.wParam);
+      return;
+    }
+
+    // Socket notifications must keep running during long operations.
+    // Callers retain their data across callbacks; document and application
+    // closure is deferred until the main loop resumes.
+    while(IsUsable () && !m_bCancel && ::PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+    {
+      if(msg.message == WM_QUIT)
+      {
+        m_bCancel = TRUE;
+        ::PostQuitMessage((int) msg.wParam);
+        return;
+      }
+
+      // PeekMessage can dispatch sent messages that close this dialog.
+      // Still dispatch any retrieved message for another window.
+      if(!IsUsable () || !IsDialogMessage(&msg))
       {
         TranslateMessage(&msg);
-        DispatchMessage(&msg);  
+        DispatchMessage(&msg);
       }
     }
+    if (!IsUsable ())
+      m_bCancel = TRUE;
 }
 
 BOOL CProgressDlg::CheckCancelButton()
@@ -176,6 +265,8 @@ BOOL CProgressDlg::CheckCancelButton()
 
 void CProgressDlg::UpdatePercent(int nNewPos)
 {
+    if (!IsUsable ())
+      return;
     CWnd *pWndPercent = GetDlgItem(CG_IDC_PROGDLG_PERCENT);
     int nPercent;
     
@@ -197,10 +288,15 @@ void CProgressDlg::UpdatePercent(int nNewPos)
     strBuf.Format(_T("%d%c"),nPercent,_T('%'));
 
 	CString strCur; // get current percentage
+    const HWND hPercent = pWndPercent->GetSafeHwnd ();
     pWndPercent->GetWindowText(strCur);
 
-	if (strCur != strBuf)
-		pWndPercent->SetWindowText(strBuf);
+    // Reading text sends a window message and can close or replace a control.
+    if (!IsUsable ())
+      return;
+    pWndPercent = GetDlgItem (CG_IDC_PROGDLG_PERCENT);
+    if (pWndPercent && pWndPercent->GetSafeHwnd () == hPercent && strCur != strBuf)
+      pWndPercent->SetWindowText(strBuf);
 }
     
 /////////////////////////////////////////////////////////////////////////////
