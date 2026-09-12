@@ -106,7 +106,7 @@ struct State {
     bool worldDestroyed=false,chatDestroyed=false,throwCommand=false,throwReload=false;
     bool throwPrompt=false,closeDuringCommand=true,closeDuringPrompt=true;
     int commands=0,afterCommands=0,disabled=0,created=0,prompts=0,answer=IDYES;
-    int commandNotes=0,closeRequests=0,completedCommands=0;
+    int commandNotes=0,closeRequests=0,completedCommands=0,expectedExecutionDepth=1;
 };
 State* state=nullptr;
 struct CDocument {
@@ -256,7 +256,7 @@ void CMUSHclientDoc::CleanupTick() {
 }
 void ScriptEngine::Parse(const CString&,const char*) {
     ++state->commands;
-    CHECK(doc->m_iExecutionDepth==1,"remote execution depth reset");
+    CHECK(doc->m_iExecutionDepth==state->expectedExecutionDepth,"execution depth set for command source");
     CHECK(doc->m_CurrentPlugin==nullptr,"Execute clears current plugin");
     if(state->closeDuringCommand)ExpectRetained(doc,"world retained during command");
     if(commandHook)commandHook(doc);
@@ -288,6 +288,21 @@ void Finish() {
     if(App.documentClose || App.frameClose)App.Drain();
     else App.doc->OnCloseDocument();
     CHECK(state->worldDestroyed,"world closes after callback returns");
+}
+void ExecuteCases() {
+    for(bool throughFrame:{false,true})for(bool throws:{false,true}) {
+        State s;Reset(s);closeThroughFrame=throughFrame;s.throwCommand=throws;
+        s.expectedExecutionDepth=8;
+        bool caught=false;
+        try { CHECK(App.doc->Execute("/test")==eOK,"direct command returns success"); }
+        catch(const std::runtime_error& error) {
+            caught=true;CHECK(string(error.what())=="command callback failure","direct command preserves original exception");
+        }
+        CHECK(caught==throws,"direct command exception propagates");
+        CHECK(s.commands==1 && s.completedCommands==(throws?0:1),"direct command runs once");
+        Finish();
+    }
+    std::puts("PASS: direct Execute retains state through close requests and exceptions");
 }
 string Packet(int protocol,int command,const string& payload) {
     if(protocol==eChatMudMaster)return string(1,static_cast<char>(command))+payload+static_cast<char>(CHAT_END_OF_COMMAND);
@@ -369,7 +384,7 @@ void TimerCases() {
         if(outerOperation)outer=std::make_unique<CWorldDocumentOperationGuard>(doc);
         commandHook=[&](CMUSHclientDoc* current) {
             CHECK(current==doc,"command uses its owning world");
-            CHECK(doc->m_iActiveProgressOperations==1+outerOperation,"receive guard nests in prior operation");
+            CHECK(doc->m_iActiveProgressOperations==2+outerOperation,"execute guard nests in receive and prior operations");
             CHECK(doc->ChatDisconnect(11)==eOK,"command disconnects its own chat");
             CHECK(active->m_bDeleteMe && active->m_iChatStatus==eChatClosed,"real OnClose marks the active chat");
             CHECK(doc->GetChatSocket(11)==nullptr && doc->ChatDisconnect(11)==eChatIDNotFound,
@@ -380,7 +395,7 @@ void TimerCases() {
             // Model a modal script callback that dispatches a timer while Parse is active.
             {
                 CWorldDocumentOperationGuard nested(doc);
-                CHECK(doc->m_iActiveProgressOperations==2+outerOperation,"nested operation depth retained");
+                CHECK(doc->m_iActiveProgressOperations==3+outerOperation,"nested operation depth retained");
                 const int before=doc->timerContinuations;
                 doc->CleanupTick();
                 CHECK(!activeDeleted,"marked chat survives modal timer cleanup");
@@ -393,7 +408,7 @@ void TimerCases() {
                 CHECK(otherSecondDeleted && !otherLiveDeleted,"other world next tick cleans remaining marked chat");
                 CHECK(other->timerContinuations==2,"other world timer work continues on each tick");
             }
-            CHECK(doc->m_iActiveProgressOperations==1+outerOperation,"inner guard restores prior operation depth");
+            CHECK(doc->m_iActiveProgressOperations==2+outerOperation,"inner guard restores execute operation depth");
             doc->CleanupTick();
             CHECK(!activeDeleted && !markedDeleted,"receive guard retains marked chats after inner scope");
             CHECK(doc->timerContinuations==2,"timer work continues after inner scope");
@@ -435,6 +450,7 @@ void TimerCases() {
     std::puts("PASS: timer cleanup retains active chat, preserves other worlds and timer work, and deletes on later ticks after return or throw");
 }
 int main(int argc,char** argv) {
+    if(argc==1 || string(argv[1])=="execute")ExecuteCases();
     if(argc==1 || string(argv[1])=="chat")ChatCases();
     if(argc==1 || string(argv[1])=="script")ScriptCases();
     if(argc==1 || string(argv[1])=="timer")TimerCases();

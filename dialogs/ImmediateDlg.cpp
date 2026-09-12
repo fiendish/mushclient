@@ -63,6 +63,7 @@ CString strText;
 
   Frame.SetStatusMessageNow (Translate ("Executing immediate script"));
 
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CBoolStateGuard sendToScriptGuard (m_pDoc->m_bInSendToScript, false);
 
   m_pDoc->m_ScriptEngine->Parse (strText, "Immediate");

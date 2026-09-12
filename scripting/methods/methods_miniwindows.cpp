@@ -1359,6 +1359,7 @@ long CMUSHclientDoc::WindowDelete(LPCTSTR Name)
 
 BSTR CMUSHclientDoc::WindowMenu(LPCTSTR Name, long Left, long Top, LPCTSTR Items) 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 
   CString strResult;
 

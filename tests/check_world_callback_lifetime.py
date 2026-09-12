@@ -1,4 +1,4 @@
-"""Test world retention in extracted chat and script-reload callbacks.
+"""Test world retention in callback and script execution paths.
 
 Requires Python 3 and clang++. Uses ASan/UBSan and MFC/socket stubs.
 The fixture delivers close requests during callbacks and drains deferred closes
@@ -38,8 +38,53 @@ def main():
                 ['git', '-C', str(ROOT), 'show', f'{args.revision}:{path}'], text=True)
         return (ROOT / path).read_text()
 
+    def require_before(body, first, second, label):
+        first_position = body.find(first)
+        second_position = body.find(second)
+        if first_position < 0 or second_position < 0 or first_position > second_position:
+            raise ValueError(f'{label}: required guard order is missing')
+
+    mushview = read('mushview.cpp')
+    context_menu = block(mushview, 'void CMUSHView::OnContextMenu(')
+    require_before(context_menu, 'CWorldDocumentOperationGuard operationGuard (pDoc);',
+                   'CValueStateGuard<int> actionGuard', 'OnContextMenu')
+    if context_menu.count('if (nCommand && !pDoc->m_bWorldClosePending)') != 2:
+        raise ValueError('OnContextMenu: close-pending checks are missing')
+
+    scriptengine = read('scripting/scriptengine.cpp')
+    for signature in ('bool CScriptEngine::Execute (', 'bool CScriptEngine::Parse ('):
+        require_before(block(scriptengine, signature),
+                       'CWorldDocumentOperationGuard operationGuard (m_pDoc);',
+                       'CPluginCallGuard callGuard', signature)
+
+    lua = read('scripting/lua_scripting.cpp')
+    require_before(block(lua, 'bool CScriptEngine::ParseLua ('),
+                   'CWorldDocumentOperationGuard operationGuard (m_pDoc);',
+                   'CPluginCallGuard callGuard', 'ParseLua')
+    execute_lua_blocks = []
+    offset = 0
+    signature = 'bool CScriptEngine::ExecuteLua ('
+    while (start := lua.find(signature, offset)) >= 0:
+        function = block(lua[start:], signature)
+        execute_lua_blocks.append(function)
+        offset = start + len(function)
+    if len(execute_lua_blocks) != 2:
+        raise ValueError(f'Expected two ExecuteLua overloads, found {len(execute_lua_blocks)}')
+    for index, function in enumerate(execute_lua_blocks, 1):
+        require_before(function, 'CWorldDocumentOperationGuard operationGuard (m_pDoc);',
+                       'CPluginCallGuard callGuard', f'ExecuteLua overload {index}')
+
     chat = read('chatsock.cpp')
     doc = read('doc.cpp')
+    require_before(block(doc, 'void CMUSHclientDoc::SendTo ('),
+                   'CWorldDocumentOperationGuard operationGuard (this);',
+                   'switch (iWhere)', 'SendTo')
+
+    miniwindows = read('scripting/methods/methods_miniwindows.cpp')
+    require_before(block(miniwindows, 'BSTR CMUSHclientDoc::WindowMenu('),
+                   'CWorldDocumentOperationGuard operationGuard (this);',
+                   'it->second->Menu', 'WindowMenu')
+
     stdafx = read('stdafx.h')
     functions = '\n\n'.join([
         *(block(doc, signature) for signature in [
@@ -90,11 +135,14 @@ def main():
 
     if not args.skip_mutations:
         chat_guard = '  CWorldDocumentOperationGuard operationGuard (m_pDoc);'
+        execute_guard = 'CWorldDocumentOperationGuard executeOperationGuard (this);'
         script_guard = '  CWorldDocumentOperationGuard operationGuard (this);'
         inner_guard = '    CValueStateGuard<int> executionDepthGuard (m_pDoc->m_iExecutionDepth, 0);'
         no_chat_guard = replace_once(source, chat_guard, '')
         mutants = [
-            ('remove_chat_guard', no_chat_guard, 'chat', 'world retained during command'),
+            ('remove_execute_guard', replace_once(source, execute_guard, ''),
+                'execute', 'world retained during command'),
+            ('remove_chat_guard', no_chat_guard, 'chat', 'world retained after command'),
             ('move_chat_guard_to_command', replace_once(no_chat_guard, inner_guard,
                 chat_guard + '\n' + inner_guard), 'chat', 'world retained after command'),
             ('remove_script_guard', replace_once(source, script_guard, ''),

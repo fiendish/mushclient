@@ -20,6 +20,7 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
                               COleVariant * result    // result of call
                               )
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // If Lua, we may have been called with no arguments, so just do that
@@ -394,6 +395,7 @@ WCHAR charWorld[]=L"world";
 
 bool CScriptEngine::Parse (const CString & strCode, const CString & strWhat)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   CValueStateGuard<CString> procedureGuard (strProcedure, CString ());
