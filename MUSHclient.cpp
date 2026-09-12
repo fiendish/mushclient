@@ -9,6 +9,7 @@
 #include "doc.h"
 #include "ActivityDoc.h"
 #include "TextDocument.h"
+#include "dialogs\ProgDlg.h"
 
 #include "mainfrm.h"
 #include "childfrm.h"
@@ -317,6 +318,7 @@ BOOL CMUSHclientApp::InitInstance()
         m_PreferencesDatabaseName.c_str (), 
         sqlite3_errmsg(db)));
     sqlite3_close(db);
+    db = NULL;
 		return FALSE;
     }
 
@@ -328,6 +330,7 @@ BOOL CMUSHclientApp::InitInstance()
         m_PreferencesDatabaseName.c_str () 
         ));
     sqlite3_close(db);
+    db = NULL;
 		return FALSE;
     }
 
@@ -342,7 +345,9 @@ BOOL CMUSHclientApp::InitInstance()
   if (db_version.empty () || atoi (db_version.c_str ()) < CURRENT_DB_VERSION)
     {
 
-    db_execute ("BEGIN TRANSACTION", true);
+    db_rc = db_execute ("BEGIN TRANSACTION", true);
+    if (db_rc != SQLITE_OK)
+      return FALSE;
 
     db_rc = db_execute (
       // general control information
@@ -356,7 +361,12 @@ BOOL CMUSHclientApp::InitInstance()
       return FALSE;        // SQL error
       }
 
-    db_write_int ("control", "database_version", CURRENT_DB_VERSION);
+    db_rc = db_write_int ("control", "database_version", CURRENT_DB_VERSION);
+    if (db_rc != SQLITE_OK)
+      {
+      db_execute ("ROLLBACK", true);
+      return FALSE;
+      }
 
     db_rc = db_execute (
 
@@ -384,7 +394,12 @@ BOOL CMUSHclientApp::InitInstance()
       return FALSE;        // SQL error
       }
 
-    db_execute ("COMMIT", true);
+    db_rc = db_execute ("COMMIT", true);
+    if (db_rc != SQLITE_OK)
+      {
+      db_execute ("ROLLBACK", true);
+      return FALSE;
+      }
 
     }   // end database empty
 
@@ -1001,15 +1016,167 @@ BOOL CMUSHclientApp::SaveAllModified()
 	return CWinApp::SaveAllModified();
 }
 
+void CMUSHclientApp::DeferMessageUntilIdle (const MSG & msg,
+                                            __int64 iDocumentNumber,
+                                            HANDLE hLookup,
+                                            unsigned long iGeneration,
+                                            long iChatID)
+{
+  if (msg.message == WM_CLOSE)
+    for (deque<CDeferredMessage>::const_iterator it = m_DeferredMessages.begin ();
+         it != m_DeferredMessages.end (); ++it)
+      if (it->m_msg.message == WM_CLOSE && it->m_msg.hwnd == msg.hwnd &&
+          it->m_iDocumentNumber == iDocumentNumber)
+        return;
+
+  CDeferredMessage deferred;
+  deferred.m_msg = msg;
+  deferred.m_iDocumentNumber = iDocumentNumber;
+  deferred.m_hLookup = hLookup;
+  deferred.m_iGeneration = iGeneration;
+  deferred.m_iChatID = iChatID;
+  m_DeferredMessages.push_back (deferred);
+}
+
+void CMUSHclientApp::DeferTextDocumentClose (__int64 iDocumentNumber)
+{
+  m_DeferredTextDocumentCloses.push_back (iDocumentNumber);
+}
+
+void CMUSHclientApp::DeferWorldDocumentClose (__int64 iDocumentNumber)
+{
+  m_DeferredWorldDocumentCloses.push_back (iDocumentNumber);
+}
+
+bool CMUSHclientApp::HasActiveDocumentOperations () const
+{
+  if (m_pWorldDocTemplate)
+    for (POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+      if (((CMUSHclientDoc *) m_pWorldDocTemplate->GetNextDoc (pos))->m_iActiveProgressOperations != 0)
+        return true;
+  if (m_pNormalDocTemplate)
+    for (POSITION pos = m_pNormalDocTemplate->GetFirstDocPosition (); pos; )
+      if (((CTextDocument *) m_pNormalDocTemplate->GetNextDoc (pos))->m_iActiveOperations != 0)
+        return true;
+  return false;
+}
+
 BOOL CMUSHclientApp::OnIdle(LONG lCount) 
 {
+  if (CProgressDlg::IsPumpingMessages () || HasActiveDocumentOperations ())
+    return FALSE;
+
+  CollectMonitoringThreads ();
 	
 	if (CWinApp::OnIdle(lCount))
     return 1;
 
-CWnd* wnd = Frame.GetForegroundWindow( );
+  if (!m_DeferredWorldDocumentCloses.empty ())
+    {
+    const __int64 iDocumentNumber = m_DeferredWorldDocumentCloses.front ();
+    for (POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+      {
+      CMUSHclientDoc * pDoc =
+        (CMUSHclientDoc *) m_pWorldDocTemplate->GetNextDoc (pos);
+      if (pDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+        {
+        if (pDoc->m_iActiveProgressOperations != 0)
+          return FALSE;
+        m_DeferredWorldDocumentCloses.pop_front ();
+        pDoc->m_bWorldCloseQueued = false;
+        pDoc->OnCloseDocument ();
+        return TRUE;
+        }
+      }
+    m_DeferredWorldDocumentCloses.pop_front ();
+    return TRUE;
+    }
 
-  if (!wnd)
+  // A text document can request its own close from a nested modal loop.
+  // Close it only after the active document operation has returned.
+  if (!m_DeferredTextDocumentCloses.empty ())
+    {
+    __int64 iDocumentNumber = m_DeferredTextDocumentCloses.front ();
+
+    for (POSITION pos = m_pNormalDocTemplate->GetFirstDocPosition(); pos; )
+      {
+      CTextDocument * pDoc =
+        (CTextDocument *) m_pNormalDocTemplate->GetNextDoc (pos);
+
+      if (pDoc->m_iTextDocumentNumber == iDocumentNumber)
+        {
+        if (pDoc->m_iActiveOperations != 0)
+          return FALSE;
+        m_DeferredTextDocumentCloses.pop_front ();
+        pDoc->m_bCloseQueued = false;
+        pDoc->OnCloseDocument ();
+        return TRUE;
+        }
+      }
+
+    m_DeferredTextDocumentCloses.pop_front ();
+    return 1;
+    }
+
+  // Process one application notification only after the main message loop
+  // reaches this safe point.
+  if (!m_DeferredMessages.empty ())
+    {
+    CDeferredMessage msg = m_DeferredMessages.front ();
+    m_DeferredMessages.pop_front ();
+
+    if ((msg.m_msg.hwnd == Frame.GetSafeHwnd () || msg.m_msg.message == WM_CLOSE) &&
+        ::IsWindow (msg.m_msg.hwnd))
+      Frame.ProcessDeferredMessage (msg);
+
+    return 1;
+    }
+
+  // Script file notifications can arrive inside nested modal loops. Reload
+  // only after the main message loop reaches this safe point.
+  POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CMUSHclientDoc* pDoc =
+      (CMUSHclientDoc*) m_pWorldDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_bPluginListChangedPending &&
+        !pDoc->m_bInPluginListChanged)
+      {
+      pDoc->PluginListChanged ();
+      return 1;
+      }
+
+    if (pDoc->m_bScriptFileChangedPending &&
+        !pDoc->m_bInScriptFileChanged)
+      {
+      pDoc->m_bScriptFileChangedPending = false;
+      pDoc->OnScriptFileChanged ();
+      return 1;
+      }
+    }
+
+  // Text file notifications can also arrive inside nested modal loops.
+  // Ask about the reload only after the main message loop reaches this point.
+  pos = m_pNormalDocTemplate->GetFirstDocPosition();
+
+  while (pos)
+    {
+    CTextDocument* pDoc =
+      (CTextDocument*) m_pNormalDocTemplate->GetNextDoc(pos);
+
+    if (pDoc->m_bFileChangedPending && !pDoc->m_bInFileChanged)
+      {
+      pDoc->m_bFileChangedPending = false;
+      pDoc->OnFileChanged ();
+      return 1;
+      }
+    }
+
+HWND hwndForeground = ::GetForegroundWindow( );
+
+  if (!hwndForeground)
     return 0;
 
 // update activity window if required
@@ -1028,9 +1195,9 @@ CWnd* wnd = Frame.GetForegroundWindow( );
 
 // See if the front window is our main frame
 
-	if (wnd->IsKindOf(RUNTIME_CLASS(CMainFrame)))
+	if (hwndForeground == Frame.GetSafeHwnd ())
     {
-    CMainFrame * frame = (CMainFrame *) wnd;
+    CMainFrame * frame = &Frame;
 
 // find the active view
 
@@ -1071,6 +1238,11 @@ void CMUSHclientApp::OnGameMinimiseprogram()
 
 BOOL CMUSHclientApp::PreTranslateMessage(MSG* pMsg)
 {
+	// A queued message can outlive its target window. Do not let MFC look up a
+	// stale permanent CWnd for a message that Windows can no longer deliver.
+	if (pMsg->hwnd != NULL && !::IsWindow(pMsg->hwnd))
+		return TRUE;
+
 	// CG: The following lines were added by the Splash Screen component.
 	if (CSplashWnd::PreTranslateAppMessage(pMsg))
 		return TRUE;
@@ -1132,31 +1304,57 @@ int * iColOrder;
 
   CString strTitle;
 
-  db_execute ("BEGIN TRANSACTION", true);
+  int db_rc = db_execute ("BEGIN TRANSACTION", true);
+  if (db_rc != SQLITE_OK)
+    {
+    delete [] iColOrder;
+    return;
+    }
 
   for (int nCol = 0; nCol < iColCount; nCol++)
     {
     strTitle.Format ("%s Col %i Width", strName, nCol);
-    App.db_write_int ("control", strTitle, 
-                          ctlList.GetColumnWidth (nCol));	
+    db_rc = App.db_write_int ("control", strTitle,
+                              ctlList.GetColumnWidth (nCol));
+    if (db_rc != SQLITE_OK)
+      break;
 
     strTitle.Format ("%s Col %i Order", strName, nCol);
-    App.db_write_int ("control", strTitle, 
-                        iColOrder [nCol]);	
+    db_rc = App.db_write_int ("control", strTitle, iColOrder [nCol]);
+    if (db_rc != SQLITE_OK)
+      break;
     } // end of doing each column
 
 
   delete [] iColOrder;
 
+  if (db_rc != SQLITE_OK)
+    {
+    db_execute ("ROLLBACK", true);
+    return;
+    }
+
   // what column they sorted on
   strTitle.Format ("%s Sort Sequence", strName);
-  App.db_write_int ("control", strTitle, iLastColumn);	
+  db_rc = App.db_write_int ("control", strTitle, iLastColumn);
+  if (db_rc != SQLITE_OK)
+    {
+    db_execute ("ROLLBACK", true);
+    return;
+    }
 
   // was it in reverse?
   strTitle.Format ("%s Sort Reverse", strName);
-  App.db_write_int ("control", strTitle, bReverse);	
+  db_rc = App.db_write_int ("control", strTitle, bReverse);
+  if (db_rc != SQLITE_OK)
+    {
+    db_execute ("ROLLBACK", true);
+    return;
+    }
 
-  db_execute ("COMMIT", true);
+  db_rc = db_execute ("COMMIT", true);
+  if (db_rc != SQLITE_OK)
+    db_execute ("ROLLBACK", true);
 
   } // end of SaveColumnConfiguration
 
@@ -1889,7 +2087,7 @@ CTextDocument * pTextDoc = NULL;
   for (POSITION docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
       docPos != NULL; )
     {
-    pTextDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+    pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
     // ignore related worlds
     if (pTextDoc->m_pRelatedWorld == NULL &&

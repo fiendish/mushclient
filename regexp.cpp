@@ -19,34 +19,22 @@ t_regexp * regcomp(const char *exp, const int options)
   {
 const char *error;
 int erroroffset;
-t_regexp * re;
-pcre * program;
-pcre_extra * extra;
+std::unique_ptr<t_regexp> re (new t_regexp);
 
-  program = pcre_compile(exp, options, &error, &erroroffset, NULL);
+  re->m_program = pcre_compile(exp, options, &error, &erroroffset, NULL);
 
-  if (!program)
+  if (!re->m_program)
     ThrowErrorException("Failed: %s at offset %d", Translate (error), erroroffset);
 
   // study it for speed purposes
-  extra =  pcre_study(program, 0, &error);        
+  re->m_extra = pcre_study(re->m_program, 0, &error);
 
   if (error)
-    {
-    pcre_free (program);
     ThrowErrorException("Regexp study failed: %s", error);
-    }
 
-  // we need to allocate memory for the substring offsets
-  re = new t_regexp;
-
-  // remember program and extra stuff
-  re->m_program = program;
-  re->m_extra = extra;
   re->m_iExecutionError = 0; // no error now
 
-
-  return re;
+  return re.release ();
   }
 
 int regexec(register t_regexp *prog, 

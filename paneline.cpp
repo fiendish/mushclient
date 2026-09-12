@@ -22,7 +22,11 @@ void CPaneLine::AddStyle (const CPaneStyle style)
 
     // if first style for line, must be a new style
     if (m_vStyles.empty ())
-      m_vStyles.push_back (new CPaneStyle (style));  // must add it
+      {
+      std::unique_ptr<CPaneStyle> pNewStyle (new CPaneStyle (style));
+      m_vStyles.push_back (pNewStyle.get ());  // must add it
+      pNewStyle.release ();
+      }
     else
       {
       CPaneStyle * oldstyle = m_vStyles.back ();        // last style
@@ -32,7 +36,11 @@ void CPaneLine::AddStyle (const CPaneStyle style)
         oldstyle->m_sText += style.m_sText;       // yep - just append text
       else
         // different style, add to list
-        m_vStyles.push_back (new CPaneStyle (style));   // need new style
+        {
+        std::unique_ptr<CPaneStyle> pNewStyle (new CPaneStyle (style));
+        m_vStyles.push_back (pNewStyle.get ());   // need new style
+        pNewStyle.release ();
+        }
       } // end of style list not empty
     };
 

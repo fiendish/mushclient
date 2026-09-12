@@ -66,6 +66,8 @@ public:
   CStatic   * m_ctlSummary;         // count of items shown
   bool m_bWantTreeControl;          // true if it wants to show a tree control instead of a list control
   bool m_bReloadList;               // true to reload the list in the idle loop
+  bool m_bListRedrawDisabled;       // shared state for nested redraw batches
+  bool m_bTreeRedrawDisabled;
 
   // count of columns is used for arrays below
   int m_iColumnCount;               // how many columns there are
@@ -169,6 +171,9 @@ public:
   // ================== end of virtual functions =======================
 
   // add a single list control item - returns new item number
+  // Insert rows retain the supplied pstrObjectName pointer.
+  // A successful non-insert consumes pstrObjectName and stores a copy;
+  // callers must not use or delete the supplied pointer after success.
 
   int add_list_item (CObject * pItem, 
                       const CString  * pstrObjectName,

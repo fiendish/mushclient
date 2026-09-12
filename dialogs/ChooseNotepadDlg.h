@@ -24,6 +24,8 @@ public:
 
   CMUSHclientDoc * m_pWorld;
   CTextDocument  * m_pTextDocument;
+  __int64 m_iWorldDocumentNumber;
+  CArray<__int64, __int64> m_NotepadDocumentNumbers;
 
 // Overrides
 	// ClassWizard generated virtual function overrides
@@ -34,6 +36,9 @@ public:
 
 // Implementation
 protected:
+
+  CMUSHclientDoc * GetLiveWorld (void) const;
+  CTextDocument * GetNotepadForIndex (const int iIndex) const;
 
 	// Generated message map functions
 	//{{AFX_MSG(CChooseNotepadDlg)

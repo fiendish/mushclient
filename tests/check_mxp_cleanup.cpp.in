@@ -1,0 +1,286 @@
+// Compile the production helpers with portable MFC and callback substitutes.
+#include <algorithm>
+#include <cassert>
+#include <cstdio>
+#include <exception>
+#include <functional>
+#include <iostream>
+#include <memory>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using namespace std;
+using __int64 = long long;
+using COLORREF = unsigned;
+using POSITION = void *;
+using LPCTSTR = const char *;
+constexpr int START_TAG = 0x1000, DBG_WARNING = 2, DBG_ERROR = 1;
+constexpr long wrnMXP_OpenTagClosedAtEndOfLine = 20, wrnMXP_TagClosedAtReset = 21;
+constexpr long errMXP_UnknownElementInAttlist = 30;
+struct CString : string {
+  using string::string;
+  CString(const string &s) : string(s) {}
+  operator const char *() const { return c_str(); }
+  void MakeLower() { transform(begin(), end(), begin(), [](unsigned char c){return tolower(c);}); }
+};
+std::function<void()> formatHook;
+CString TFormat(const char *format, const char *value) {
+  if (formatHook) formatHook();
+  char buffer[200]; snprintf(buffer, sizeof(buffer), format, value); return buffer;
+}
+template<class T> class List {
+  struct Node { T *value; Node *prev; Node *next; };
+  Node *head = nullptr, *tail = nullptr;
+public:
+  int failAt = 0, calls = 0;
+  ~List() { while (!IsEmpty()) RemoveHead(); }
+  bool IsEmpty() const { return !head; }
+  POSITION GetHeadPosition() { return head; }
+  POSITION GetTailPosition() { return tail; }
+  T *GetHead() { assert(head); return head->value; }
+  T *GetTail() { assert(tail); return tail->value; }
+  T *GetNext(POSITION &pos) { auto n = static_cast<Node *>(pos); pos = n->next; return n->value; }
+  T *GetPrev(POSITION &pos) { auto n = static_cast<Node *>(pos); pos = n->prev; return n->value; }
+  void AddTail(T *value) {
+    if (++calls == failAt) throw runtime_error("insertion failure");
+    auto n = new Node{value, tail, nullptr};
+    if (tail) tail->next = n; else head = n;
+    tail = n;
+  }
+  void AddTail(List *source) {
+    for (POSITION pos = source->GetHeadPosition(); pos;) AddTail(source->GetNext(pos));
+  }
+  void RemoveAt(POSITION pos) {
+    auto n = static_cast<Node *>(pos);
+    if (n->prev) n->prev->next = n->next; else head = n->next;
+    if (n->next) n->next->prev = n->prev; else tail = n->prev;
+    delete n;
+  }
+  T *RemoveHead() { auto value = GetHead(); RemoveAt(head); return value; }
+};
+#define DELETE_LIST(list) do { while (!(list).IsEmpty()) delete (list).RemoveHead(); } while(false)
+int actionsAlive = 0, tagsAlive = 0, argumentsAlive = 0;
+struct CAction {
+  int refs = 1;
+  CAction() { ++actionsAlive; }
+  ~CAction() { --actionsAlive; }
+  void AddRef() { ++refs; }
+  void Release() { assert(refs > 0); if (!--refs) delete this; }
+};
+struct CStyle {
+  __int64 nCreationNumber = 0;
+  unsigned short iFlags = START_TAG;
+  COLORREF iForeColour = 1, iBackColour = 2;
+  CAction *pAction = nullptr;
+  ~CStyle() { if (pAction) pAction->Release(); }
+};
+struct CLine {
+  List<CStyle> styleList;
+  ~CLine() { DELETE_LIST(styleList); }
+};
+using CLineList = List<CLine>;
+struct CActiveTag {
+  __int64 nCreationNumber = 0, nOpeningStyleCreationNumber = 0;
+  bool bSecure = false, bNoReset = false;
+  CString strName;
+  vector<int> closeActions;
+  CAction *pOpeningAction = nullptr;
+  unsigned short iOpeningFlags = 8;
+  COLORREF iOpeningForeColour = 3, iOpeningBackColour = 4;
+  CActiveTag() { ++tagsAlive; }
+  ~CActiveTag() { if (pOpeningAction) pOpeningAction->Release(); --tagsAlive; }
+};
+struct CArgument {
+  int value;
+  explicit CArgument(int n) : value(n) { ++argumentsAlive; }
+  ~CArgument() { --argumentsAlive; }
+};
+using CArgumentList = List<CArgument>;
+struct CElement {
+  CArgumentList AttributeList;
+  ~CElement() { DELETE_LIST(AttributeList); }
+};
+struct CPreparedMXPClose { CString strTag; };
+struct CMUSHclientDoc {
+  List<CActiveTag> m_ActiveTagList;
+  CLineList m_LineList;
+  CElement element;
+  struct Map {
+    CElement *element;
+    CString name = "custom";
+    bool Lookup(const CString &key, CElement *&result) {
+      if (key != name) return false;
+      result = element; return result != nullptr;
+    }
+  } m_CustomElementMap{&element};
+  vector<string> events;
+  vector<long> warnings;
+  vector<string> messages;
+  function<void(CActiveTag *)> prepareHook;
+  function<void()> finishHook;
+  string prepareFailure, reject, finishFailure;
+  bool warningFailure = false, formatFailure = false;
+  int buildMode = 0, buildCalls = 0;
+  CMUSHclientDoc() {
+    formatHook = [this] {
+      events.push_back("format");
+      if (formatFailure) throw runtime_error("format failure");
+    };
+  }
+  ~CMUSHclientDoc() { formatHook = nullptr; DELETE_LIST(m_ActiveTagList); DELETE_LIST(m_LineList); }
+  CActiveTag *tag(int id) {
+    auto p = new CActiveTag; p->nCreationNumber = id; p->strName = to_string(id);
+    p->nOpeningStyleCreationNumber = id * 100; p->closeActions = {id};
+    m_ActiveTagList.AddTail(p); return p;
+  }
+  CStyle *marker(CActiveTag *tag) {
+    if (m_LineList.IsEmpty()) m_LineList.AddTail(new CLine);
+    auto p = new CStyle; p->nCreationNumber = tag->nOpeningStyleCreationNumber;
+    m_LineList.GetTail()->styleList.AddTail(p); return p;
+  }
+  bool MXP_PrepareCloseTag(CString name, bool open, __int64 marker,
+                          const vector<int> &actions, CActiveTag *tag, CPreparedMXPClose &close) {
+    assert(!open && marker == tag->nOpeningStyleCreationNumber && actions == tag->closeActions);
+    events.push_back("prepare" + name);
+    if (prepareFailure == name) throw runtime_error("prepare failure");
+    if (prepareHook) prepareHook(tag);
+    close.strTag = name; return reject != name;
+  }
+  void MXP_FinishCloseTag(const CPreparedMXPClose &close) {
+    events.push_back("finish" + close.strTag);
+    if (finishHook) finishHook();
+    if (finishFailure == close.strTag) throw runtime_error("finish failure");
+  }
+  void MXP_error(int, long number, CString message) {
+    warnings.push_back(number); messages.push_back(message); events.push_back("warning");
+    if (warningFailure) throw runtime_error("warning failure");
+  }
+  bool BuildArgumentList(CArgumentList &list, const CString &) {
+    ++buildCalls;
+    list.AddTail(new CArgument(1)); list.AddTail(new CArgument(2));
+    if (buildMode == 2) throw runtime_error("build failure");
+    return buildMode == 1;
+  }
+  void MXP_CloseOpenTags();
+  void MXP_CloseAllTags();
+  void MXP_Attlist(CString name, CString arguments);
+};
+@CLOSE@
+@DISCARD@
+@GUARD@
+@ATTLIST@
+vector<int> tags(CMUSHclientDoc &doc) {
+  vector<int> ids;
+  for (POSITION p = doc.m_ActiveTagList.GetHeadPosition(); p;) ids.push_back(doc.m_ActiveTagList.GetNext(p)->nCreationNumber);
+  return ids;
+}
+void closeChecks() {
+  for (bool reset : {false, true}) {
+    auto close = [reset](CMUSHclientDoc &d) { if (reset) d.MXP_CloseAllTags(); else d.MXP_CloseOpenTags(); };
+    {
+      CMUSHclientDoc d; auto a = d.tag(1); d.tag(2); auto c = d.tag(3);
+      if (reset) { a->bNoReset = true; c->bSecure = true; }
+      else { a->bSecure = true; c->bNoReset = true; }
+      d.finishHook = [&]{if (tags(d) == vector<int>{1}) d.tag(4);};
+      close(d);
+      assert((tags(d) == vector<int>{1,4}));
+      assert((d.events == vector<string>{"prepare3","prepare2","format","warning","finish3","format","warning","finish2"}));
+      assert((d.warnings == vector<long>(2, reset ? wrnMXP_TagClosedAtReset : wrnMXP_OpenTagClosedAtEndOfLine)));
+      assert(d.messages.front() == (reset ? "<reset> closure of MXP tag: <3>" : "End-of-line closure of open MXP tag: <3>"));
+    }
+    {
+      CMUSHclientDoc d; d.tag(1); d.tag(2); d.tag(3); d.reject = "2";
+      close(d); assert((tags(d) == vector<int>{2}));
+      assert((d.events == vector<string>{"prepare3","prepare2","prepare1","format","warning","finish3","format","warning","finish1"}));
+    }
+    {
+      CMUSHclientDoc d; d.tag(1); d.tag(2); d.tag(3);
+      d.prepareHook = [&](CActiveTag *tag) {
+        if (tag->nCreationNumber != 3) return;
+        POSITION p = d.m_ActiveTagList.GetHeadPosition(); d.m_ActiveTagList.GetNext(p);
+        POSITION remove = p; auto removed = d.m_ActiveTagList.GetNext(p);
+        d.m_ActiveTagList.RemoveAt(remove); delete removed; d.tag(4);
+      };
+      close(d); assert((tags(d) == vector<int>{4}));
+      assert((d.events == vector<string>{"prepare3","prepare1","format","warning","finish3","format","warning","finish1"}));
+    }
+    for (bool prepare : {false, true}) for (bool warning : {false, true}) for (bool format : {false, true}) {
+      CMUSHclientDoc d; d.tag(1); d.tag(2); d.tag(3);
+      d.prepareFailure = prepare ? "2" : ""; d.warningFailure = warning; d.finishFailure = "3"; d.formatFailure = format;
+      string error;
+      try { close(d); } catch (const runtime_error &e) { error = e.what(); }
+      assert(error == (prepare ? "prepare failure" : format ? "format failure" : warning ? "warning failure" : "finish failure"));
+      assert(count(d.events.begin(), d.events.end(), "format") == (prepare ? 1 : 3));
+      assert(count(d.events.begin(), d.events.end(), "finish3") == 1);
+      assert(count(d.events.begin(), d.events.end(), "finish1") == (prepare ? 0 : 1));
+      assert(tags(d).size() == (prepare ? 2 : 0));
+    }
+  }
+  assert(tagsAlive == 0);
+  cout << "PASS close stop flags, warning text, identity lookup, callback exclusion, format timing and exception order\n";
+}
+void discardChecks() {
+  for (bool boundary : {false, true}) for (int action : {0,1,2}) for (int markerMode : {0,1,2}) {
+    CMUSHclientDoc d; d.tag(1); auto b = d.tag(2); auto c = d.tag(3);
+    CStyle *s = markerMode == 2 ? nullptr : d.marker(b);
+    if (s) {
+      if (markerMode == 1) s->iFlags = 32;
+      s->pAction = new CAction;
+      if (action) { b->pOpeningAction = action == 1 ? s->pAction : new CAction; if (action == 1) b->pOpeningAction->AddRef(); }
+    }
+    auto openingAction = b->pOpeningAction;
+    auto untouched = d.marker(c);
+    if (boundary) DiscardMXPTagsCreatedAfter(&d, 1); else DiscardMXPTags(&d, set<__int64>{2});
+    assert((tags(d) == (boundary ? vector<int>{1} : vector<int>{1,3})));
+    if (s && markerMode == 0) {
+      assert(s->iFlags == 8 && s->iForeColour == 3 && s->iBackColour == 4);
+      assert(s->pAction == openingAction); if (openingAction) assert(openingAction->refs == 1);
+    }
+    if (s && markerMode == 1) assert(s->iFlags == 32 && s->pAction);
+    assert(untouched->iFlags == (boundary ? 8 : START_TAG));
+  }
+  assert(actionsAlive == 0 && tagsAlive == 0);
+  cout << "PASS discard predicates, missing or reused markers and action ownership\n";
+}
+void attlistChecks() {
+  for (bool format : {false, true}) for (bool warning : {false, true}) {
+    {
+      CMUSHclientDoc d;
+      auto old = new CArgument(0); d.element.AttributeList.AddTail(old);
+      d.formatFailure = format; d.warningFailure = warning;
+      string error;
+      try { d.MXP_Attlist("Unknown", "a=1 b=2"); } catch (const runtime_error &e) { error = e.what(); }
+      assert(error == (format ? "format failure" : warning ? "warning failure" : ""));
+      assert(d.buildCalls == 0 && argumentsAlive == 1);
+      assert(d.element.AttributeList.GetHead() == old && d.element.AttributeList.GetTail() == old);
+      assert((d.events == (format ? vector<string>{"format"} : vector<string>{"format", "warning"})));
+      assert((d.warnings == (format ? vector<long>{} : vector<long>{errMXP_UnknownElementInAttlist})));
+      if (!format) assert(d.messages.front() == "Cannot add attributes to undefined MXP element: <unknown>");
+    }
+    assert(argumentsAlive == 0);
+  }
+  for (int build : {0,1,2}) for (int failAt : {0,1,2}) {
+    CMUSHclientDoc d;
+    auto old = new CArgument(0); d.element.AttributeList.AddTail(old);
+    d.element.AttributeList.calls = 0; d.element.AttributeList.failAt = failAt; d.buildMode = build;
+    string error;
+    try { d.MXP_Attlist("Custom", "a=1 b=2"); } catch (const runtime_error &e) { error = e.what(); }
+    assert(error == (build == 2 ? "build failure" : build == 0 && failAt ? "insertion failure" : ""));
+    vector<int> values;
+    for (POSITION p = d.element.AttributeList.GetHeadPosition(); p;) values.push_back(d.element.AttributeList.GetNext(p)->value);
+    vector<int> expected{0};
+    if (!build) for (int n = 1; n <= 2 && (!failAt || n < failAt); ++n) expected.push_back(n);
+    assert(d.buildCalls == 1);
+    assert(values == expected && d.element.AttributeList.GetHead() == old);
+    assert(argumentsAlive == static_cast<int>(values.size()));
+  }
+  assert(argumentsAlive == 0);
+  cout << "PASS undefined elements, diagnostic failures, attribute ownership, parse rejection, build exceptions and each insertion failure\n";
+}
+int main(int argc, char **argv) {
+  string check = argc > 1 ? argv[1] : "all";
+  if (check == "all" || check == "close") closeChecks();
+  if (check == "all" || check == "discard") discardChecks();
+  if (check == "all" || check == "attlist") attlistChecks();
+}

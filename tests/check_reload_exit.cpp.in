@@ -1,0 +1,189 @@
+// Loading, callback, and MFC substitutes. The runner inserts production methods.
+#include <algorithm>
+#include <cstring>
+#include <cstdlib>
+#include <functional>
+#include <iostream>
+#include <list>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using std::find;
+using std::find_if;
+using std::string;
+using LPCTSTR = const char *;
+constexpr int TRUE = 1, NORMAL = 0;
+int failures = 0;
+void Check(bool value, const char *expression, int line) {
+  if (!value) {
+    ++failures;
+    std::cerr << "line " << line << ": check failed: " << expression << '\n';
+  }
+}
+#define CHECK(x) Check(static_cast<bool>(x), #x, __LINE__)
+#define ASSERT(x) do { if (!(x)) { CHECK(x); std::abort(); } } while (false)
+struct CString : string {
+  using string::string;
+  void Empty() { clear(); }
+};
+@ERROR_CODES@
+struct CException {
+  inline static int deletions = 0;
+  virtual ~CException() = default;
+  virtual void Delete() { ++deletions; delete this; }
+};
+struct CFileException : CException {};
+struct CArchiveException : CException {};
+struct CMemoryException : CException {};
+struct CPlugin {
+  CString m_strID = "target", m_strName = "Target name", m_strSource = "source.xml";
+  CString m_strCallingPluginID = "saved-caller";
+  int m_iActiveScriptCalls = 0;
+  int *closes = nullptr;
+  ~CPlugin() { if (closes) ++*closes; }
+};
+using CPluginList = std::list<CPlugin *>;
+using PluginListIterator = CPluginList::iterator;
+struct compare_plugin_name {
+  bool operator()(const CPlugin *plugin, LPCTSTR name) const { return plugin->m_strName == name; }
+};
+template<class Predicate, class Value> auto bind2nd(Predicate predicate, Value value) {
+  return [=](CPlugin *plugin) { return predicate(plugin, value); };
+}
+struct CMUSHclientDoc;
+@CONTEXT_GUARD@
+const string ON_PLUGIN_LIST_CHANGED = "OnPluginListChanged";
+struct CMUSHclientDoc {
+  CPluginList m_PluginList;
+  CPlugin *m_CurrentPlugin = nullptr;
+  unsigned short m_iNoteStyle = 7;
+  int m_iPluginListChangedDeferralDepth = 0;
+  bool m_bPluginListChangedPending = false, m_bPluginListChangedDeferred = false;
+  bool m_bInPluginListChanged = false, modified = false;
+  int closes = 0, loads = 0, notifications = 0;
+  std::function<void()> load;
+  std::function<void()> notify = [] {};
+  CPlugin *GetPlugin(LPCTSTR id) {
+    for (auto *plugin : m_PluginList) if (plugin->m_strID == id) return plugin;
+    return nullptr;
+  }
+  void SetModifiedFlag(int flag) { modified = flag; }
+  void InternalLoadPlugin(const CString &path) {
+    ++loads;
+    CHECK(m_CurrentPlugin == nullptr);
+    CHECK(path == "source.xml");
+    CHECK(closes == 1);
+    CHECK(GetPlugin("target") == nullptr);
+    load();
+    SetModifiedFlag(TRUE);
+  }
+  void SendToAllPluginCallbacks(const string &name) {
+    CHECK(name == ON_PLUGIN_LIST_CHANGED);
+    ++notifications;
+    notify();
+  }
+  void PluginListChanged();
+  void BeginPluginListChangedDeferral();
+  bool EndPluginListChangedDeferral();
+  long ReloadPlugin(LPCTSTR);
+  ~CMUSHclientDoc() { for (auto *plugin : m_PluginList) delete plugin; }
+};
+@GUARD_METHODS@
+@NOTIFICATIONS@
+@RELOAD@
+int IdleDelivery(CMUSHclientDoc *pDoc) {
+  @IDLE@
+  return 0;
+}
+
+void RunCase(const string &outcome, int depth, bool pending, bool inCallback) {
+  const int before = failures;
+  CMUSHclientDoc doc;
+  CPlugin caller;
+  caller.m_strID = "caller";
+  auto *target = new CPlugin;
+  target->closes = &doc.closes;
+  doc.m_PluginList.push_back(target);
+  doc.m_CurrentPlugin = &caller;
+  doc.m_bPluginListChangedPending = pending;
+  doc.m_bInPluginListChanged = inCallback;
+  for (int i = 0; i < depth; ++i) doc.BeginPluginListChangedDeferral();
+  CMemoryException memoryError;
+  const bool unexpected = outcome == "memory" || outcome == "standard";
+  doc.load = [&] {
+    if (outcome == "file") throw new CFileException;
+    if (outcome == "archive") throw new CArchiveException;
+    if (outcome == "memory") throw &memoryError;
+    if (outcome == "standard") throw std::runtime_error("original load exception");
+    doc.m_PluginList.push_back(new CPlugin);
+  };
+  // This callback would replace the original exception if invoked in the catch.
+  doc.notify = [&] {
+    CHECK(doc.m_CurrentPlugin == &caller);
+    if (unexpected) throw std::logic_error("notification must be deferred");
+  };
+  CException::deletions = 0;
+  bool caught = false;
+  long result = -1;
+  try { result = doc.ReloadPlugin(outcome == "success-name" ? "Target name" : "target"); }
+  catch (CMemoryException *error) { CHECK(error == &memoryError); caught = true; }
+  catch (const std::runtime_error &error) {
+    CHECK(string(error.what()) == "original load exception"); caught = true;
+  }
+  CHECK(caught == unexpected);
+  const long expectedResult = outcome == "file" ? ePluginFileNotFound :
+      outcome == "archive" ? eProblemsLoadingPlugin : eOK;
+  CHECK(result == (unexpected ? -1 : expectedResult));
+  CHECK(doc.modified);
+  CHECK(doc.loads == 1 && doc.closes == 1);
+  CHECK(doc.m_CurrentPlugin == &caller && doc.m_iNoteStyle == 7);
+  CHECK(caller.m_strCallingPluginID == "saved-caller");
+  CHECK(CException::deletions == (outcome == "file" || outcome == "archive" ? 1 : 0));
+  CHECK((doc.GetPlugin("target") != nullptr) ==
+        (outcome == "success" || outcome == "success-name"));
+  const bool immediate = !unexpected && depth == 0 && !inCallback;
+  CHECK(doc.notifications == (immediate ? 1 : 0));
+  if (unexpected) CHECK(doc.m_bPluginListChangedPending);
+  CHECK(doc.m_iPluginListChangedDeferralDepth == depth);
+  CHECK(doc.m_bInPluginListChanged == inCallback);
+  doc.notify = [&] { CHECK(doc.m_CurrentPlugin == &caller); };
+  doc.m_bInPluginListChanged = false;
+  if (depth > 0) {
+    CHECK(doc.m_bPluginListChangedDeferred == !unexpected);
+    for (int i = 1; i < depth; ++i) CHECK(!doc.EndPluginListChangedDeferral());
+    const bool deferred = doc.EndPluginListChangedDeferral();
+    CHECK(deferred == !unexpected);
+    // The Load_Set exception handler transfers this request to idle delivery.
+    if (deferred) doc.m_bPluginListChangedPending = true;
+  }
+  CHECK(IdleDelivery(&doc) == (immediate ? 0 : 1));
+  CHECK(doc.notifications == 1);
+  CHECK(IdleDelivery(&doc) == 0);
+  CHECK(!doc.m_bPluginListChangedPending && !doc.m_bPluginListChangedDeferred);
+  std::cout << "{\"case\":\"" << outcome << "-depth-" << depth
+            << "-pending-" << pending << "-callback-" << inCallback
+            << "\",\"failures\":" << failures - before << "}\n";
+}
+void RejectionCase(const string &name) {
+  const int before = failures;
+  CMUSHclientDoc doc;
+  auto *target = new CPlugin;
+  doc.m_PluginList.push_back(target);
+  if (name == "current") doc.m_CurrentPlugin = target;
+  if (name == "active") target->m_iActiveScriptCalls = 1;
+  const bool missing = name == "missing" || name == "empty";
+  CHECK(doc.ReloadPlugin(name == "missing" ? "absent" : name == "empty" ? "" : "target") ==
+        (missing ? eNoSuchPlugin : eBadParameter));
+  CHECK(!doc.modified && doc.loads == 0 && doc.notifications == 0);
+  CHECK(!doc.m_bPluginListChangedPending && !doc.m_bPluginListChangedDeferred);
+  CHECK(doc.GetPlugin("target") == target);
+  std::cout << "{\"case\":\"reject-" << name << "\",\"failures\":" << failures - before << "}\n";
+}
+int main() {
+  for (const char *outcome : {"success", "success-name", "file", "archive", "memory", "standard"})
+    for (int depth : {0, 1, 2})
+      for (bool pending : {false, true})
+        for (bool inCallback : {false, true}) RunCase(outcome, depth, pending, inCallback);
+  for (const char *name : {"missing", "empty", "current", "active"}) RejectionCase(name);
+  return failures ? 1 : 0;
+}

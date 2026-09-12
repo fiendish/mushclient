@@ -14,6 +14,7 @@
 
 
 #include "stdafx.h"
+#include <new>
 #include "..\MUSHclient.h"
 #include "..\mainfrm.h"
 
@@ -34,37 +35,42 @@ static CProgressDlg * Lprogress_getdialog (lua_State *L)
 
 static int Lprogress_setstatus(lua_State *L)
   {
-  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
 
-  string word (luaL_checkstring (L, 2));
+  const char * text = luaL_checkstring (L, 2);
+  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
+  string word (text);
+  CProgressDlgOperationGuard operationGuard (pProgressDlg);
   pProgressDlg->SetStatus (word.c_str ());
   return 0;
   } // end of Lprogress_setstatus
 
 static int Lprogress_setrange(lua_State *L)
   {
-  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
 
   const int iStart = luaL_checkinteger (L, 2);
   const int iEnd = luaL_checkinteger (L, 3);
+  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
+  CProgressDlgOperationGuard operationGuard (pProgressDlg);
   pProgressDlg->SetRange (iStart, iEnd);
   return 0;
   } // end of Lprogress_setrange
 
 static int Lprogress_setposition(lua_State *L)
   {
-  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
 
   const int iPos = luaL_checkinteger (L, 2);
+  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
+  CProgressDlgOperationGuard operationGuard (pProgressDlg);
   pProgressDlg->SetPos (iPos);
   return 0;
   } // end of Lprogress_setposition
 
 static int Lprogress_setstep(lua_State *L)
   {
-  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
 
   const int iStep = luaL_checkinteger (L, 2);
+  CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
+  CProgressDlgOperationGuard operationGuard (pProgressDlg);
   pProgressDlg->SetStep (iStep);
   return 0;
   } // end of Lprogress_setstep
@@ -72,6 +78,7 @@ static int Lprogress_setstep(lua_State *L)
 static int Lprogress_stepit(lua_State *L)
   {
   CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
+  CProgressDlgOperationGuard operationGuard (pProgressDlg);
 
   pProgressDlg->StepIt ();
   return 0;
@@ -80,6 +87,7 @@ static int Lprogress_stepit(lua_State *L)
 static int Lprogress_checkcancel(lua_State *L)
   {
   CProgressDlg *pProgressDlg = Lprogress_getdialog (L);
+  CProgressDlgOperationGuard operationGuard (pProgressDlg);
   lua_pushboolean (L, pProgressDlg->CheckCancelButton ());
   return 1;
   } // end of Lprogress_checkcancel
@@ -88,9 +96,11 @@ static int Lprogress_checkcancel(lua_State *L)
 static int Lprogress_gc (lua_State *L) {
   CProgressDlg **ud = (CProgressDlg **) luaL_checkudata (L, 1, progress_dlg_handle);
   CProgressDlg *pProgressDlg = *ud;  // note, might be NULL already if they manually closed it
-  delete pProgressDlg;
-  // set userdata to NULL, so we don't try to use it now
+  // Close the handle before a callback can use it again. An active call
+  // retains the dialog until its progress update has returned.
   *ud = NULL;
+  if (pProgressDlg)
+    pProgressDlg->RequestDelete ();
   return 0;
   }  // end of Lprogress_gc
 
@@ -105,14 +115,37 @@ static int Lprogress_tostring (lua_State *L)
 
 static int Lprogress_new(lua_State *L)
 {
-  CProgressDlg *pProgressDlg = new CProgressDlg (); 
-  pProgressDlg->Create ();
-  pProgressDlg->SetWindowText (luaL_optstring (L, 1, "Progress ..."));
+  const char * title = luaL_optstring (L, 1, "Progress ...");
   CProgressDlg **ud = (CProgressDlg **)lua_newuserdata(L, sizeof (CProgressDlg *));
+  *ud = NULL;
   luaL_getmetatable(L, progress_dlg_handle);
   lua_setmetatable(L, -2);
-  *ud = pProgressDlg;    // store pointer to this dialog in the userdata
-  return 1;
+  char errorMessage [1000] = {};
+  try
+    {
+    const string windowTitle (title);
+    std::unique_ptr<CProgressDlg> pProgressDlg (new CProgressDlg);
+    if (!pProgressDlg->Create ())
+      AfxThrowResourceException ();
+    pProgressDlg->SetWindowText (windowTitle.c_str ());
+    *ud = pProgressDlg.release ();
+    return 1;
+    }
+  catch (CException * e)
+    {
+    if (!e->GetErrorMessage (errorMessage, sizeof errorMessage))
+      errorMessage [0] = '\0';
+    e->Delete ();
+    }
+  catch (const std::bad_alloc &)
+    {
+    // Use the fallback message after allocation failure and C++ cleanup.
+    errorMessage [0] = '\0';
+    }
+
+  // Lua can longjmp here, after the C++ objects and exception are released.
+  return luaL_error (L, "%s", errorMessage [0] ?
+                    errorMessage : "Unable to create progress dialog");
   }  // end of Lprogress_new
 
 

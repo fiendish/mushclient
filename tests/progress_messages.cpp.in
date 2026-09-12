@@ -1,0 +1,1035 @@
+// This fixture compiles production functions. The MFC and Lua substitutes model
+// synchronous callbacks, window invalidation and document deletion. CHECK stays
+// active in every build. Test operations never occur inside assert or CHECK.
+#include <algorithm>
+#include <chrono>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+#ifdef PROGRESS_NATIVE_WINDOWS
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <windows.h>
+#else
+using BOOL = int;
+using UINT = unsigned;
+using DWORD = unsigned long;
+using LONG = long;
+using HWND = void *;
+using HANDLE = void *;
+using WPARAM = uintptr_t;
+using LPARAM = intptr_t;
+using LRESULT = intptr_t;
+using __int64 = long long;
+using LPCTSTR = const char *;
+constexpr BOOL TRUE = 1, FALSE = 0;
+constexpr UINT WM_QUIT = 0x12, WM_CLOSE = 0x10, WM_COMMAND = 0x111, WM_APP = 0x8000;
+constexpr UINT PM_REMOVE = 1;
+constexpr int IDCANCEL = 2, SW_HIDE = 0, SOCKET_ERROR = -1, WSAEWOULDBLOCK = 10035;
+struct MSG { HWND hwnd{}; UINT message{}; WPARAM wParam{}; LPARAM lParam{}; };
+#endif
+using std::deque;
+using std::string;
+#define CHECK(value) do { if (!(value)) { \
+    std::cerr << "CHECK failed: " #value << " at line " << __LINE__ << '\n'; \
+    std::abort(); } } while (false)
+#define ASSERT(value) CHECK(value)
+#define _T(value) value
+#define BASED_CODE
+#define DEBUG_NEW new
+#define DECLARE_MESSAGE_MAP()
+#define BEGIN_MESSAGE_MAP(a, b)
+#define END_MESSAGE_MAP()
+#define RUNTIME_CLASS(a) 1
+constexpr UINT CG_IDS_PROGRESS_CAPTION = 10, CG_IDD_PROGRESS = 11;
+constexpr int CG_IDC_PROGDLG_PROGRESS = 12, CG_IDC_PROGDLG_STATUS = 13, CG_IDC_PROGDLG_PERCENT = 14;
+constexpr UINT callbackMessage = WM_APP + 21;
+#ifdef PROGRESS_NATIVE_WINDOWS
+constexpr UINT socketMessage = WM_APP + 22;
+#endif
+
+struct CString : std::string {
+    using std::string::string;
+    CString(const std::string &s) : std::string(s) {}
+    operator LPCTSTR() const { return c_str(); }
+    int GetLength() const { return static_cast<int>(size()); }
+    CString Mid(int n) const { return substr(n); }
+    void Empty() { clear(); }
+    void Format(const char *format, ...) {
+        char buffer[128];
+        va_list args;
+        va_start(args, format);
+        int count = vsnprintf(buffer, sizeof buffer, format, args);
+        va_end(args);
+        CHECK(count >= 0 && count < static_cast<int>(sizeof buffer));
+        assign(buffer);
+    }
+};
+struct CWnd;
+std::map<HWND, CWnd *> permanentWindows;
+std::map<HWND, HWND> windowParents;
+std::map<size_t, std::function<void()>> callbacks;
+std::function<void(const char *, HWND)> controlHook;
+std::function<void()> beforePeek;
+std::vector<std::string> controlTrace;
+size_t nextCallback = 0;
+int dialogDestructions = 0;
+int dialogConstructions = 0;
+bool failDialogCreate = false;
+std::function<void()> onDialogDestruction;
+std::function<void(WPARAM, LPARAM)> socketDispatch;
+void invoke_callback(size_t id) {
+    auto it = callbacks.find(id);
+    CHECK(it != callbacks.end());
+    auto callback = std::move(it->second);
+    callbacks.erase(it);
+    callback();
+}
+#ifdef PROGRESS_NATIVE_WINDOWS
+LRESULT CALLBACK queue_window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
+    if (message == callbackMessage) { invoke_callback(static_cast<size_t>(wp)); return 0; }
+    if (message == socketMessage) { CHECK(bool(socketDispatch)); socketDispatch(wp, lp); return 0; }
+    return DefWindowProcA(window, message, wp, lp);
+}
+HWND make_window(HWND parent = nullptr) {
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSA cls{};
+        cls.lpfnWndProc = queue_window_proc;
+        cls.hInstance = GetModuleHandleA(nullptr);
+        cls.lpszClassName = "MushProgressRegression";
+        ATOM atom = RegisterClassA(&cls);
+        CHECK(atom != 0);
+        registered = true;
+    }
+    HWND window = CreateWindowExA(0, "MushProgressRegression", "", parent ? WS_CHILD : 0,
+                                  0, 0, 0, 0, parent, nullptr, GetModuleHandleA(nullptr), nullptr);
+    CHECK(window != nullptr);
+    windowParents[window] = parent;
+    return window;
+}
+#else
+std::deque<MSG> messageQueue;
+uintptr_t nextWindow = 0;
+HWND make_window(HWND parent = nullptr) {
+    HWND window = reinterpret_cast<HWND>(++nextWindow);
+    windowParents[window] = parent;
+    return window;
+}
+BOOL IsWindow(HWND window) { return window != nullptr && windowParents.count(window) != 0; }
+BOOL PeekMessage(MSG *message, HWND window, UINT first, UINT last, UINT flags) {
+    CHECK(flags == PM_REMOVE);
+    if (beforePeek) {
+        auto callback = std::move(beforePeek);
+        beforePeek = nullptr;
+        callback();  // PeekMessage dispatches pending sent messages before retrieval.
+    }
+    for (auto it = messageQueue.begin(); it != messageQueue.end(); ++it) {
+        if (it->message == WM_QUIT ||
+            ((!window || it->hwnd == window) &&
+             ((!first && !last) || (it->message >= first && it->message <= last)))) {
+            *message = *it;
+            messageQueue.erase(it);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+BOOL PostMessage(HWND window, UINT message, WPARAM wp, LPARAM lp) {
+    messageQueue.push_back({window, message, wp, lp});
+    return TRUE;
+}
+void PostQuitMessage(int code) { messageQueue.push_back({nullptr, WM_QUIT, static_cast<WPARAM>(code), 0}); }
+BOOL TranslateMessage(const MSG *) { return TRUE; }
+LRESULT DispatchMessage(const MSG *message) {
+    CHECK(message->message == callbackMessage);
+    invoke_callback(static_cast<size_t>(message->wParam));
+    return 0;
+}
+#endif
+void post_callback(HWND window, std::function<void()> callback) {
+    const size_t id = ++nextCallback;
+    callbacks.emplace(id, std::move(callback));
+    BOOL posted = PostMessage(window, callbackMessage, static_cast<WPARAM>(id), 0);
+    CHECK(posted);
+}
+void control_access(const char *operation, HWND window) {
+    CHECK(::IsWindow(window));
+    controlTrace.push_back(operation);
+    auto callback = controlHook;
+    if (callback) callback(operation, window);
+}
+void invalidate_window(HWND window);
+struct CWnd {
+    HWND m_hWnd = nullptr;
+    CString text;
+    BOOL enabled = TRUE;
+    virtual ~CWnd() {
+        if (m_hWnd && ::IsWindow(m_hWnd)) invalidate_window(m_hWnd);
+    }
+    HWND GetSafeHwnd() const { return m_hWnd; }
+    static CWnd *FromHandlePermanent(HWND window) {
+        auto it = permanentWindows.find(window);
+        return it == permanentWindows.end() ? nullptr : it->second;
+    }
+    static CWnd *GetSafeOwner(CWnd *parent) { return parent; }
+    void attach(HWND parent = nullptr) {
+        CHECK(!m_hWnd);
+        m_hWnd = make_window(parent);
+        permanentWindows[m_hWnd] = this;
+    }
+    BOOL IsWindowEnabled() const {
+        CHECK(::IsWindow(m_hWnd));
+#ifdef PROGRESS_NATIVE_WINDOWS
+        return ::IsWindowEnabled(m_hWnd);
+#else
+        return enabled;
+#endif
+    }
+    BOOL EnableWindow(BOOL value) {
+        enabled = value;
+#ifdef PROGRESS_NATIVE_WINDOWS
+        ::EnableWindow(m_hWnd, value);
+#endif
+        control_access("EnableWindow", m_hWnd);
+        return TRUE;
+    }
+    void SetWindowText(LPCTSTR value) {
+        text = value;
+        control_access("SetWindowText", m_hWnd);
+    }
+    void GetWindowText(CString &value) const {
+        value = text;
+        control_access("GetWindowText", m_hWnd);
+    }
+    void ShowWindow(int) { control_access("ShowWindow", m_hWnd); }
+    virtual BOOL DestroyWindow() {
+        CHECK(::IsWindow(m_hWnd));
+        control_access("DestroyWindow", m_hWnd);
+        invalidate_window(m_hWnd);
+        return TRUE;
+    }
+};
+void invalidate_window(HWND window) {
+    std::vector<HWND> children;
+    for (const auto &entry : windowParents)
+        if (entry.second == window) children.push_back(entry.first);
+    for (HWND child : children) invalidate_window(child);
+    auto found = permanentWindows.find(window);
+    if (found != permanentWindows.end()) {
+        found->second->m_hWnd = nullptr;
+        permanentWindows.erase(found);
+    }
+    windowParents.erase(window);
+#ifdef PROGRESS_NATIVE_WINDOWS
+    BOOL destroyed = ::DestroyWindow(window);
+    CHECK(destroyed);
+#endif
+}
+struct CProgressCtrl : CWnd {
+    int position = 0, step = 10;
+    void SetRange(int, int) { control_access("SetRange", m_hWnd); }
+    void SetRange32(int, int) { control_access("SetRange32", m_hWnd); }
+    int SetPos(int value) {
+        int previous = position; position = value;
+        control_access("SetPos", m_hWnd); return previous;
+    }
+    int OffsetPos(int value) {
+        int previous = position; position += value;
+        control_access("OffsetPos", m_hWnd); return previous;
+    }
+    int SetStep(int value) {
+        int previous = step; step = value;
+        control_access("SetStep", m_hWnd); return previous;
+    }
+    int StepIt() {
+        int previous = position; position += step;
+        control_access("StepIt", m_hWnd); return previous;
+    }
+};
+#ifndef PROGRESS_NATIVE_WINDOWS
+BOOL EnableWindow(HWND window, BOOL enabled) {
+    CWnd *owner = CWnd::FromHandlePermanent(window);
+    CHECK(owner != nullptr);
+    return owner->EnableWindow(enabled);
+}
+#endif
+struct CDataExchange {};
+struct CDialog : CWnd {
+    CWnd *m_pParentWnd = nullptr;
+    CWnd status, percent, cancel;
+    CDialog() { ++dialogConstructions; }
+    virtual ~CDialog() {
+        ++dialogDestructions;
+        if (onDialogDestruction) onDialogDestruction();
+    }
+    virtual void DoDataExchange(CDataExchange *) {}
+    virtual BOOL OnInitDialog() { return TRUE; }
+    virtual void OnCancel() {}
+    virtual void OnOK() {}
+    BOOL Create(UINT, CWnd *) {
+        if (failDialogCreate) return FALSE;
+        attach(); status.attach(m_hWnd); percent.attach(m_hWnd); cancel.attach(m_hWnd);
+        return TRUE;
+    }
+    CWnd *GetDlgItem(int id) {
+        control_access("GetDlgItem", m_hWnd);
+        if (id == CG_IDC_PROGDLG_STATUS) return &status;
+        if (id == CG_IDC_PROGDLG_PERCENT) return &percent;
+        CHECK(id == IDCANCEL);
+        return &cancel;
+    }
+    BOOL IsDialogMessage(MSG *message) {
+        control_access("IsDialogMessage", m_hWnd);
+        if (message->hwnd == m_hWnd && message->message == WM_COMMAND && message->wParam == IDCANCEL) {
+            OnCancel(); return TRUE;
+        }
+        return FALSE;
+    }
+};
+void DDX_Control(CDataExchange *, int, CProgressCtrl &) {}
+@PROGRESS_HEADER@
+@PROGRESS_BODY@
+struct TestProgress : CProgressDlg {
+    using CProgressDlg::PumpMessages;
+    using CProgressDlg::OnCancel;
+    void create(CWnd *parent = nullptr) {
+        BOOL created = Create(parent);
+        CHECK(created);
+        m_Progress.attach(m_hWnd);
+    }
+};
+
+// The userdata holds the real production CProgressDlg pointer. Only the Lua
+// argument stack and error API are substituted; all called wrappers are extracted.
+const char progress_dlg_handle[] = "mushclient.progress_dialog_handle";
+struct lua_State {
+    CProgressDlg *handle = nullptr;
+    std::string argument = "status";
+    int first = 4, second = 100;
+    bool boolean = false;
+    bool rejectArgument = false, rejectAllocation = false;
+    bool metatableInstalled = false;
+    std::function<void()> onStringConversion;
+};
+void *luaL_checkudata(lua_State *L, int index, const char *) { CHECK(index == 1); return &L->handle; }
+void luaL_argcheck(lua_State *, bool valid, int, const char *) {
+    if (!valid) throw std::runtime_error("closed Lua handle");
+}
+const char *luaL_checkstring(lua_State *L, int) {
+    if (L->rejectArgument) throw std::runtime_error("invalid Lua string");
+    auto callback = std::move(L->onStringConversion);
+    L->onStringConversion = nullptr;
+    if (callback) callback();
+    return L->argument.c_str();
+}
+int luaL_checkinteger(lua_State *L, int index) {
+    if (L->rejectArgument) throw std::runtime_error("invalid Lua integer");
+    return index == 2 ? L->first : L->second;
+}
+void lua_pushboolean(lua_State *L, BOOL value) { L->boolean = value != 0; }
+const char *luaL_optstring(lua_State *L, int index, const char *) { return luaL_checkstring(L, index); }
+void *lua_newuserdata(lua_State *L, size_t size) {
+    CHECK(size == sizeof(CProgressDlg *));
+    if (L->rejectAllocation) throw std::bad_alloc();
+    return &L->handle;
+}
+void luaL_getmetatable(lua_State *, const char *) {}
+void lua_setmetatable(lua_State *L, int) { CHECK(!L->handle); L->metatableInstalled = true; }
+int liveMfcExceptions = 0, deletedMfcExceptions = 0;
+struct CException {
+    const char *message;
+    explicit CException(const char *text) : message(text) { ++liveMfcExceptions; }
+    BOOL GetErrorMessage(char *buffer, size_t length) const {
+        int count = std::snprintf(buffer, length, "%s", message);
+        return count >= 0 && static_cast<size_t>(count) < length;
+    }
+    void Delete() { --liveMfcExceptions; ++deletedMfcExceptions; delete this; }
+};
+struct LuaError : std::runtime_error { using std::runtime_error::runtime_error; };
+[[noreturn]] int luaL_error(lua_State *L, const char *format, ...) {
+    CHECK(!L->handle && liveMfcExceptions == 0);
+    char message[1024];
+    va_list args;
+    va_start(args, format);
+    int count = std::vsnprintf(message, sizeof message, format, args);
+    va_end(args);
+    CHECK(count >= 0 && count < static_cast<int>(sizeof message));
+    throw LuaError(message); // Real Lua longjmp is covered by check_lua_progress_errors.py.
+}
+[[noreturn]] void AfxThrowResourceException() { throw new CException("Create failed"); }
+@LUA@
+
+// The transport boundary can return partial sends and WSAEWOULDBLOCK. OnSend is
+// production code. Native mode also runs this function against a real socket.
+constexpr int eChatConnection = 1;
+CString TFormat(const char *, const char *, int, const char *) { return "send failed"; }
+struct ChatDoc {
+    int m_nBytesOut = 0;
+    void ChatNote(int, CString) { CHECK(false); }
+    const char *GetSocketError(int) { return "unexpected socket error"; }
+};
+struct CChatSocket {
+    bool m_bDeleteMe = false;
+    CString m_outstanding_output = "pending chat payload", m_strServerName = "peer";
+    ChatDoc doc;
+    ChatDoc *m_pDoc = &doc;
+    int calls = 0, lastError = WSAEWOULDBLOCK;
+    std::function<int(const char *, int)> transport;
+    int Send(const char *data, int length) { ++calls; CHECK(bool(transport)); return transport(data, length); }
+    int GetLastError() const { return lastError; }
+    void OnClose(int) { CHECK(false); }
+    void OnSend(int);
+};
+void ShutDownSocket(CChatSocket &) { CHECK(false); }
+@SEND@
+
+struct CDocument;
+struct DocNode { CDocument *doc; DocNode *next; };
+using POSITION = DocNode *;
+struct DocTemplate {
+    DocNode *head = nullptr;
+    POSITION GetFirstDocPosition() const { return head; }
+    CDocument *GetNextDoc(POSITION &position) const {
+        CHECK(position); auto *doc = position->doc; position = position->next; return doc;
+    }
+    void add(CDocument *doc) { head = new DocNode{doc, head}; }
+    void remove(CDocument *doc) {
+        for (auto **node = &head; *node; node = &(*node)->next) {
+            if ((*node)->doc == doc) { auto *old = *node; *node = old->next; delete old; return; }
+        }
+        CHECK(false);
+    }
+};
+std::map<__int64, int> documentCloses;
+__int64 nextDocument = 0;
+struct CDocument {
+    __int64 identity = ++nextDocument;
+    DocTemplate *owner;
+    explicit CDocument(DocTemplate *registry) : owner(registry) { owner->add(this); }
+    virtual ~CDocument() { owner->remove(this); }
+    virtual int activeOperations() const = 0;
+    void OnCloseDocument() {
+        CHECK(activeOperations() == 0);
+        CHECK(!CProgressDlg::IsPumpingMessages());
+        ++documentCloses[identity]; delete this;
+    }
+};
+struct CMUSHclientDoc;
+struct CTextDocument;
+@DEFERRED_TYPE@
+struct CWinApp { BOOL OnIdle(LONG) { return FALSE; } };
+struct ActivityDoc { void UpdateAllViews(void *) { CHECK(false); } };
+struct CMUSHclientApp : CWinApp {
+    DocTemplate worlds, texts;
+    DocTemplate *m_pWorldDocTemplate = &worlds, *m_pNormalDocTemplate = &texts;
+    deque<CDeferredMessage> m_DeferredMessages;
+    deque<__int64> m_DeferredWorldDocumentCloses, m_DeferredTextDocumentCloses;
+    bool m_bUpdateActivity = false;
+    ActivityDoc *m_pActivityDoc = nullptr;
+    int m_nActivityWindowRefreshType = 0;
+    enum { eRefreshPeriodically = 1 };
+    void UpdateWorldCounts() { CHECK(false); }
+    void DeferMessageUntilIdle(const MSG &, __int64 = 0, HANDLE = nullptr, unsigned long = 0, long = 0);
+    void DeferWorldDocumentClose(__int64);
+    void DeferTextDocumentClose(__int64);
+    bool HasActiveDocumentOperations() const;
+    BOOL OnIdle(LONG);
+} App;
+struct CMUSHclientDoc : CDocument {
+    __int64 m_iUniqueDocumentNumber = identity;
+    int m_iActiveProgressOperations = 0;
+    bool m_bWorldClosePending = false, m_bWorldCloseQueued = false;
+    bool m_bPluginListChangedPending = false, m_bInPluginListChanged = false;
+    bool m_bScriptFileChangedPending = false, m_bInScriptFileChanged = false;
+    CMUSHclientDoc() : CDocument(&App.worlds) {}
+    int activeOperations() const override { return m_iActiveProgressOperations; }
+    void BeginProgressOperation(); void EndProgressOperation(); void OnCloseDocument();
+    void PluginListChanged() { CHECK(false); }
+    void OnScriptFileChanged() { CHECK(false); }
+};
+struct CTextDocument : CDocument {
+    __int64 m_iTextDocumentNumber = identity;
+    __int64 m_iMonitorToken = identity;
+    int m_iActiveOperations = 0;
+    bool m_bClosePending = false, m_bCloseQueued = false;
+    bool m_bFileChangedPending = false, m_bInFileChanged = false;
+    CTextDocument() : CDocument(&App.texts) {}
+    int activeOperations() const override { return m_iActiveOperations; }
+    void BeginOperation(); void EndOperation(); void OnCloseDocument();
+    void OnFileChanged() { CHECK(false); }
+};
+@WORLD_GUARD@
+@TEXT_GUARD@
+void StopMonitoringThread(__int64) {}
+void CollectMonitoringThreads() {}
+struct CFrameWnd { bool IsKindOf(int) { return false; } };
+struct CMUSHView { BOOL mouse_still_down() { CHECK(false); return FALSE; } };
+struct CChildFrame : CFrameWnd { CMUSHView *m_topview = nullptr; };
+struct CMainFrame : CWnd {
+    struct Tabs { bool InUse() { return false; } void Update() { CHECK(false); } } m_wndMDITabs;
+    std::vector<CDeferredMessage> delivered;
+    CFrameWnd *GetActiveFrame() { return nullptr; }
+    void ProcessDeferredMessage(const CDeferredMessage &message) {
+        CHECK(!CProgressDlg::IsPumpingMessages()); delivered.push_back(message);
+    }
+} Frame;
+#ifndef PROGRESS_NATIVE_WINDOWS
+HWND GetForegroundWindow() { return nullptr; }
+#endif
+@DOCUMENTS@
+@APP@
+
+void test_blocked_chat() {
+    TestProgress progress; progress.create();
+    CWnd socketWindow; socketWindow.attach();
+    CChatSocket chat;
+    bool writable = false;
+    std::string delivered;
+    chat.transport = [&](const char *bytes, int size) {
+        if (!writable) return SOCKET_ERROR;
+        // First ready notification sends only part of the buffer.
+        int count = std::min(size, 7); delivered.append(bytes, count); return count;
+    };
+    chat.OnSend(0);
+    CHECK(chat.calls == 1 && delivered.empty());
+    std::function<void()> ready = [&] {
+        CHECK(CProgressDlg::IsPumpingMessages());
+        writable = true; chat.OnSend(0);
+        if (chat.m_outstanding_output.GetLength()) post_callback(socketWindow.m_hWnd, ready);
+    };
+    post_callback(socketWindow.m_hWnd, ready);
+    progress.PumpMessages();
+    CHECK(delivered == "pending chat payload");
+    CHECK(chat.m_outstanding_output.empty());
+    CHECK(chat.doc.m_nBytesOut == static_cast<int>(delivered.size()));
+}
+void test_cancel_quit() {
+    TestProgress progress; progress.create();
+    BOOL posted = PostMessage(progress.m_hWnd, WM_COMMAND, IDCANCEL, 0); CHECK(posted);
+    BOOL cancelled = progress.CheckCancelButton(); CHECK(cancelled);
+    cancelled = progress.CheckCancelButton(); CHECK(!cancelled);
+    PostQuitMessage(73);
+    cancelled = progress.CheckCancelButton(); CHECK(cancelled);
+    MSG message{};
+    BOOL found = PeekMessage(&message, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE);
+    CHECK(found && message.message == WM_QUIT && message.wParam == 73);
+    found = PeekMessage(&message, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE); CHECK(!found);
+    CHECK(!CProgressDlg::IsPumpingMessages());
+}
+void test_late_quit() {
+    TestProgress progress; progress.create();
+    post_callback(Frame.m_hWnd, [] { PostQuitMessage(91); });
+    BOOL cancelled = progress.CheckCancelButton(); CHECK(cancelled);
+    MSG message{};
+    BOOL found = PeekMessage(&message, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE);
+    CHECK(found && message.wParam == 91);
+    CHECK(!CProgressDlg::IsPumpingMessages());
+}
+void test_cancel_stops() {
+    TestProgress progress; progress.create();
+    bool delivered = false;
+    BOOL posted = PostMessage(progress.m_hWnd, WM_COMMAND, IDCANCEL, 0); CHECK(posted);
+    post_callback(Frame.m_hWnd, [&] { delivered = true; });
+    BOOL cancelled = progress.CheckCancelButton();
+    CHECK(cancelled && !delivered);
+    cancelled = progress.CheckCancelButton();
+    CHECK(!cancelled && delivered);
+}
+void test_nested_depth() {
+    TestProgress outer, inner; outer.create(); inner.create();
+    int count = 0;
+    post_callback(Frame.m_hWnd, [&] {
+        CHECK(CProgressDlg::IsPumpingMessages());
+        post_callback(Frame.m_hWnd, [&] { CHECK(CProgressDlg::IsPumpingMessages()); ++count; });
+        inner.PumpMessages();
+        CHECK(CProgressDlg::IsPumpingMessages()); ++count;
+    });
+    outer.PumpMessages();
+    CHECK(count == 2 && !CProgressDlg::IsPumpingMessages());
+}
+void test_exception_depth() {
+    TestProgress outer, inner; outer.create(); inner.create();
+    bool caught = false;
+    // Use the MFC IsDialogMessage boundary for exceptions. A C++ exception is
+    // not allowed to cross the native Windows WNDPROC ABI in native mode.
+    controlHook = [&](const char *name, HWND) {
+        if (std::string(name) != "IsDialogMessage") return;
+        controlHook = nullptr;
+        post_callback(Frame.m_hWnd, [] {});
+        controlHook = [&](const char *operation, HWND) {
+            if (std::string(operation) == "IsDialogMessage") throw std::runtime_error("MFC callback");
+        };
+        try { inner.PumpMessages(); } catch (const std::runtime_error &) {
+            CHECK(CProgressDlg::IsPumpingMessages());
+            controlHook = nullptr;
+            throw;
+        }
+    };
+    post_callback(Frame.m_hWnd, [] {});
+    try { outer.PumpMessages(); } catch (const std::runtime_error &) { caught = true; }
+    controlHook = nullptr;
+    CHECK(caught && !CProgressDlg::IsPumpingMessages());
+    // The failed IsDialogMessage retrieved, but did not dispatch, its callback.
+    callbacks.clear();
+}
+void test_lua_nested_close() {
+    lua_State L;
+    auto *progress = new TestProgress; progress->create(); L.handle = progress;
+    int destroyed = dialogDestructions;
+    bool innerReturned = false;
+    onDialogDestruction = [&] { CHECK(L.handle == nullptr); };
+    post_callback(Frame.m_hWnd, [&] {
+        post_callback(Frame.m_hWnd, [&] {
+            int result = Lprogress_gc(&L); CHECK(result == 0);
+            CHECK(L.handle == nullptr && dialogDestructions == destroyed);
+            result = Lprogress_gc(&L); CHECK(result == 0);
+        });
+        int result = Lprogress_setposition(&L); CHECK(result == 0);
+        CHECK(dialogDestructions == destroyed);
+        innerReturned = true;
+    });
+    int result = Lprogress_setposition(&L); CHECK(result == 0);
+    CHECK(innerReturned && L.handle == nullptr && dialogDestructions == destroyed + 1);
+    CHECK(!CProgressDlg::IsPumpingMessages());
+    onDialogDestruction = nullptr;
+}
+void test_lua_immediate_close() {
+    lua_State L;
+    auto *progress = new TestProgress; progress->create(); L.handle = progress;
+    int destroyed = dialogDestructions;
+    bool invalidBeforeDestroy = false;
+    controlHook = [&](const char *operation, HWND) {
+        if (std::string(operation) == "DestroyWindow") {
+            CHECK(L.handle == nullptr); invalidBeforeDestroy = true;
+            int result = Lprogress_gc(&L); CHECK(result == 0);
+        }
+    };
+    int result = Lprogress_gc(&L); CHECK(result == 0);
+    CHECK(invalidBeforeDestroy && dialogDestructions == destroyed + 1);
+    result = Lprogress_gc(&L); CHECK(result == 0);
+    controlHook = nullptr;
+}
+void test_lua_control_close() {
+    using Method = int (*)(lua_State *);
+    for (Method method : {Lprogress_setstatus, Lprogress_setrange, Lprogress_setposition,
+                          Lprogress_setstep, Lprogress_stepit, Lprogress_checkcancel}) {
+        lua_State L; L.first = 0;
+        auto *progress = new TestProgress; progress->create(); L.handle = progress;
+        int destroyed = dialogDestructions;
+        bool closed = false;
+        if (method == Lprogress_checkcancel) post_callback(Frame.m_hWnd, [&] {
+            int result = Lprogress_gc(&L); CHECK(result == 0); closed = true;
+            CHECK(dialogDestructions == destroyed);
+        });
+        else controlHook = [&](const char *operation, HWND) {
+            std::string name = operation;
+            if (closed || name == "GetDlgItem" || name == "IsDialogMessage") return;
+            closed = true;
+            int result = Lprogress_gc(&L); CHECK(result == 0);
+            CHECK(dialogDestructions == destroyed);
+        };
+        int result = method(&L); CHECK(result == (method == Lprogress_checkcancel ? 1 : 0));
+        CHECK(closed && !L.handle && dialogDestructions == destroyed + 1);
+        controlHook = nullptr;
+    }
+}
+void test_lua_exception() {
+    lua_State L;
+    auto *progress = new TestProgress; progress->create(); L.handle = progress;
+    int destroyed = dialogDestructions;
+    bool caught = false;
+    controlHook = [&](const char *operation, HWND) {
+        if (std::string(operation) != "SetPos") return;
+        controlHook = nullptr;
+        int result = Lprogress_gc(&L); CHECK(result == 0);
+        CHECK(dialogDestructions == destroyed);
+        throw std::runtime_error("synchronous control failure");
+    };
+    try { Lprogress_setposition(&L); } catch (const std::runtime_error &) { caught = true; }
+    CHECK(caught && !L.handle && dialogDestructions == destroyed + 1);
+    CHECK(!CProgressDlg::IsPumpingMessages());
+}
+void perform_update(TestProgress &progress, int method) {
+    if (method == 0) progress.SetPos(12);
+    else if (method == 1) progress.OffsetPos(12);
+    else if (method == 2) progress.StepIt();
+    else progress.CheckCancelButton();
+}
+void test_destroy_dispatch() {
+    for (int method = 0; method != 4; ++method) {
+        TestProgress progress; progress.create();
+        post_callback(Frame.m_hWnd, [&] { BOOL destroyed = progress.DestroyWindow(); CHECK(destroyed); });
+        perform_update(progress, method);
+        CHECK(!progress.m_hWnd && !CProgressDlg::IsPumpingMessages());
+    }
+}
+#ifdef PROGRESS_NATIVE_WINDOWS
+std::thread arrange_sent_message(HWND, std::function<void()>);
+#endif
+void test_destroy_sent() {
+    for (int method = 0; method != 4; ++method) {
+        TestProgress progress; progress.create();
+        auto destroy = [&] { BOOL destroyed = progress.DestroyWindow(); CHECK(destroyed); };
+#ifdef PROGRESS_NATIVE_WINDOWS
+        auto sender = arrange_sent_message(progress.m_hWnd, destroy);
+#else
+        beforePeek = destroy;
+#endif
+        perform_update(progress, method);
+#ifdef PROGRESS_NATIVE_WINDOWS
+        sender.join();
+#endif
+        CHECK(!progress.m_hWnd && !CProgressDlg::IsPumpingMessages());
+    }
+}
+void test_destroy_control() {
+    for (int method = 0; method != 3; ++method) {
+        for (const std::string point : {"update", "GetWindowText"}) {
+            TestProgress progress; progress.create();
+            bool destroyed = false;
+            controlHook = [&](const char *operation, HWND) {
+                std::string name = operation;
+                bool match = point == "update" ? (name == "SetPos" || name == "OffsetPos" || name == "StepIt")
+                                                : name == point;
+                if (destroyed || !match) return;
+                destroyed = true;
+                BOOL result = progress.DestroyWindow(); CHECK(result);
+            };
+            perform_update(progress, method);
+            CHECK(destroyed && !progress.m_hWnd);
+            controlHook = nullptr;
+        }
+    }
+}
+void test_sent_foreign() {
+    TestProgress progress; progress.create();
+    bool delivered = false;
+#ifdef PROGRESS_NATIVE_WINDOWS
+    std::thread sender;
+#endif
+    post_callback(Frame.m_hWnd, [&] {
+        auto destroy = [&] { BOOL result = progress.DestroyWindow(); CHECK(result); };
+#ifdef PROGRESS_NATIVE_WINDOWS
+        sender = arrange_sent_message(progress.m_hWnd, destroy);
+#else
+        beforePeek = destroy;
+#endif
+        post_callback(Frame.m_hWnd, [&] { delivered = true; });
+    });
+    progress.PumpMessages();
+#ifdef PROGRESS_NATIVE_WINDOWS
+    sender.join();
+#endif
+    CHECK(delivered && !progress.m_hWnd);
+}
+void test_window_identity() {
+    TestProgress progress; progress.create();
+    CWnd replacement;
+    permanentWindows[progress.m_hWnd] = &replacement;
+    controlTrace.clear();
+    progress.SetPos(12); progress.SetRange(0, 20); progress.SetStep(1); progress.SetStatus("closed");
+    CHECK(controlTrace.empty());
+    permanentWindows[progress.m_hWnd] = &progress;
+}
+void test_parent_lifetime() {
+    {
+        auto *parent = new CWnd; parent->attach();
+        TestProgress progress; progress.create(parent);
+        BOOL enabled = parent->IsWindowEnabled(); CHECK(!enabled);
+        delete parent;
+        BOOL destroyed = progress.DestroyWindow(); CHECK(destroyed);
+    }
+    {
+        CWnd parent; parent.attach();
+        TestProgress progress; progress.create(&parent);
+        CWnd replacement;
+        permanentWindows[parent.m_hWnd] = &replacement;
+        BOOL destroyed = progress.DestroyWindow(); CHECK(destroyed);
+        BOOL enabled = parent.IsWindowEnabled(); CHECK(!enabled);
+        permanentWindows[parent.m_hWnd] = &parent;
+    }
+    {
+        CWnd parent; parent.attach();
+        TestProgress progress; progress.create(&parent);
+        BOOL destroyed = progress.DestroyWindow(); CHECK(destroyed);
+        BOOL enabled = parent.IsWindowEnabled(); CHECK(enabled);
+    }
+}
+void test_lua_create() {
+    lua_State L;
+    int created = dialogConstructions, destroyed = dialogDestructions;
+    int result = Lprogress_new(&L);
+    CHECK(result == 1 && L.handle && L.metatableInstalled);
+    CHECK(dialogConstructions == created + 1 && dialogDestructions == destroyed);
+    result = Lprogress_gc(&L); CHECK(result == 0);
+    CHECK(dialogDestructions == destroyed + 1);
+}
+void test_lua_create_failure() {
+    for (int fault = 0; fault != 5; ++fault) {
+        lua_State L;
+        int created = dialogConstructions, destroyed = dialogDestructions;
+        int deleted = deletedMfcExceptions;
+        L.rejectArgument = fault == 0;
+        L.rejectAllocation = fault == 1;
+        failDialogCreate = fault == 2;
+        if (fault >= 3) controlHook = [fault](const char *name, HWND) {
+            if (std::string(name) == "SetWindowText") {
+                if (fault == 4) throw new CException("title callback");
+                throw std::runtime_error("title callback");
+            }
+        };
+        bool caught = false, luaError = false;
+        try { Lprogress_new(&L); }
+        catch (const LuaError &e) {
+            caught = luaError = true;
+            CHECK(std::string(e.what()) == (fault == 2 ? "Create failed" : "title callback"));
+        }
+        catch (const std::exception &) { caught = true; }
+        controlHook = nullptr; failDialogCreate = false;
+        CHECK(caught && !L.handle);
+        CHECK(luaError == (fault == 2 || fault == 4));
+        CHECK(liveMfcExceptions == 0);
+        CHECK(deletedMfcExceptions == deleted + (luaError ? 1 : 0));
+        CHECK(dialogConstructions == created + (fault >= 2 ? 1 : 0));
+        CHECK(dialogDestructions == destroyed + (fault >= 2 ? 1 : 0));
+    }
+}
+void test_lua_argument_failure() {
+    // C++ exceptions model argument rejection only. Lua longjmp itself is not
+    // covered. Closing after rejection detects a leaked operation depth.
+    using Method = int (*)(lua_State *);
+    for (Method method : {Lprogress_setstatus, Lprogress_setrange, Lprogress_setposition, Lprogress_setstep}) {
+        lua_State L;
+        auto *progress = new TestProgress; progress->create(); L.handle = progress;
+        int destroyed = dialogDestructions;
+        L.rejectArgument = true;
+        bool caught = false;
+        try { method(&L); } catch (const std::runtime_error &) { caught = true; }
+        CHECK(caught && L.handle == progress);
+        int result = Lprogress_gc(&L); CHECK(result == 0);
+        CHECK(!L.handle && dialogDestructions == destroyed + 1);
+    }
+}
+void test_lua_argument_conversion_close() {
+    // lua_tolstring can allocate while converting a number and run a finalizer.
+    // Invoke that callback at the argument API boundary, before it returns the
+    // converted string. The wrapper must resolve the handle after this callback.
+    lua_State L;
+    L.argument = "42";
+    auto *progress = new TestProgress; progress->create(); L.handle = progress;
+    int destroyed = dialogDestructions;
+    bool converted = false, rejectedClosedHandle = false;
+    L.onStringConversion = [&] {
+        converted = true;
+        int result = Lprogress_gc(&L); CHECK(result == 0);
+        CHECK(!L.handle && dialogDestructions == destroyed + 1);
+        controlTrace.clear();
+    };
+    try { Lprogress_setstatus(&L); }
+    catch (const std::runtime_error &error) {
+        rejectedClosedHandle = std::string(error.what()) == "closed Lua handle";
+    }
+    CHECK(converted && rejectedClosedHandle);
+    CHECK(!L.handle && dialogDestructions == destroyed + 1);
+    CHECK(controlTrace.empty());
+}
+void test_source_control_order() {
+    // A sent message can destroy the source dialog and its child before a
+    // queued callback returns. No later GetDlgItem or percentage update is safe.
+    TestProgress progress; progress.create();
+    CWnd *source = progress.GetDlgItem(CG_IDC_PROGDLG_STATUS);
+    HWND sourceWindow = source->m_hWnd;
+    post_callback(Frame.m_hWnd, [&] {
+        BOOL result = progress.DestroyWindow(); CHECK(result);
+        CHECK(!::IsWindow(sourceWindow));
+        controlTrace.clear();
+    });
+    progress.SetPos(37);
+    CHECK(controlTrace.empty());
+}
+
+template<class Doc, class Guard> void test_document_close(deque<__int64> &queue) {
+    auto *doc = new Doc;
+    __int64 identity = doc->identity;
+    TestProgress progress; progress.create();
+    {
+        Guard outer(doc);
+        {
+            Guard inner(doc);
+            post_callback(Frame.m_hWnd, [&] {
+                doc->OnCloseDocument(); doc->OnCloseDocument();
+                BOOL more = App.OnIdle(0); CHECK(!more);
+                CHECK(documentCloses[identity] == 0);
+            });
+            progress.PumpMessages();
+            CHECK(documentCloses[identity] == 0);
+        }
+        // OnIdle can run in another nested modal loop after progress pumping.
+        // It must retain this identity while the caller still uses the document.
+        App.OnIdle(0);
+        CHECK(documentCloses[identity] == 0 && doc->activeOperations() == 1);
+        CHECK(queue.size() == 1 && queue.front() == identity);
+    }
+    CHECK(documentCloses[identity] == 0);
+    CHECK(queue.size() == 1 && queue.front() == identity);
+    App.OnIdle(0);
+    CHECK(documentCloses[identity] == 1 && queue.empty());
+    App.OnIdle(0);
+    CHECK(documentCloses[identity] == 1);
+}
+void test_close_during_pump() {
+    auto *world = new CMUSHclientDoc; auto *text = new CTextDocument;
+    __int64 worldID = world->identity, textID = text->identity;
+    TestProgress progress; progress.create();
+    post_callback(Frame.m_hWnd, [&] {
+        world->OnCloseDocument(); world->OnCloseDocument();
+        text->OnCloseDocument(); text->OnCloseDocument();
+        CHECK(App.m_DeferredWorldDocumentCloses.size() == 1);
+        CHECK(App.m_DeferredTextDocumentCloses.size() == 1);
+        App.OnIdle(0);
+        CHECK(documentCloses[worldID] == 0 && documentCloses[textID] == 0);
+    });
+    progress.PumpMessages();
+    CHECK(documentCloses[worldID] == 0 && documentCloses[textID] == 0);
+    App.OnIdle(0); App.OnIdle(0);
+    CHECK(documentCloses[worldID] == 1 && documentCloses[textID] == 1);
+}
+void test_queued_then_active() {
+    auto *doc = new CMUSHclientDoc;
+    __int64 identity = doc->identity;
+    TestProgress progress; progress.create();
+    post_callback(Frame.m_hWnd, [&] { doc->OnCloseDocument(); });
+    progress.PumpMessages();
+    CHECK(App.m_DeferredWorldDocumentCloses.size() == 1);
+    {
+        CWorldDocumentOperationGuard operation(doc);
+        App.OnIdle(0); App.OnIdle(0);
+        CHECK(documentCloses[identity] == 0);
+        CHECK(App.m_DeferredWorldDocumentCloses.size() == 1);
+        doc->OnCloseDocument();
+        CHECK(App.m_DeferredWorldDocumentCloses.size() == 1);
+    }
+    CHECK(documentCloses[identity] == 0);
+    App.OnIdle(0);
+    CHECK(documentCloses[identity] == 1);
+}
+void test_stale_identity() {
+    // Reuse the exact address. A queue of pointers would close the replacement.
+    auto *world = new CMUSHclientDoc;
+    void *worldStorage = world;
+    __int64 oldWorld = world->identity;
+    App.DeferWorldDocumentClose(oldWorld);
+    world->~CMUSHclientDoc();
+    world = new (worldStorage) CMUSHclientDoc;
+    auto *text = new CTextDocument;
+    void *textStorage = text;
+    __int64 oldText = text->identity;
+    App.DeferTextDocumentClose(oldText);
+    text->~CTextDocument();
+    text = new (textStorage) CTextDocument;
+    __int64 newWorld = world->identity, newText = text->identity;
+    App.OnIdle(0); App.OnIdle(0);
+    CHECK(documentCloses[newWorld] == 0 && documentCloses[newText] == 0);
+    CHECK(App.m_DeferredWorldDocumentCloses.empty() && App.m_DeferredTextDocumentCloses.empty());
+    world->OnCloseDocument(); text->OnCloseDocument();
+}
+void test_document_exception() {
+    auto *world = new CMUSHclientDoc; auto *text = new CTextDocument;
+    __int64 worldID = world->identity, textID = text->identity;
+    bool caught = false;
+    try {
+        CWorldDocumentOperationGuard worldOperation(world);
+        CTextDocumentOperationGuard textOperation(text);
+        world->OnCloseDocument(); text->OnCloseDocument();
+        throw std::runtime_error("active operation failed");
+    } catch (const std::runtime_error &) { caught = true; }
+    CHECK(caught && world->activeOperations() == 0 && text->activeOperations() == 0);
+    CHECK(documentCloses[worldID] == 0 && documentCloses[textID] == 0);
+    App.OnIdle(0); App.OnIdle(0);
+    CHECK(documentCloses[worldID] == 1 && documentCloses[textID] == 1);
+}
+void test_deferred_messages() {
+    MSG message{}; message.hwnd = Frame.m_hWnd; message.message = WM_CLOSE;
+    TestProgress progress; progress.create();
+    post_callback(Frame.m_hWnd, [&] {
+        App.DeferMessageUntilIdle(message, 123);
+        App.DeferMessageUntilIdle(message, 123);
+        App.DeferMessageUntilIdle(message, 456);
+        CHECK(App.m_DeferredMessages.size() == 2);
+        App.OnIdle(0); CHECK(Frame.delivered.empty());
+    });
+    progress.PumpMessages(); CHECK(Frame.delivered.empty());
+    App.OnIdle(0); App.OnIdle(0);
+    CHECK(Frame.delivered.size() == 2);
+    CHECK(Frame.delivered[0].m_iDocumentNumber == 123 && Frame.delivered[1].m_iDocumentNumber == 456);
+    // OnIdle must also drop messages whose windows no longer exist. The frame's
+    // document identity validation itself is outside these extracted functions.
+    CWnd other; other.attach(); message.hwnd = other.m_hWnd;
+    App.DeferMessageUntilIdle(message, 789);
+    BOOL destroyed = other.DestroyWindow(); CHECK(destroyed);
+    App.OnIdle(0); CHECK(Frame.delivered.size() == 2);
+}
+@NATIVE@
+int main(int argc, char **argv) {
+#ifdef _DEBUG
+    (void) THIS_FILE; // Retain the production debug file marker without an unused warning.
+#endif
+    CHECK(argc == 2);
+    Frame.attach();
+    const std::string name = argv[1];
+    if (name == "blocked_chat") test_blocked_chat();
+    else if (name == "cancel_quit") test_cancel_quit();
+    else if (name == "cancel_stops") test_cancel_stops();
+    else if (name == "late_quit") test_late_quit();
+    else if (name == "nested_depth") test_nested_depth();
+    else if (name == "exception_depth") test_exception_depth();
+    else if (name == "lua_nested_close") test_lua_nested_close();
+    else if (name == "lua_immediate_close") test_lua_immediate_close();
+    else if (name == "lua_control_close") test_lua_control_close();
+    else if (name == "lua_exception") test_lua_exception();
+    else if (name == "destroy_dispatch") test_destroy_dispatch();
+    else if (name == "destroy_sent") test_destroy_sent();
+    else if (name == "sent_foreign") test_sent_foreign();
+    else if (name == "destroy_control") test_destroy_control();
+    else if (name == "source_control_order") test_source_control_order();
+    else if (name == "window_identity") test_window_identity();
+    else if (name == "parent_lifetime") test_parent_lifetime();
+    else if (name == "lua_create") test_lua_create();
+    else if (name == "lua_create_failure") test_lua_create_failure();
+    else if (name == "lua_argument_failure") test_lua_argument_failure();
+    else if (name == "lua_argument_conversion_close") test_lua_argument_conversion_close();
+    else if (name == "world_close") test_document_close<CMUSHclientDoc, CWorldDocumentOperationGuard>(App.m_DeferredWorldDocumentCloses);
+    else if (name == "text_close") test_document_close<CTextDocument, CTextDocumentOperationGuard>(App.m_DeferredTextDocumentCloses);
+    else if (name == "close_during_pump") test_close_during_pump();
+    else if (name == "queued_then_active") test_queued_then_active();
+    else if (name == "stale_identity") test_stale_identity();
+    else if (name == "document_exception") test_document_exception();
+    else if (name == "deferred_messages") test_deferred_messages();
+#ifdef PROGRESS_NATIVE_WINDOWS
+    else if (name == "native_socket") test_native_socket();
+#endif
+    else { std::cerr << "Unknown case: " << name << '\n'; return 2; }
+    CHECK(!CProgressDlg::IsPumpingMessages());
+    CHECK(App.worlds.head == nullptr && App.texts.head == nullptr);
+    CHECK(App.m_DeferredWorldDocumentCloses.empty() && App.m_DeferredTextDocumentCloses.empty());
+    CHECK(App.m_DeferredMessages.empty());
+    CHECK(callbacks.empty());
+    std::cout << "PASS: " << name << '\n';
+}
