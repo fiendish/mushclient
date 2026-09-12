@@ -265,6 +265,7 @@ void CScriptEngine::CloseLua ()
 // send some code to Lua to be parsed
 bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // safety check ;)
@@ -475,6 +476,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
 
 
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // safety check ;)
@@ -698,6 +700,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
                                long & nInvocationCount,  // count of invocations
                                CString & result)         // where to put result
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
 
   // safety check ;)

@@ -3631,6 +3631,8 @@ void CMUSHView::OnContextMenu(CWnd*, CPoint point)
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
 
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+
     if (point.x == -1 && point.y == -1)
       {
       //keystroke invocation
@@ -3759,7 +3761,7 @@ ASSERT_VALID(pDoc);
                                 menupoint.x, 
                                 menupoint.y,
                                 pWndPopupOwner);
-          if (nCommand)
+          if (nCommand && !pDoc->m_bWorldClosePending)
             OnMXPMenu (nCommand);
 
           return;
@@ -3799,7 +3801,7 @@ ASSERT_VALID(pDoc);
                                 menupoint.x, 
                                 menupoint.y,
                                 pWndPopupOwner);
-          if (nCommand)
+          if (nCommand && !pDoc->m_bWorldClosePending)
             OnMXPMenu (nCommand);
 
           return;
