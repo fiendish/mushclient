@@ -49,6 +49,7 @@ CString strEntityContents = MXP_GetEntity (m_strMXPstring);
   if (!strEntityContents.IsEmpty ())
     {
 //  if the entity happens to be < & > etc. don't reprocess it
+    CWorldDocumentOperationGuard operationGuard (this);
     CValueStateGuard<bool> mxpGuard (m_bMXP, false);
     DisplayMsg (strEntityContents, strEntityContents.GetLength (), 0, true);  // fake packet
     }

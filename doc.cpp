@@ -1259,6 +1259,7 @@ void CMUSHclientDoc::DoSendMsg(const CString & strText,
                                const bool bEchoIt,
                                const bool bLogIt)
 {
+CWorldDocumentOperationGuard operationGuard (this);
 CString str = strText;
 
   // cannot change what we are sending in OnPluginSent
@@ -9084,6 +9085,7 @@ void CMUSHclientDoc::Screendraw  (const long iType,
   if (m_bInScreendraw)
     return;
 
+  CWorldDocumentOperationGuard operationGuard (this);
   CBoolStateGuard screendrawGuard (m_bInScreendraw, true);
   SendToAllPluginCallbacks (ON_PLUGIN_SCREENDRAW,
                             iType,
@@ -9100,6 +9102,7 @@ bool CMUSHclientDoc::PlaySoundFile (CString strSound)
   // stop infinite loops
   if (!m_bInPlaySoundFilePlugin)
     {
+    CWorldDocumentOperationGuard operationGuard (this);
     CBoolStateGuard playSoundGuard (m_bInPlaySoundFilePlugin, true);
     
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
@@ -9117,6 +9120,7 @@ void CMUSHclientDoc::CancelSound (void)
   // stop infinite loops
   if (!m_bInCancelSoundFilePlugin)
     {
+    CWorldDocumentOperationGuard operationGuard (this);
     CBoolStateGuard cancelSoundGuard (m_bInCancelSoundFilePlugin, true);
 
     CString strSound;   // deliberately the empty string

@@ -249,6 +249,8 @@ void CMUSHclientDoc::DeleteCommandHistory()
 long CMUSHclientDoc::Execute(LPCTSTR Command) 
 {
 
+CWorldDocumentOperationGuard executeOperationGuard (this);
+
 // remember current plugin
 CValueStateGuard<CPlugin *> pluginGuard (m_CurrentPlugin, m_CurrentPlugin);
 

@@ -2008,6 +2008,7 @@ ASSERT_VALID(pDoc);
   if (!pDoc->m_FontHeight)
     return;
 
+  CWorldDocumentOperationGuard operationGuard (pDoc);
   CPluginContextGuard pluginContextGuard (pDoc, NULL);
 
   CPoint wordPoint (point);
@@ -2156,7 +2157,7 @@ CPoint menupoint = point;
                         point.x,
                         point.y,
                         pWndPopupOwner);
-  if (nCommand)
+  if (nCommand && !pDoc->m_bWorldClosePending)
     OnMXPMenu (nCommand);
 
   } // end of CMUSHView::AliasMenu
@@ -6600,14 +6601,15 @@ void CMUSHView::Send_Mouse_Event_To_Plugin (DISPID iDispatchID,
                                             long Flags,
                                             bool dont_modify_flags)
   {
+CMUSHclientDoc* pDoc = GetDocument();
+ASSERT_VALID(pDoc);
+
+  CWorldDocumentOperationGuard operationGuard (pDoc);
   CBoolStateGuard executingGuard (miniwindow.m_bExecutingScript, true);
 
   // only if they have a routine
   if (sRoutineName.empty ())
     return;
-
-CMUSHclientDoc* pDoc = GetDocument();
-ASSERT_VALID(pDoc);
 
 // also Flags might be (from caller):
 
@@ -7690,10 +7692,11 @@ void CMUSHView::NotifySelectionChanged(void)
   m_old_selend_line   = m_selend_line;
   m_old_selend_col    = m_selend_col;
 
-  CBoolStateGuard selectionGuard (m_bInSelectionChanged, true);
-
   CMUSHclientDoc* pDoc = GetDocument();
   ASSERT_VALID(pDoc);
+
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+  CBoolStateGuard selectionGuard (m_bInSelectionChanged, true);
 
   if (pDoc->m_ScriptEngine)
     pDoc->SendToAllPluginCallbacks(ON_PLUGIN_SELECTION_CHANGED);

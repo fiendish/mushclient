@@ -430,6 +430,7 @@ SetModifiedFlag (ChangedFlag);
 
 void CMUSHclientDoc::Simulate(LPCTSTR Text) 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
   CBoolStateGuard doingSimulateGuard (m_bDoingSimulate, true);
   DisplayMsg(Text, strlen (Text), 0);
 }   // end of CMUSHclientDoc::Simulate

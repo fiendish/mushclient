@@ -23,6 +23,8 @@ void CMUSHclientDoc::Trace (LPCTSTR lpszFormat, ...)
   if (!m_bTrace)
     return;
 
+  CWorldDocumentOperationGuard operationGuard (this);
+
 	ASSERT(AfxIsValidString(lpszFormat, FALSE));
 
 CString strMsg;

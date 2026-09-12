@@ -90,11 +90,14 @@ def main():
 
     if not args.skip_mutations:
         chat_guard = '  CWorldDocumentOperationGuard operationGuard (m_pDoc);'
+        execute_guard = 'CWorldDocumentOperationGuard executeOperationGuard (this);'
         script_guard = '  CWorldDocumentOperationGuard operationGuard (this);'
         inner_guard = '    CValueStateGuard<int> executionDepthGuard (m_pDoc->m_iExecutionDepth, 0);'
         no_chat_guard = replace_once(source, chat_guard, '')
         mutants = [
-            ('remove_chat_guard', no_chat_guard, 'chat', 'world retained during command'),
+            ('remove_execute_guard', replace_once(source, execute_guard, ''),
+                'execute', 'world retained during command'),
+            ('remove_chat_guard', no_chat_guard, 'chat', 'world retained after command'),
             ('move_chat_guard_to_command', replace_once(no_chat_guard, inner_guard,
                 chat_guard + '\n' + inner_guard), 'chat', 'world retained after command'),
             ('remove_script_guard', replace_once(source, script_guard, ''),
