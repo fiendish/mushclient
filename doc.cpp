@@ -7653,6 +7653,8 @@ void CMUSHclientDoc::SendTo (
     if (strSendText.IsEmpty ())
       return;
 
+  CWorldDocumentOperationGuard operationGuard (this);
+
   switch (iWhere)
     {
     case eSendToCommand:

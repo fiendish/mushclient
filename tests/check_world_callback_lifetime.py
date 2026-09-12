@@ -76,6 +76,15 @@ def main():
 
     chat = read('chatsock.cpp')
     doc = read('doc.cpp')
+    require_before(block(doc, 'void CMUSHclientDoc::SendTo ('),
+                   'CWorldDocumentOperationGuard operationGuard (this);',
+                   'switch (iWhere)', 'SendTo')
+
+    miniwindows = read('scripting/methods/methods_miniwindows.cpp')
+    require_before(block(miniwindows, 'BSTR CMUSHclientDoc::WindowMenu('),
+                   'CWorldDocumentOperationGuard operationGuard (this);',
+                   'it->second->Menu', 'WindowMenu')
+
     stdafx = read('stdafx.h')
     functions = '\n\n'.join([
         *(block(doc, signature) for signature in [
