@@ -93,6 +93,7 @@
 #include <iterator>
 #include <sstream>
 #include <memory>
+#include <exception>
 #pragma warning (pop)
 
 #ifdef LUA_52
@@ -367,6 +368,8 @@ void FixFont (ptrCFont & pFont,
 
 // for escaping out things like \r in a trigger
 CString FixupEscapeSequences (const CString & strSource);
+void SetFileDialogFileName (CFileDialog & dialog, CString & buffer,
+                            const CString & initialName);
 
 template <class T>
 class CValueStateGuard
@@ -509,19 +512,23 @@ CString RemoveFinalSlash (CString str);
 /////////////////////////////////////////////////////////////////////////////
 //  Stuff for the file-change monitoring code
 
-struct CThreadData
-{
-	char *	m_strFilename;    // which file to monitor
-	HWND	m_hWnd;             // window to post event to
-  DWORD m_pDoc;             // which document it belongs to
-	HANDLE	m_hEvent;         // event which will become signalled
-};
+struct CFileChangeNotification
+  {
+  __int64 m_iDocumentNumber;
+  __int64 m_iMonitorToken;
+  };
 
-void ThreadFunc(LPVOID pParam);
-void KillThread (HANDLE & pThread, CEvent & eventFileChanged);
-HANDLE CreateMonitoringThread(const char * sName, DWORD pDoc, CEvent & eventFileChanged);
+struct CTLSFallbackNotification
+  {
+  __int64 m_iDocumentNumber;
+  unsigned long m_iConnectionAttemptNumber;
+  };
 
-#define WM_USER_FILE_CONTENTS_CHANGED (WM_USER + 1001)
+void StopMonitoringThread (__int64 & token);
+void CollectMonitoringThreads ();
+__int64 CreateMonitoringThread (const char * name, __int64 document, UINT message);
+
+#define WM_USER_FILE_CONTENTS_CHANGED (WM_USER + 1002)
 
 #define REGISTRATION_TIMER_ID 0x1001
 #define SPLASH_SCREEN_TIMER_ID 0x1002
@@ -674,16 +681,15 @@ enum
               _CrtSetDbgFlag((a) | _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
   #define  CLEAR_CRT_DEBUG_FIELD(a) \
               _CrtSetDbgFlag(~(a) & _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
-//  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
 //  #define DELETESTYLE(arg) DeleteStyle (arg, __FILE__, __LINE__)
-  #define NEWSTYLE new CStyle
+  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
   #define DELETESTYLE(arg) delete arg
 
 #else
   #define  SET_CRT_DEBUG_FIELD(a)   ((void) 0)
   #define  CLEAR_CRT_DEBUG_FIELD(a) ((void) 0)
 
-  #define NEWSTYLE new CStyle
+  #define NEWSTYLE GetNewStyle (__FILE__, __LINE__)
   #define DELETESTYLE(arg) delete arg
 #endif
 

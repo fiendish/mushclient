@@ -9,6 +9,7 @@
 #include "MDITabs.h"
 
 class CMUSHclientDoc;
+struct CDeferredMessage;
 
 #define TRAY_FIRST_MENU 11000
 #define TRAY_MENU_COUNT 50   // number of world menu items we support
@@ -94,6 +95,7 @@ public:
 
    void CheckTimerFallback (void);
    void ProcessTimers (void);
+   void ProcessDeferredMessage (const CDeferredMessage & deferred);
 
 // Overrides
 	// ClassWizard generated virtual function overrides
@@ -203,6 +205,11 @@ protected:
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
 	//}}AFX_MSG
   afx_msg LRESULT OnMCINotify(WPARAM, LPARAM);
+  afx_msg LRESULT OnScriptFileContentsChanged(WPARAM, LPARAM);
+  afx_msg LRESULT OnTextFileContentsChanged(WPARAM, LPARAM);
+  afx_msg LRESULT OnHostNameResolved(WPARAM, LPARAM);
+  afx_msg LRESULT OnShowTips(WPARAM, LPARAM);
+  afx_msg LRESULT OnSSLFallbackPrompt(WPARAM, LPARAM);
 	afx_msg void OnF1Test();
 	afx_msg void OnUpdateInfoBar(CCmdUI* pCmdUI);
   afx_msg void OnTrayMenu(UINT nID);    
