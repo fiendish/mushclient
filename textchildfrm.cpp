@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "MUSHclient.h"
+#include "dialogs\ProgDlg.h"
 #include "mainfrm.h"
 #include "TextDocument.h"
 #include "textchildfrm.h"
@@ -19,6 +20,7 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 IMPLEMENT_DYNCREATE(CTextChildFrame, CMDIChildWnd)
 
 BEGIN_MESSAGE_MAP(CTextChildFrame, CMDIChildWnd)
+	ON_WM_CLOSE()
 	//{{AFX_MSG_MAP(CTextChildFrame)
 	//}}AFX_MSG_MAP
 END_MESSAGE_MAP()
@@ -55,6 +57,19 @@ void CTextChildFrame::Dump(CDumpContext& dc) const
 /////////////////////////////////////////////////////////////////////////////
 // CTextChildFrame message handlers
 
+
+void CTextChildFrame::OnClose()
+{
+  if (m_pDoc && (CProgressDlg::IsPumpingMessages () || m_pDoc->m_iActiveOperations != 0))
+    {
+    MSG msg = {};
+    msg.hwnd = GetSafeHwnd ();
+    msg.message = WM_CLOSE;
+    App.DeferMessageUntilIdle (msg, m_pDoc->m_iTextDocumentNumber);
+    return;
+    }
+  CMDIChildWnd::OnClose ();
+}
 
 BOOL CTextChildFrame::PreCreateWindow(CREATESTRUCT& cs) 
 {

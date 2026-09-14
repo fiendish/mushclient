@@ -27,6 +27,15 @@ public:
 public:
 	CMUSHclientDoc* m_pDoc;
   string m_outstanding_data;
+  bool m_bInReceive;
+  bool m_bReceivePending;
+  const __int64 m_iSocketNumber;
+  bool m_bBufferedReadPending;
+  __int64 m_iBufferedReadDocumentNumber;
+  SOCKET m_hBufferedReadSocket;
+  struct ssl_st * m_pBufferedReadSSL;
+
+  static void CheckBufferedReads (void);
 
 // Implementation
 
