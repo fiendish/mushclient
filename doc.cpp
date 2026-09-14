@@ -4378,6 +4378,12 @@ if (!dc.CreateCompatibleDC (NULL))
                               MAKELPARAM (TRUE, 0));
         }
       delete pNewInputFont;
+      for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
+        {
+        CView* pView = GetNextView(pos);
+        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
+          ((CSendView*) pView)->AdjustCommandWindowSize ();
+        }
       throw;
       }
 

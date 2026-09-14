@@ -167,7 +167,7 @@ void FixFont (ptrCFont & pFont,
        AfxThrowResourceException ();
        }
 
-      delete pFont;         // get rid of old font
+      CFont * pOldFont = pFont;
       pFont = pNewFont;
 
       // Get the metrics of the font.
@@ -175,6 +175,7 @@ void FixFont (ptrCFont & pFont,
 //      dc.SelectObject(pFont);
 
       editctrl.SetFont (pFont);
+      delete pOldFont;         // get rid of old font
       /*
       editctrl.SendMessage (WM_SETFONT,
                                    (WPARAM) pFont->m_hObject,
