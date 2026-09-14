@@ -836,6 +836,7 @@ void CMainFrame::OnTimer(UINT nIDEvent)
 
   CheckTimerFallback ();
 	CMDIFrameWnd::OnTimer(nIDEvent);
+  CWorldSocket::CheckBufferedReads ();
   }  // end of CMainFrame::OnTimer
 
 void CMainFrame::OnUpdateStatuslineFreeze(CCmdUI* pCmdUI) 
