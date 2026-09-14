@@ -1,0 +1,102 @@
+// Keep callback style changes on both hard-column and trailing-space wraps.
+static void CheckANSIStyle()
+{
+ for (bool trailingSpace : {false, true}) {
+  CMUSHclientDoc d;
+  string prefix(80, 'A');
+  if (trailingSpace) prefix[79] = ' ';
+  assert(d.AddToLine(prefix.c_str(), 0));
+  int deliveries = 0;
+  d.callback = [&] {
+   ++deliveries;
+   d.InterpretANSIcode(ANSI_TEXT_RED);
+   d.InterpretANSIcode(ANSI_BACK_BLUE);
+   d.InterpretANSIcode(ANSI_BOLD);
+  };
+  assert(d.AddToLine("Z", 0));
+  assert(deliveries == 1);
+  assert(string(d.m_pCurrentLine->text, d.m_pCurrentLine->len) == "Z");
+  auto previous = d.m_LineList.GetHead()->styleList.GetTail();
+  auto current = d.m_pCurrentLine->styleList.GetTail();
+  assert(previous->iForeColour == RED && d.m_iForeColour == RED);
+  assert(current->iForeColour == RED);
+  assert(current->iBackColour == BLUE);
+  assert(current->iFlags & HILITE);
+ }
+}
+
+// A changed or removed action must not retain the old action on the new line.
+static void CheckActionReplacement()
+{
+ for (bool removeAction : {false, true}) {
+  auto oldAction = new CAction;
+  auto newAction = new CAction;
+  {
+   CMUSHclientDoc d;
+   assert(d.AddToLine(string(80, 'A').c_str(), 0));
+   d.AddStyle(HILITE, WHITE, BLACK, 0, oldAction);
+   d.callback = [&] {
+    d.AddStyle(COLOUR_RGB | UNDERLINE | INVERSE, 123, 456, 0,
+               removeAction ? nullptr : newAction);
+   };
+   assert(d.AddToLine("Z", 0));
+   auto current = d.m_pCurrentLine->styleList.GetTail();
+   assert(current->iFlags == (COLOUR_RGB | UNDERLINE | INVERSE));
+   assert(current->iForeColour == 123 && current->iBackColour == 456);
+   assert(current->pAction == (removeAction ? nullptr : newAction));
+   assert(oldAction->refs == 1);
+   assert(newAction->refs == (removeAction ? 1 : 3));
+  }
+  assert(oldAction->refs == 1 && newAction->refs == 1);
+  oldAction->Release();
+  newAction->Release();
+ }
+}
+
+// Pruning can remove the old line during FinishNewLine. The retained snapshot
+// must remain valid, including its action, after that line is destroyed.
+static void CheckPrunedLine()
+{
+ auto action = new CAction;
+ {
+  CMUSHclientDoc d;
+  for (int i = 1; i < JUMP_SIZE; ++i)
+   assert(d.StartNewLine(true, COMMENT));
+  d.m_maxlines = JUMP_SIZE;
+  d.AddStyle(UNDERLINE, RED, BLUE, 0, action);
+  bool created = false;
+  assert(d.StartNewLine_KeepPreviousStyle(0, &created));
+  assert(created && d.m_LineList.GetCount() == 1);
+  auto current = d.m_pCurrentLine->styleList.GetTail();
+  assert(current->iFlags == UNDERLINE);
+  assert(current->iForeColour == RED && current->iBackColour == BLUE);
+  assert(current->pAction == action && action->refs == 2);
+ }
+ assert(action->refs == 1);
+ action->Release();
+}
+
+static void CheckCallbackException()
+{
+ auto action = new CAction;
+ {
+  CMUSHclientDoc d;
+  d.AddStyle(UNDERLINE, RED, BLUE, 0, action);
+  d.callback = [] { throw runtime_error("callback failure"); };
+  bool caught = false, created = true;
+  try { d.StartNewLine_KeepPreviousStyle(0, &created); }
+  catch (const runtime_error&) { caught = true; }
+  assert(caught && !created && action->refs == 2);
+ }
+ assert(action->refs == 1);
+ action->Release();
+}
+
+int main()
+{
+ CheckANSIStyle();
+ CheckActionReplacement();
+ CheckPrunedLine();
+ CheckCallbackException();
+ cout << "wrap callback style checks passed\n";
+}

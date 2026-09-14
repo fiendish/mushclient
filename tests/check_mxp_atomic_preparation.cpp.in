@@ -1,0 +1,225 @@
+// Production excerpts use portable strings, lists, actions, and callbacks.
+#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cstdio>
+#include <functional>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using namespace std;
+using __int64 = long long;
+using POSITION = void *;
+using COLORREF = unsigned;
+using LPCTSTR = const char *;
+constexpr int START_TAG = 0x1000, STYLE_BITS = 0xfff, DBG_ERROR = 1;
+constexpr int DISPID_UNKNOWN = -1;
+#define NEWSTYLE new CStyle
+#define DELETESTYLE(p) delete (p)
+@ENUMS@
+struct CString : string {
+  using string::string;
+  CString(const string &s) : string(s) {}
+  operator const char *() const { return c_str(); }
+  bool IsEmpty() const { return empty(); }
+  void Empty() { clear(); }
+  int GetLength() const { return size(); }
+  int Find(char c) const { auto pos = find(c); return pos == npos ? -1 : int(pos); }
+  void MakeLower() { transform(begin(), end(), begin(), [](unsigned char c){return tolower(c);}); }
+};
+template<class... T> CString CFormat(const char *fmt, T... args) {
+  char buffer[256]; snprintf(buffer, sizeof(buffer), fmt, args...); return buffer;
+}
+template<class... T> CString TFormat(const char *fmt, T... args) { return CFormat(fmt, args...); }
+template<class T> class List {
+  struct Node { T *value; Node *prev; Node *next; };
+  Node *head = nullptr, *tail = nullptr;
+  size_t count = 0;
+public:
+  ~List() { assert(IsEmpty()); }
+  POSITION GetHeadPosition() { return head; }
+  POSITION GetTailPosition() { return tail; }
+  T *GetNext(POSITION &pos) { auto n = static_cast<Node *>(pos); pos = n->next; return n->value; }
+  T *GetTail() { assert(tail); return tail->value; }
+  bool IsEmpty() const { return !head; }
+  size_t GetCount() const { return count; }
+  void AddTail(T *value) {
+    auto n = new Node{value, tail, nullptr};
+    if (tail) tail->next = n; else head = n;
+    tail = n; ++count;
+  }
+  void RemoveAt(POSITION pos) {
+    auto n = static_cast<Node *>(pos);
+    if (n->prev) n->prev->next = n->next; else head = n->next;
+    if (n->next) n->next->prev = n->prev; else tail = n->prev;
+    delete n; --count;
+  }
+  T *RemoveTail() { auto value = GetTail(); RemoveAt(tail); return value; }
+  void DeleteAll() { while (!IsEmpty()) delete RemoveTail(); }
+};
+static int actionCount = 0, styleCount = 0, styleAllocations = 0;
+struct CAction {
+  int refs = 1;
+  CString m_strAction, m_strHint, m_strVariable;
+  CAction(CString a, CString h, CString v) : m_strAction(a), m_strHint(h), m_strVariable(v) { ++actionCount; }
+  ~CAction() { --actionCount; }
+  void AddRef() { ++refs; }
+  void Release() { assert(refs > 0); if (!--refs) delete this; }
+};
+struct CStyle {
+  unsigned short iFlags = 0, iLength = 0;
+  COLORREF iForeColour = 7, iBackColour = 0;
+  CAction *pAction = nullptr;
+  CStyle() { ++styleCount; ++styleAllocations; }
+  ~CStyle() { if (pAction) pAction->Release(); --styleCount; }
+};
+struct CLine {
+  List<CStyle> styleList;
+  ~CLine() { styleList.DeleteAll(); }
+};
+struct CArgument { CString strName, strValue; };
+using CArgumentList = List<CArgument>;
+struct Arguments : CArgumentList {
+  Arguments(initializer_list<CString> values) { for (auto &value : values) AddTail(new CArgument{"", value}); }
+  ~Arguments() { DeleteAll(); }
+};
+struct CActiveTag { __int64 nCreationNumber; };
+using CActiveTagList = List<CActiveTag>;
+struct StringMap {
+  map<CString, CString> values;
+  bool Lookup(CString name, CString &value) {
+    auto found = values.find(name);
+    if (found == values.end()) return false;
+    value = found->second; return true;
+  }
+};
+struct { StringMap m_EntityMap; } App;
+struct CMUSHclientDoc {
+  CLine *m_pCurrentLine = new CLine;
+  CActiveTagList m_ActiveTagList;
+  StringMap m_CustomEntityMap;
+  __int64 m_iMXPGeneration = 1;
+  bool m_bMXP = true, m_bPluginProcessesOpenTag = false;
+  int m_dispidOnMXP_OpenTag = DISPID_UNKNOWN;
+  int errors = 0, openCalls = 0, resets = 0;
+  bool prepared = false;
+  CString callbackArguments;
+  function<void()> errorHook;
+  function<bool()> openHook;
+  CMUSHclientDoc() { AddStyle(2, 7, 0, 0, "outer", "hint", "var"); }
+  ~CMUSHclientDoc() { delete m_pCurrentLine; m_ActiveTagList.DeleteAll(); }
+  CStyle *tail() { return m_pCurrentLine->styleList.GetTail(); }
+  CAction *GetAction(CString a, CString h, CString v) {
+    if (a.IsEmpty() && h.IsEmpty() && v.IsEmpty()) return nullptr;
+    return new CAction(a, h, v);
+  }
+  CStyle *AddStyle(unsigned short, COLORREF, COLORREF, int, CString, CString, CString, CLine * = nullptr);
+  CStyle *AddStyle(unsigned short, COLORREF, COLORREF, int, CAction *, CLine * = nullptr);
+  CString MXP_GetEntity(CString &);
+  void MXP_Restore_Mode() { ++resets; }
+  void MXP_error(int, int, CString) { ++errors; MXP_Restore_Mode(); if (errorHook) errorHook(); }
+  bool MXP_StartTagScript(CString, CString arguments, CArgumentList &) {
+    ++openCalls; callbackArguments = arguments; return openHook ? openHook() : false;
+  }
+  void Run(CArgumentList &, bool paired);
+};
+@ADD_STYLE@
+@GET_ENTITY@
+@HELPERS@
+@ACTION_GUARD@
+void CMUSHclientDoc::Run(CArgumentList &ArgumentList, bool paired) {
+  int atomicElement = 0;
+  const int *pAtomicElement = &atomicElement;
+  CString strName = "test", strTag;
+  @OPENING@
+  @PREPARATION@
+  prepared = true;
+  // Model the two subsequent publication calls; preparation and AddStyle above
+  // use exact source excerpts. Tag transactions are checked by their own runner.
+  if (paired) AddStyle(iFlags | START_TAG, iForeColour, iBackColour, 0, strName, "", strTagVariable);
+  AddStyle(iFlags & STYLE_BITS, iForeColour, iBackColour, 0, strAction, strHint, strVariable);
+}
+static void plainChecks(bool baseline) {
+  for (bool paired : {false, true}) for (int length : {0, 4})
+    for (auto value : {"", "plain", "&text;", "before &text; after"}) {
+      CMUSHclientDoc d; d.tail()->iLength = length;
+      Arguments arguments{value};
+      int before = styleAllocations;
+      d.Run(arguments, paired);
+      assert(d.prepared && !d.errors && !d.openCalls);
+      assert(arguments.GetTail()->strValue == value);
+      assert(styleAllocations - before == 1 + int(paired) + int(baseline));
+      assert(d.m_pCurrentLine->styleList.GetCount() == 1 + size_t(paired) + size_t(length != 0));
+      assert(d.tail()->iFlags == 2 && d.tail()->pAction->m_strAction == "outer");
+    }
+  // Empty argument lists and repeated command tags must also remain bounded.
+  CMUSHclientDoc d; Arguments empty{}; int before = styleAllocations;
+  for (int i = 0; i < 1000; ++i) d.Run(empty, false);
+  assert(styleAllocations - before == 1000 * (baseline ? 2 : 1));
+  assert(d.m_pCurrentLine->styleList.GetCount() == 1);
+  printf("plain atomic tags: %d allocations per 1000 command tags; one retained style\n", styleAllocations - before);
+}
+static void expansionChecks() {
+  App.m_EntityMap.values["amp"] = "&";
+  for (auto entry : {pair<CString,CString>{"&amp;", "&"}, {"&#65;", "A"},
+                     {"&#x42;", "B"}, {"&same;", "&same;"},
+                     {"&amp;:&text;:&#65;", "&:&text;:A"}}) {
+    CMUSHclientDoc d; d.m_CustomEntityMap.values["same"] = "&same;";
+    Arguments args{entry.first}; int before = styleAllocations;
+    d.Run(args, false);
+    assert(d.prepared && !d.errors && args.GetTail()->strValue == entry.second);
+    assert(styleAllocations - before == 2);
+  }
+  // Error callbacks remain possible even without an open-tag callback.
+  for (auto value : {"&unknown;", "&#999;", "&#xZZ;"}) {
+    CMUSHclientDoc d; Arguments args{value}; CStyle *callbackStyle = nullptr;
+    d.errorHook = [&]{ callbackStyle = d.AddStyle(8, 3, 4, 8, "callback", "", ""); };
+    d.Run(args, true);
+    assert(d.errors == 1 && d.prepared && args.GetTail()->strValue.empty());
+    assert(callbackStyle->iFlags == 8 && callbackStyle->iLength == 8);
+    assert(callbackStyle->pAction->m_strAction == "callback");
+    assert(d.tail()->iFlags == 2 && d.tail()->pAction->m_strAction == "outer");
+  }
+  // Missing semicolons stop preparation after its diagnostic.
+  CMUSHclientDoc d; Arguments args{"&missing"}; int before = styleAllocations;
+  d.Run(args, false);
+  assert(!d.prepared && d.errors == 1 && styleAllocations == before);
+  puts("entity expansion: numeric, named, unchanged, text placeholder, and errors passed");
+}
+static void callbackChecks() {
+  for (bool entity : {false, true}) for (int mode = 0; mode < 6; ++mode) {
+    CMUSHclientDoc d; Arguments args{entity ? "&unknown;" : "plain"};
+    CStyle *callbackStyle = nullptr;
+    auto callback = [&] {
+      if (mode == 1) { delete d.m_pCurrentLine; d.m_pCurrentLine = new CLine; }
+      callbackStyle = d.AddStyle(8, 3, 4, 8, "callback", "", "");
+      if (mode == 2) d.m_ActiveTagList.AddTail(new CActiveTag{42});
+      if (mode == 3) d.m_bMXP = false;
+      if (mode == 4) ++d.m_iMXPGeneration;
+      if (mode == 5) throw runtime_error("callback failure");
+    };
+    if (entity) d.errorHook = callback;
+    else { d.m_bPluginProcessesOpenTag = true; d.openHook = [&]{ callback(); return false; }; }
+    bool threw = false;
+    try { d.Run(args, true); }
+    catch (const runtime_error &e) { threw = string(e.what()) == "callback failure"; }
+    assert(threw == (mode == 5));
+    assert(d.prepared == (mode < 3));
+    assert(callbackStyle->iFlags == 8 && callbackStyle->iLength == 8);
+    assert(callbackStyle->pAction->m_strAction == "callback");
+    if (mode < 3) assert(d.tail()->iFlags == (mode == 2 ? 8 : 2));
+    if (!entity) assert(d.openCalls == 1 && d.callbackArguments == "'plain'");
+  }
+  CMUSHclientDoc d; Arguments args{"&amp;"};
+  d.m_dispidOnMXP_OpenTag = 1; d.openHook = []{return true;};
+  d.Run(args, true);
+  assert(!d.prepared && d.openCalls == 1 && d.callbackArguments == "'&'");
+  puts("callback boundaries: output, replaced line, nested tag, disabled MXP, generation, rejection, and exceptions passed");
+}
+int main(int argc, char **argv) {
+  assert(argc == 2);
+  plainChecks(string(argv[1]) == "baseline"); expansionChecks(); callbackChecks();
+  assert(actionCount == 0 && styleCount == 0);
+}

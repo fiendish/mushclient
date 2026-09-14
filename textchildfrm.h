@@ -36,6 +36,7 @@ public:
 
 // Generated message map functions
 protected:
+	afx_msg void OnClose();
 	//{{AFX_MSG(CTextChildFrame)
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()

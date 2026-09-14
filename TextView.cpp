@@ -144,6 +144,18 @@ void CTextView::Dump(CDumpContext& dc) const
 /////////////////////////////////////////////////////////////////////////////
 // CTextView message handlers
 
+BOOL CTextView::OnCmdMsg(UINT nID, int nCode, void* pExtra,
+                         AFX_CMDHANDLERINFO* pHandlerInfo)
+  {
+  CTextDocument * pDoc = (CTextDocument *) GetDocument ();
+
+  if (!pDoc)
+    return CEditView::OnCmdMsg (nID, nCode, pExtra, pHandlerInfo);
+
+  CTextDocumentOperationGuard operationGuard (pDoc);
+  return CEditView::OnCmdMsg (nID, nCode, pExtra, pHandlerInfo);
+  }
+
 BOOL CTextView::PreCreateWindow(CREATESTRUCT& cs) 
 {
 	cs.style &= ~FWS_ADDTOTITLE;  // do not add document name to window title
@@ -186,11 +198,17 @@ void CTextView::OnInitialUpdate()
 	
   SetTheFont ();
 	
+  CBrush * pNewBrush = new CBrush (pDoc->m_backColour);
+  if (!pNewBrush->GetSafeHandle ())
+    {
+    delete pNewBrush;
+    AfxThrowResourceException ();
+    }
   if (m_backbr)
     m_backbr->DeleteObject ();
   delete m_backbr;
 
-  m_backbr = new CBrush (pDoc->m_backColour);
+  m_backbr = pNewBrush;
   m_backcolour = pDoc->m_backColour;
 
 }
@@ -698,12 +716,16 @@ bool CTextView::SetText(const char * sText)
     {
     int nLen = strlen (sText);
 
-	  LPVOID hText = LocalAlloc(LMEM_MOVEABLE, (nLen+1)*sizeof(TCHAR));
+	  HLOCAL hText = LocalAlloc(LMEM_MOVEABLE, (nLen+1)*sizeof(TCHAR));
 	  if (hText == NULL)
 		  AfxThrowMemoryException();
 
 	  LPTSTR lpszText = (LPTSTR)LocalLock(hText);
-	  ASSERT(lpszText != NULL);
+	  if (lpszText == NULL)
+      {
+      LocalFree (hText);
+      AfxThrowMemoryException ();
+      }
 
     strcpy (lpszText, sText);
 
@@ -761,10 +783,16 @@ CRect rect;
   // recreate background colour if necessary  
   if (m_backcolour != pDoc->m_backColour)
     {
+    CBrush * pNewBrush = new CBrush (pDoc->m_backColour);
+    if (!pNewBrush->GetSafeHandle ())
+      {
+      delete pNewBrush;
+      AfxThrowResourceException ();
+      }
     if (m_backbr)
       m_backbr->DeleteObject ();
     delete m_backbr;
-    m_backbr = new CBrush (pDoc->m_backColour);
+    m_backbr = pNewBrush;
     m_backcolour = pDoc->m_backColour;
     }
  
