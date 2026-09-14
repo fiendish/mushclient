@@ -1,0 +1,256 @@
+// Test boundary substitutes. Production blocks are inserted by the runner.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <list>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+using namespace std;
+using CString = string;
+using LPCTSTR = const char *;
+
+int failures = 0;
+void Check(bool value, const char *expression, int line) {
+  if (!value) {
+    ++failures;
+    cerr << "line " << line << ": check failed: " << expression << '\n';
+  }
+}
+#define CHECK(x) Check(static_cast<bool>(x), #x, __LINE__)
+#define ASSERT(x) do { if (!(x)) { CHECK(x); abort(); } } while (false)
+
+struct CException { virtual ~CException() = default; virtual void Delete() { delete this; } };
+struct CFileException : CException {};
+struct CArchiveException : CException {
+  enum { badSchema = 1 };
+  int m_cause = badSchema;
+  inline static CArchiveException *live = nullptr;
+  inline static int deleted = 0;
+  CArchiveException() { ASSERT(!live); live = this; }
+  ~CArchiveException() override { live = nullptr; ++deleted; }
+};
+struct CMemoryException : CException { void Delete() override {} } memoryError;
+bool failSnapshot = false;
+int snapshotAttempts = 0;
+template<class T> struct SnapshotAllocator : allocator<T> {
+  template<class U> struct rebind { using other = SnapshotAllocator<U>; };
+  T *allocate(size_t count) {
+    ++snapshotAttempts;
+    if (failSnapshot) throw &memoryError;
+    return allocator<T>::allocate(count);
+  }
+};
+
+enum Kind { TRIGGER, ALIAS, TIMER };
+const char *names[] = {"trigger", "alias", "timer"};
+const int XML_TRIGGERS = 1, XML_ALIASES = 2, XML_TIMERS = 4;
+const int XML_NO_PLUGINS = 8, XML_IMPORT_MAIN_FILE_ONLY = 16;
+const string ON_PLUGIN_LIST_CHANGED = "OnPluginListChanged";
+struct CTrigger {};
+struct CAlias {};
+struct CTimer {};
+struct CTriggerMap {};
+struct CAliasMap {};
+struct CTimerMap {};
+struct CTriggerArray {};
+struct CAliasArray {};
+template<class T, class M> struct COwnedSetMap { M map; };
+struct CMUSHclientDoc;
+struct CXMLLoadContext {
+  explicit CXMLLoadContext(CMUSHclientDoc *) {}
+  CTriggerMap *pTriggerMap = nullptr;
+  CTriggerArray *pTriggerArray = nullptr;
+  CAliasMap *pAliasMap = nullptr;
+  CAliasArray *pAliasArray = nullptr;
+  CTimerMap *pTimerMap = nullptr;
+};
+
+struct CScriptCallInfo {
+  CScriptCallInfo(const string &, int) {}
+};
+struct CPlugin {
+  string m_strID = "plugin";
+  long long m_iPluginInstanceNumber = 1;
+  bool m_bEnabled = true;
+  struct Callbacks { int operator[](const string &) { return 1; } } m_PluginCallbacks;
+  int deliveries = 0;
+  void ExecutePluginScript(CScriptCallInfo &) { ++deliveries; }
+};
+struct CPluginInstanceIdentity {
+  explicit CPluginInstanceIdentity(CPlugin *p)
+    : m_strID(p->m_strID), m_iPluginInstanceNumber(p->m_iPluginInstanceNumber) {}
+  string m_strID;
+  long long m_iPluginInstanceNumber;
+};
+using CPluginList = list<CPlugin *>;
+using CPluginInstanceSnapshot = vector<CPluginInstanceIdentity,
+                                      SnapshotAllocator<CPluginInstanceIdentity>>;
+struct CPluginNotesGuard { explicit CPluginNotesGuard(CMUSHclientDoc *) {} };
+struct CPluginContextGuard { CPluginContextGuard(CMUSHclientDoc *, CPlugin *) {} };
+struct Step { Kind kind; bool notify; bool fail; };
+
+struct CMUSHclientDoc {
+  bool m_bPluginListChangedPending = false;
+  bool m_bPluginListChangedDeferred = false;
+  bool m_bInPluginListChanged = false;
+  int m_iPluginListChangedDeferralDepth = 0;
+  CPluginList m_PluginList;
+  CTriggerMap m_TriggerMap;
+  CAliasMap m_AliasMap;
+  CTimerMap m_TimerMap;
+  vector<Step> steps;
+  size_t nextStep = 0;
+  int publications = 0;
+  CArchiveException *primary = nullptr;
+  void BeginPluginListChangedDeferral();
+  bool EndPluginListChangedDeferral();
+  void PluginListChanged();
+  void SendToAllPluginCallbacks(const string &);
+  void RunReplacement(Kind);
+  void SortTriggers(const set<CTrigger *> *) {}
+  void SortAliases(const set<CAlias *> *) {}
+  void RetireTrigger(CTrigger *) {}
+  void RetireAlias(CAlias *) {}
+  void RetireTimer(CTimer *) {}
+  CPlugin *GetPluginInstance(const string &id, long long instance) {
+    for (auto *p : m_PluginList)
+      if (p->m_strID == id && p->m_iPluginInstanceNumber == instance) return p;
+    return nullptr;
+  }
+  // Model a completed include and a later bad-schema error. A second step
+  // invokes another real replacement block while the outer load is deferred.
+  template<class... Args> void Load_World_XML(int &, int mask, Args...) {
+    ASSERT(nextStep < steps.size());
+    Step step = steps[nextStep++];
+    const int masks[] = {XML_TRIGGERS, XML_ALIASES, XML_TIMERS};
+    CHECK(mask == (masks[step.kind] | XML_NO_PLUGINS | XML_IMPORT_MAIN_FILE_ONLY));
+    if (step.notify) { PluginListChanged(); PluginListChanged(); }
+    if (nextStep < steps.size()) RunReplacement(steps[nextStep].kind);
+    if (step.fail) throw primary;
+  }
+};
+
+// Publication is a boundary observation, not a replacement transaction model.
+template<class T, class M> void PublishLoadedSet(
+    CMUSHclientDoc *doc, M &, M &,
+    void (CMUSHclientDoc::*)(const set<T *> *), void (CMUSHclientDoc::*)(T *)) {
+  CHECK(doc->m_PluginList.front()->deliveries == 0);
+  ++doc->publications;
+}
+
+@NOTIFICATION_METHODS@
+
+void CMUSHclientDoc::RunReplacement(Kind kind) {
+  COwnedSetMap<CTrigger, CTriggerMap> stagedTriggers;
+  CTriggerArray stagedTriggerArray;
+  COwnedSetMap<CAlias, CAliasMap> stagedAliases;
+  CAliasArray stagedAliasArray;
+  COwnedSetMap<CTimer, CTimerMap> stagedTimers;
+  int archive = 0;
+  int *ar = &archive;
+  bool bStagedReplacementPublished = false;
+  switch (kind) {
+    case TRIGGER: @TRIGGER@ break;
+    case ALIAS: @ALIAS@ break;
+    case TIMER: @TIMER@ break;
+  }
+  CHECK(bStagedReplacementPublished);
+}
+
+enum class Handler { none, archive, memory, file };
+Handler handler = Handler::none;
+const int MB_ICONEXCLAMATION = 0;
+template<class... Args> const char *TFormat(const char *format, Args...) { return format; }
+void UMessageBox(const char *message, int) {
+  handler = strstr(message, "not in the correct format") ? Handler::archive : Handler::file;
+}
+void TMessageBox(const char *, int) { handler = Handler::memory; }
+void InvokeCaller(CMUSHclientDoc &doc, Kind kind) {
+  const char *strFileName = "invalid-version.xml";
+  try { doc.RunReplacement(kind); }
+@CALLER_CATCHES@
+}
+
+int IdleDelivery(CMUSHclientDoc *pDoc) {
+  @IDLE_DELIVERY@
+  return 0; // Remaining UI idle work is outside this fixture.
+}
+
+void RunCase(const string &label, vector<Step> steps, bool caller = false,
+             bool pending = false, bool successNotificationThrows = false) {
+  const int before = failures;
+  const bool loadFails = steps.back().fail;
+  bool requested = pending;
+  for (auto step : steps) requested = requested || step.notify;
+  CPlugin plugin;
+  CMUSHclientDoc doc;
+  doc.m_PluginList.push_back(&plugin);
+  doc.steps = steps;
+  doc.m_bPluginListChangedPending = pending;
+  CArchiveException::deleted = 0;
+  if (loadFails) doc.primary = new CArchiveException;
+  snapshotAttempts = 0;
+  failSnapshot = loadFails || successNotificationThrows;
+  handler = Handler::none;
+  bool exactOriginal = false;
+  if (caller) {
+    InvokeCaller(doc, steps.front().kind);
+  } else {
+    try { doc.RunReplacement(steps.front().kind); }
+    catch (CArchiveException *e) {
+      handler = Handler::archive;
+      exactOriginal = e == doc.primary && e->m_cause == CArchiveException::badSchema;
+      e->Delete();
+    }
+    catch (CMemoryException *e) { handler = Handler::memory; e->Delete(); }
+  }
+  const Handler expected = loadFails ? Handler::archive :
+      (successNotificationThrows ? Handler::memory : Handler::none);
+  CHECK(handler == expected);
+  if (loadFails && !caller) CHECK(exactOriginal);
+  CHECK(CArchiveException::deleted == (loadFails ? 1 : 0));
+  CHECK(CArchiveException::live == nullptr);
+  CHECK(doc.publications == (loadFails ? 0 : static_cast<int>(steps.size())));
+  CHECK(doc.nextStep == steps.size());
+  CHECK(doc.m_iPluginListChangedDeferralDepth == 0);
+  CHECK(!doc.m_bInPluginListChanged);
+  const int immediate = !loadFails && requested && !successNotificationThrows ? 1 : 0;
+  CHECK(plugin.deliveries == immediate);
+  CHECK(snapshotAttempts == (loadFails ? 0 : (requested ? 1 : 0)));
+  // A diagnostic cleanup keeps deliberately broken revision runs leak-free.
+  // All ownership checks above run before this cleanup.
+  if (CArchiveException::live) CArchiveException::live->Delete();
+  failSnapshot = false;
+  const bool idleExpected = loadFails && requested;
+  CHECK(IdleDelivery(&doc) == (idleExpected ? 1 : 0));
+  CHECK(plugin.deliveries == immediate + (idleExpected ? 1 : 0));
+  CHECK(IdleDelivery(&doc) == 0);
+  CHECK(plugin.deliveries == immediate + (idleExpected ? 1 : 0));
+  // A later notification proves the document is usable after either error.
+  doc.PluginListChanged();
+  CHECK(plugin.deliveries == immediate + (idleExpected ? 1 : 0) + 1);
+  CHECK(IdleDelivery(&doc) == 0);
+  cout << "{\"case\":\"" << label << "\",\"failures\":" << failures - before << "}\n";
+}
+
+int main() {
+  for (Kind kind : {TRIGGER, ALIAS, TIMER}) {
+    string prefix = names[kind];
+    RunCase(prefix + "/original_exception", {{kind, true, true}});
+    RunCase(prefix + "/caller_deletes_original", {{kind, true, true}}, true);
+    RunCase(prefix + "/no_notification", {{kind, false, true}});
+    RunCase(prefix + "/existing_pending", {{kind, false, true}}, false, true);
+    RunCase(prefix + "/success", {{kind, true, false}});
+    RunCase(prefix + "/success_no_notification", {{kind, false, false}});
+    RunCase(prefix + "/success_notification_throws", {{kind, true, false}}, true, false, true);
+    for (Kind inner : {TRIGGER, ALIAS, TIMER}) {
+      string nested = prefix + "/nested_" + names[inner];
+      RunCase(nested + "/failure", {{kind, false, false}, {inner, true, true}});
+      RunCase(nested + "/success", {{kind, true, false}, {inner, true, false}});
+    }
+  }
+  return failures ? EXIT_FAILURE : EXIT_SUCCESS;
+}

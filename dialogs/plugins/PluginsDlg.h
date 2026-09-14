@@ -22,6 +22,8 @@
 /////////////////////////////////////////////////////////////////////////////
 // CPluginsDlg dialog
 
+class CPlugin;
+
 class CPluginsDlg : public CDialog
 {
 // Construction
@@ -43,6 +45,9 @@ public:
 	//}}AFX_DATA
 
   CMUSHclientDoc * m_pDoc;
+  __int64 m_iDocumentNumber;
+  CStringArray m_PluginIDs;
+  CArray<__int64, __int64> m_PluginInstanceNumbers;
 
   // for sorting the list
 
@@ -51,6 +56,10 @@ public:
 
   void LoadList (void);
   void EditPlugin (const CString strName);
+  CMUSHclientDoc * GetLiveDocument (void) const;
+  CPlugin * GetPluginForIndex (const int iIndex) const;
+  CPlugin * GetPluginForItem (const int nItem) const;
+  CString GetPluginIDForIndex (const int iIndex) const;
 
 // Overrides
 	// ClassWizard generated virtual function overrides

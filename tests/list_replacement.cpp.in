@@ -1,0 +1,235 @@
+// Portable collection and UI substitutes surround exact production excerpts.
+#include <algorithm>
+#include <cassert>
+#ifdef NDEBUG
+#error List replacement checks require assertions.
+#endif
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using namespace std;
+using HTREEITEM=void*; using DWORD=uintptr_t;
+using UINT=unsigned; using BOOL=bool;
+constexpr bool TRUE=true;
+constexpr int LVIS_FOCUSED=1,LVIS_SELECTED=2;
+#define ASSERT assert
+#define ASSERT_VALID(x) assert(x)
+#define RUNTIME_CLASS(x) 0
+struct CString: string {
+  static int live;
+  CString(){++live;} CString(const string& s):string(s){++live;}
+  CString(const CString& s):string(s){++live;}
+  ~CString(){--live;}
+  using string::operator=;
+  operator const char*() const {return c_str();}
+};
+int CString::live=0;
+uint64_t comparisons=0;
+struct CountLess {
+  bool operator()(CString* a,CString* b) const {++comparisons;return less<CString*>()(a,b);}
+};
+template<class It,class T> It counted_find(It first,It last,T value) {
+  for(;first!=last;++first){++comparisons;if(*first==value)return first;}
+  return last;
+}
+struct CObject {int value;bool IsKindOf(int){return true;}};
+// Each position owns its iterator state, including copies and nested traversals.
+struct POSITION {
+  map<string,CObject*>* owner=nullptr;
+  map<string,CObject*>::iterator cursor;
+  POSITION(nullptr_t=nullptr) {}
+  explicit POSITION(map<string,CObject*>& items):owner(&items),cursor(items.begin()) {
+    if(cursor==items.end())owner=nullptr;
+  }
+  explicit operator bool() const {return owner!=nullptr;}
+  bool operator==(nullptr_t) const {return owner==nullptr;}
+};
+struct ObjectMap {
+  map<string,CObject*> items;
+  uint64_t traversalSteps=0;
+  POSITION GetStartPosition(){return POSITION(items);}
+  void GetNextAssoc(POSITION& p,CString& key,CObject*& value){
+    assert(p.owner==&items && p.cursor!=items.end());
+    key=p.cursor->first;value=p.cursor->second;
+    ++p.cursor;++traversalSteps;
+    if(p.cursor==items.end())p=0;
+  }
+  bool Lookup(const CString& key,CObject*& value){auto i=items.find(key);if(i==items.end())return false;value=i->second;return true;}
+};
+// Exercise the real redraw guard with Win32 message substitutes. The
+// substitute models DefWindowProc changing WS_VISIBLE on WM_SETREDRAW.
+struct WindowState {
+  bool visible=true,redraw=true,externalDisable=false;
+  int disables=0,enables=0,invalidations=0;
+  WindowState* GetSafeHwnd(){return this;}
+};
+using HWND=WindowState*;
+constexpr int GWL_STYLE=1,WS_VISIBLE=2,WM_SETREDRAW=3,SW_HIDE=4;
+constexpr int RDW_INVALIDATE=1,RDW_ERASE=2,RDW_FRAME=4,RDW_ALLCHILDREN=8;
+constexpr bool FALSE=false;
+void* GetPropA(HWND w,const char*){return w->externalDisable?w:nullptr;}
+int GetWindowLong(HWND w,int){return w->visible?WS_VISIBLE:0;}
+void SendMessage(HWND w,int,bool on,int){w->redraw=on;w->visible=on;if(on)++w->enables;else ++w->disables;}
+void ShowWindow(HWND w,int){w->visible=false;}
+void RedrawWindow(HWND w,void*,void*,int){++w->invalidations;}
+#include "control_redraw.h"
+struct Control:WindowState {
+  vector<CString*> rows;
+  int failDataAt=-1,dataCalls=0;
+  CString* failDeletion=nullptr;
+  ~Control(){for(auto* p:rows)delete p;}
+  int GetItemCount(){return rows.size();}
+  DWORD GetItemData(int n){return reinterpret_cast<DWORD>(rows.at(n));}
+  bool SetItemData(int n,DWORD value){if(dataCalls++==failDataAt)return false;rows.at(n)=reinterpret_cast<CString*>(value);return true;}
+  bool DeleteItem(int n){if(rows.at(n) && rows.at(n)==failDeletion)return false;rows.erase(rows.begin()+n);return true;}
+  UINT GetItemState(int,int){return 0;}
+  int GetSelectionMark(){return -1;}
+  void SetItemState(int,UINT,int){}
+  void SetSelectionMark(int){}
+};
+// Tree paths are compiled but not exercised by these list tests.
+struct Tree:WindowState {
+  HTREEITEM GetRootItem(){return nullptr;}
+  HTREEITEM GetNextSiblingItem(HTREEITEM){abort();}
+  HTREEITEM GetChildItem(HTREEITEM){abort();}
+  DWORD GetItemData(HTREEITEM){abort();}
+  HTREEITEM GetParentItem(HTREEITEM){abort();}
+  bool DeleteItem(HTREEITEM){abort();}
+};
+struct lua_State {bool keep=true;};
+void lua_pushvalue(lua_State*,int){}
+void lua_pushstring(lua_State*,const char*){}
+int lua_pcall(lua_State*,int,int,int){return 0;}
+bool lua_isboolean(lua_State*,int){return true;}
+bool lua_toboolean(lua_State* L,int){return L->keep;}
+void lua_pop(lua_State*,int){}
+void AfxThrowResourceException(){throw runtime_error("resource failure");}
+struct CGenPropertyPage {
+  Control control; Control* m_ctlList=&control;
+  ObjectMap objects; ObjectMap* m_ObjectMap=&objects;
+  Tree m_cTreeCtrl; bool m_bWantTreeControl=false; int m_nUpdateNumber=0;
+  int failInsertAt=-1,failDescriptionAt=-1,insertions=0;
+  bool filterEven=false;
+  bool m_bListRedrawDisabled=false,m_bTreeRedrawDisabled=false;
+  ~CGenPropertyPage(){assert(!m_bListRedrawDisabled && !m_bTreeRedrawDisabled);assert(control.redraw && m_cTreeCtrl.redraw);}
+  lua_State state;
+  vector<CObject> items;
+  void setup(int n){items.resize(n);for(int i=0;i<n;++i){items[i].value=i;string key=to_string(i);objects.items[key]=&items[i];control.rows.push_back(new CString(key));}}
+  int AddItem(CObject*,int n,BOOL){int attempt=insertions++;if(attempt==failDescriptionAt)throw runtime_error("description failure");if(attempt==failInsertAt)return -1;control.rows.insert(control.rows.begin()+n,nullptr);return n;}
+  void SetModificationNumber(CObject*,int){}
+  void CheckParentHasChildren(HTREEITEM){abort();}
+  HTREEITEM add_tree_item(CObject*,CString*){abort();}
+  void GetFilterInfo(CObject* item,lua_State* L){L->keep=!filterEven || item->value%2==0;}
+  void LuaError(lua_State*){throw runtime_error("filter error");}
+  int add_list_item(CObject*,const CString*,int,BOOL);
+  void Reload(){bool bFiltering=filterEven;lua_State* L=&state;int iCount=0,iNotShown=0;
+@REPLACE@
+  }
+};
+@INSERT@
+void CheckPositions(){
+  ObjectMap objects;
+  assert(objects.GetStartPosition()==0);
+  POSITION empty=0;assert(!empty);
+  CObject values[3]={{0},{1},{2}};
+  for(int i=0;i<3;++i)objects.items[to_string(i)]=&values[i];
+  auto next=[&](POSITION& p,int expected){
+    CString key;CObject* value=nullptr;
+    objects.GetNextAssoc(p,key,value);
+    assert(key==to_string(expected) && value==&values[expected]);
+  };
+  POSITION first=objects.GetStartPosition();next(first,0);
+  POSITION copied=first;
+  POSITION second=objects.GetStartPosition();next(second,0);
+  next(first,1);next(copied,1);next(second,1);
+  next(first,2);assert(first==0 && copied && second);
+  next(copied,2);next(second,2);assert(copied==0 && second==0);
+  assert(objects.traversalSteps==8);
+  objects.traversalSteps=0;
+  POSITION outer=objects.GetStartPosition();
+  for(int i=0;i<3;++i){
+    next(outer,i);
+    POSITION inner=objects.GetStartPosition();
+    for(int j=0;j<3;++j)next(inner,j);
+    assert(inner==0);
+  }
+  assert(outer==0 && objects.traversalSteps==12);
+  cout<<"ObjectMap: independent, copied, and nested positions reach zero after linear traversal\n";
+}
+int main(){
+  CheckPositions();
+  for(bool visible:{false,true})for(bool fail:{false,true}){
+    WindowState w;w.visible=visible;bool disabled=false;
+    try{CControlRedrawGuard outer(&w,disabled);
+      assert(disabled && !w.redraw);
+      {CControlRedrawGuard nested(&w,disabled);assert(w.disables==1);}
+      assert(disabled && !w.redraw && !w.enables);
+      if(fail)throw runtime_error("batch failure");
+      outer.Restore();outer.Restore();
+    }catch(const runtime_error& e){assert(string(e.what())=="batch failure");}
+    assert(!disabled && w.redraw && w.visible==visible);
+    assert(w.disables==1 && w.enables==1 && w.invalidations==1);
+  }
+  for(bool external:{false,true}){
+    WindowState w;w.redraw=false;w.visible=false;w.externalDisable=external;
+    bool disabled=!external;
+    {CControlRedrawGuard batch(&w,disabled);}
+    assert(disabled==!external && !w.redraw && !w.visible);
+    assert(w.disables==0 && w.enables==0 && w.invalidations==0);
+  }
+  cout<<"Redraw: visibility, nested batches, prior disables, and exception restoration passed\n";
+  for(int n:{0,1,20})for(bool filtered:{false,true}){
+    int live=CString::live;
+    {CGenPropertyPage page;page.setup(n);auto old=page.control.rows;page.filterEven=filtered;page.Reload();
+     assert(page.control.GetItemCount()==(filtered?(n+1)/2:n));
+     for(auto* row:page.control.rows){assert(find(old.begin(),old.end(),row)==old.end());if(filtered)assert(stoi(*row)%2==0);}
+    }assert(CString::live==live);
+  }
+  cout<<"Success: empty, single, filtered, and complete replacements passed\n";
+  for(int mode:{0,1,2})for(int count:{0,1,5}){
+    int live=CString::live;
+    {CGenPropertyPage page;page.setup(10);auto old=page.control.rows;
+     if(mode==0)page.failInsertAt=count;
+     if(mode==1)page.failDescriptionAt=count;
+     if(mode==2)page.control.failDataAt=count;
+     bool caught=false;try{page.Reload();}catch(const runtime_error& e){caught=true;assert(string(e.what())==(mode==1?"description failure":"resource failure"));}
+     assert(caught && page.control.rows==old);
+     if(mode==2)assert(page.control.dataCalls==count+1);
+     assert(CString::live==live+10);
+     cout<<"Failure mode="<<mode<<" position="<<count<<" data calls="<<page.control.dataCalls<<" passed\n";
+    }assert(CString::live==live);
+  }
+  cout<<"Failure: insertion, description, and item-data failures retain old rows and propagate errors\n";
+  {CGenPropertyPage page;page.setup(3);auto old=page.control.rows;
+   page.control.failDeletion=old.back();bool caught=false;
+   try{page.Reload();}catch(const runtime_error& e){caught=string(e.what())=="resource failure";}
+   assert(caught && find(page.control.rows.begin(),page.control.rows.end(),old.back())!=page.control.rows.end());
+  }
+  assert(CString::live==0);
+  cout<<"Failure: old-row deletion error remains visible\n";
+  for(int n:{100,1000,10000}){
+    CGenPropertyPage page;page.setup(n);comparisons=0;page.Reload();
+    unsigned levels=1;for(int k=n;k>1;k/=2)++levels;
+    cout<<"rows="<<n<<" comparisons="<<comparisons<<endl;
+    assert(comparisons>0 && comparisons<64ULL*n*levels);
+    assert(page.control.GetItemCount()==n);
+    assert(page.objects.traversalSteps==static_cast<uint64_t>(n));
+    cout<<"map rows="<<n<<" traversal steps="<<page.objects.traversalSteps<<endl;
+  }
+  {CGenPropertyPage page;page.setup(10000);auto old=page.control.rows;
+   page.failDescriptionAt=5000;comparisons=0;bool caught=false;
+   try{page.Reload();}catch(const runtime_error& e){caught=string(e.what())=="description failure";}
+   assert(caught && page.control.rows==old && comparisons>0 && comparisons<64ULL*10000*14);
+   cout<<"large rollback comparisons="<<comparisons<<endl;
+   assert(page.objects.traversalSteps==10000);
+   cout<<"map rollback traversal steps="<<page.objects.traversalSteps<<endl;
+  }
+  assert(CString::live==0);
+  cout<<"Large-list comparison bounds and ownership checks passed\n";
+}
