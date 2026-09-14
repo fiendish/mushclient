@@ -37,7 +37,8 @@ def run(source, output, flags):
                        '-DTHROW_AFTER_CALLBACK=' + str(throws),
                        '-DNESTED_READ=' + str(nested), str(cpp), '-o', str(binary)] + flags
             subprocess.run(command, check=True)
-            result = subprocess.run([str(binary)], text=True, capture_output=True)
+            result = subprocess.run([str(binary)], text=True, capture_output=True,
+                                    timeout=30)
             binary.with_suffix('.log').write_text(result.stdout + result.stderr)
             print(result.stdout + result.stderr, end='')
             result.check_returncode()
