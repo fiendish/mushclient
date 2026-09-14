@@ -4374,10 +4374,12 @@ if (!dc.CreateCompatibleDC (NULL))
         CView* pView = GetNextView(pos);
         if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
           pView->SendMessage (WM_SETFONT,
-                              (WPARAM) m_input_font->m_hObject,
+                              (WPARAM) (m_input_font ? m_input_font->m_hObject : NULL),
                               MAKELPARAM (TRUE, 0));
         }
       delete pNewInputFont;
+      if (!m_input_font)
+        throw;
       for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
         {
         CView* pView = GetNextView(pos);
