@@ -1,0 +1,288 @@
+#ifdef NDEBUG
+#error Monitor lifetime tests require assertions; do not define NDEBUG.
+#endif
+#include <atomic>
+#include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cerrno>
+#include <functional>
+#include <mutex>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+using namespace std::chrono_literals;
+#define __int64 long long
+#define __stdcall
+using DWORD = unsigned long;
+using LONG = int;
+using UINT = unsigned;
+using BOOL = int;
+using WPARAM = uintptr_t;
+using LPARAM = intptr_t;
+using LRESULT = intptr_t;
+using HWND = void*;
+constexpr BOOL TRUE=1, FALSE=0;
+constexpr unsigned MB_OK=0, MB_ICONERROR=16, MB_TASKMODAL=8192;
+constexpr DWORD WAIT_OBJECT_0=0, WAIT_TIMEOUT=258, WAIT_FAILED=0xffffffff;
+constexpr unsigned FILE_NOTIFY_CHANGE_LAST_WRITE=16, ERROR_NOT_ENOUGH_MEMORY=8;
+constexpr int THREAD_PRIORITY_IDLE=-15;
+constexpr UINT WM_USER_FILE_CONTENTS_CHANGED=1002, WM_USER_SCRIPT_FILE_CONTENTS_CHANGED=1001;
+struct Handle {
+    enum Kind { event, thread, change } kind;
+    std::atomic<bool> signaled{false}, done{false};
+    bool closed=false;
+    std::thread worker;
+    explicit Handle(Kind k):kind(k){}
+};
+using HANDLE=Handle*;
+#define INVALID_HANDLE_VALUE ((HANDLE)(intptr_t)-1)
+std::vector<HANDLE> handles;
+std::mutex handleMutex, setupMutex, queueMutex;
+std::condition_variable setupCV;
+bool blockSetup=false, releaseSetup=false;
+std::atomic<int> setupCalls{0}, waitCalls{0}, postCalls{0};
+std::atomic<bool> failSet{false}, failWait{false}, failFirst{false}, failNext{false}, failPost{false};
+bool failEvent=false, failStart=false, failClose=false, failChangeClose=false;
+std::atomic<bool> holdWorkerStart{false};
+std::vector<std::string> errors;
+std::vector<std::pair<UINT,WPARAM>> queue;
+HANDLE makeHandle(Handle::Kind kind) {
+    auto h = new Handle(kind);
+    std::lock_guard<std::mutex> lock(handleMutex);
+    handles.push_back(h);
+    return h;
+}
+DWORD GetLastError(){return 123;}
+const auto uiThread = std::this_thread::get_id();
+std::function<void()> dialogHook;
+int MessageBoxA(HWND,const char* s,const char*,unsigned){
+    assert(std::this_thread::get_id()==uiThread);
+    errors.emplace_back(s);
+    if(dialogHook){auto hook=dialogHook;dialogHook=nullptr;hook();}
+    return 1;
+}
+LONG InterlockedCompareExchange(volatile LONG* p,LONG desired,LONG expected){
+    __atomic_compare_exchange_n(p,&expected,desired,false,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);return expected;
+}
+LONG InterlockedExchange(volatile LONG* p,LONG v){return __atomic_exchange_n(p,v,__ATOMIC_SEQ_CST);}
+HANDLE CreateEvent(void*,BOOL manual,BOOL initial,void*){
+    assert(manual && !initial); if(failEvent)return nullptr;return makeHandle(Handle::event);
+}
+BOOL SetEvent(HANDLE h){assert(h && !h->closed);if(failSet)return FALSE;h->signaled=true;return TRUE;}
+uintptr_t _beginthreadex(void*,unsigned,unsigned(*fn)(void*),void* p,unsigned flags,void*){
+    assert(flags==0);if(failStart){errno=EAGAIN;return 0;}
+    HANDLE h=makeHandle(Handle::thread);
+    h->worker=std::thread([=]{while(holdWorkerStart)std::this_thread::sleep_for(1ms);fn(p);h->done=true;});return (uintptr_t)h;
+}
+BOOL SetThreadPriority(HANDLE,int){return TRUE;}
+HANDLE FindFirstChangeNotification(char* path,BOOL recursive,unsigned filter){
+    assert(std::string(path)=="C:\\files");assert(recursive && filter==FILE_NOTIFY_CHANGE_LAST_WRITE);
+    std::unique_lock<std::mutex> lock(setupMutex);
+    ++setupCalls;
+    if(blockSetup)setupCV.wait(lock,[]{return releaseSetup;});
+    if(failFirst)return INVALID_HANDLE_VALUE;
+    return makeHandle(Handle::change);
+}
+DWORD WaitForMultipleObjects(unsigned n,HANDLE* h,BOOL all,DWORD timeout){
+    assert(n==2 && !all && timeout>0 && timeout<=250);
+    assert(h[0]->kind==Handle::event && h[1]->kind==Handle::change);
+    assert(!h[0]->closed && !h[1]->closed);++waitCalls;
+    if(h[0]->signaled)return WAIT_OBJECT_0;
+    if(h[1]->signaled.exchange(false))return WAIT_OBJECT_0+1;
+    std::this_thread::sleep_for(1ms);return WAIT_TIMEOUT;
+}
+DWORD WaitForSingleObject(HANDLE h,DWORD timeout){
+    assert(timeout==0 && h->kind==Handle::thread && !h->closed);
+    if(failWait)return WAIT_FAILED;
+    return h->done?WAIT_OBJECT_0:WAIT_TIMEOUT;
+}
+BOOL CloseHandle(HANDLE h){
+    assert(h && !h->closed);
+    if(h->kind==Handle::thread)assert(h->done);
+    if(failClose)return FALSE;
+    if(h->worker.joinable())h->worker.join();h->closed=true;return TRUE;
+}
+BOOL FindCloseChangeNotification(HANDLE h){
+    assert(h && !h->closed && h->kind==Handle::change);
+    if(failChangeClose)return FALSE;h->closed=true;return TRUE;
+}
+BOOL FindNextChangeNotification(HANDLE h){assert(!h->closed);return !failNext;}
+BOOL PostMessage(HWND,UINT msg,WPARAM payload,LPARAM){
+    ++postCalls;if(failPost)return FALSE;
+    std::lock_guard<std::mutex> lock(queueMutex);queue.emplace_back(msg,payload);return TRUE;
+}
+struct CException {virtual ~CException()=default;virtual void Delete(){delete this;}};
+std::atomic<int> exceptionsDeleted{0};
+struct CMemoryException:CException {void Delete()override{++exceptionsDeleted;delete this;}};
+[[noreturn]] void AfxThrowResourceException(){throw std::runtime_error("resource");}
+std::atomic<int> allocationFailure{0};
+void* notificationAlloc(std::size_t n){
+    int mode=allocationFailure.exchange(0);
+    if(mode==1)throw new CMemoryException;
+    if(mode==2)throw std::bad_alloc();
+    return ::operator new(n);
+}
+// Exercise the actual plain-new call with DEBUG_NEW's extra arguments.
+void* operator new(std::size_t n,const char*,int){return notificationAlloc(n);}
+void operator delete(void* p,const char*,int)noexcept{::operator delete(p);}
+@NOTIFICATION@
+using POSITION=std::size_t;
+struct CMUSHclientDoc {__int64 m_iUniqueDocumentNumber=11,m_iMonitorToken=0;bool m_bScriptFileChangedPending=false;};
+struct CTextDocument {__int64 m_iTextDocumentNumber=22,m_iMonitorToken=0;bool m_bFileChangedPending=false;};
+struct DocTemplate {
+    std::vector<void*> docs;
+    POSITION GetFirstDocPosition(){return docs.empty()?0:1;}
+    void* GetNextDoc(POSITION& pos){auto p=docs[pos-1];pos=pos==docs.size()?0:pos+1;return p;}
+} worlds,texts;
+struct AppStub {
+    __int64 next=1;
+    DocTemplate *m_pWorldDocTemplate=&worlds,*m_pNormalDocTemplate=&texts;
+    __int64 GetUniqueNumber(){return next++;}
+} App;
+struct CMainFrame {
+    HWND GetSafeHwnd(){return this;}
+    LRESULT OnScriptFileContentsChanged(WPARAM,LPARAM);
+    LRESULT OnTextFileContentsChanged(WPARAM,LPARAM);
+} Frame;
+#ifdef _DEBUG
+#define DEBUG_NEW new(__FILE__,__LINE__)
+#define new DEBUG_NEW
+#endif
+@PRODUCTION@
+#ifdef _DEBUG
+#undef new
+#endif
+@HANDLERS@
+
+template<class F> void until(F predicate){
+    auto deadline=std::chrono::steady_clock::now()+3s;
+    while(!predicate()){
+        if(std::chrono::steady_clock::now()>deadline)throw std::runtime_error("test timed out");
+        std::this_thread::sleep_for(1ms);
+    }
+}
+void unblock(){
+    {std::lock_guard<std::mutex> lock(setupMutex);releaseSetup=true;blockSetup=false;}
+    setupCV.notify_all();
+}
+void collectAll(){until([]{CollectMonitoringThreads();return monitors==nullptr;});}
+__int64 start(UINT message=WM_USER_FILE_CONTENTS_CHANGED,__int64 doc=22){
+    return CreateMonitoringThread("C:\\files\\test.lua",doc,message);
+}
+void dispatch(){
+    std::vector<std::pair<UINT,WPARAM>> pending;
+    {std::lock_guard<std::mutex> lock(queueMutex);pending.swap(queue);}
+    for(auto item:pending)
+        if(item.first==WM_USER_FILE_CONTENTS_CHANGED)Frame.OnTextFileContentsChanged(item.second,0);
+        else Frame.OnScriptFileContentsChanged(item.second,0);
+}
+int main(){
+    CTextDocument text;CMUSHclientDoc world;texts.docs={&text};worlds.docs={&world};
+    // Stop before worker entry avoids setup entirely.
+    holdWorkerStart=true;auto early=start();int earlyCalls=setupCalls;
+    StopMonitoringThread(early);holdWorkerStart=false;collectAll();assert(setupCalls==earlyCalls);
+    // Setup remains blocked while Stop returns and collection refuses to free it.
+    blockSetup=true;int initialSetup=setupCalls;
+    text.m_iMonitorToken=start();auto old=monitors;auto oldToken=text.m_iMonitorToken;
+    until([&]{return setupCalls>initialSetup;});
+    StopMonitoringThread(text.m_iMonitorToken);
+    assert(text.m_iMonitorToken==0);
+    // Setup can resume only after unblock(). The runner times out if Stop waits.
+    {std::lock_guard<std::mutex> lock(setupMutex);assert(!releaseSetup);}
+    assert(!old->thread->done);
+    CollectMonitoringThreads();assert(monitors==old && !old->stopEvent->closed);
+    // A replacement gets a fresh event and token while the old worker is blocked.
+    {std::lock_guard<std::mutex> lock(setupMutex);blockSetup=false;}
+    text.m_iMonitorToken=start();auto current=monitors;
+    assert(current!=old && current->token!=oldToken && current->stopEvent!=old->stopEvent);
+    assert(!current->stopEvent->signaled && old->stopEvent->signaled);
+    int beforeWait=waitCalls;until([&]{return waitCalls>beforeWait;});
+    Frame.OnTextFileContentsChanged((WPARAM)new CFileChangeNotification{22,oldToken},0);
+    assert(!text.m_bFileChangedPending);
+    Frame.OnTextFileContentsChanged((WPARAM)new CFileChangeNotification{999,current->token},0);
+    assert(!text.m_bFileChangedPending);
+    Frame.OnTextFileContentsChanged((WPARAM)new CFileChangeNotification{22,0},0);
+    assert(!text.m_bFileChangedPending);
+    // Actual worker notification carries both identities.
+    int beforePost=postCalls;current->change->signaled=true;
+    until([&]{return postCalls>beforePost;});
+    until([]{std::lock_guard<std::mutex> lock(queueMutex);return !queue.empty();});
+    dispatch();assert(text.m_bFileChangedPending);
+    // WAIT_FAILED retains all ownership and reports only once across passes.
+    failWait=true;std::size_t beforeErrors=errors.size();
+    CollectMonitoringThreads();CollectMonitoringThreads();
+    assert(errors.size()==beforeErrors+2 && !old->stopEvent->closed && !current->stopEvent->closed);
+    failWait=false;unblock();until([&]{return old->thread->done.load();});
+    beforePost=postCalls;CollectMonitoringThreads();assert(monitors==current && current->next==nullptr);
+    assert(postCalls==beforePost); // Stopped during setup: no notification.
+    // Failed SetEvent is bounded by the finite worker wait and atomic stop flag.
+    failSet=true;StopMonitoringThread(text.m_iMonitorToken);failSet=false;
+    until([&]{return current->thread->done.load();});
+    auto retainedEvent=current->stopEvent;auto retainedThread=current->thread;auto retainedChange=current->change;
+    failClose=true;failChangeClose=true;beforeErrors=errors.size();
+    CollectMonitoringThreads();CollectMonitoringThreads();CollectMonitoringThreads();CollectMonitoringThreads();
+    assert(monitors==current && errors.size()==beforeErrors+4);
+    assert(!retainedEvent->closed && !retainedThread->closed && !retainedChange->closed);
+    failClose=false;CollectMonitoringThreads();assert(monitors==current);
+    assert(retainedEvent->closed && retainedThread->closed && !retainedChange->closed);
+    failChangeClose=false;collectAll();assert(retainedChange->closed);
+    // Startup failure keeps a failed-close event registered until a later retry.
+    failStart=true;failClose=true;
+    try{start();assert(false);}catch(const std::runtime_error&){}
+    assert(monitors && monitors->stopEvent && !monitors->thread);
+    failStart=false;failClose=false;collectAll();
+    failEvent=true;try{start();assert(false);}catch(const std::runtime_error&){}
+    failEvent=false;collectAll();assert(!monitors);
+    // Setup failure, rearm failure, and post failure remain observable.
+    failFirst=true;auto token=start();until([]{return monitors->thread->done.load();});
+    collectAll();failFirst=false;StopMonitoringThread(token);
+    token=start(WM_USER_SCRIPT_FILE_CONTENTS_CHANGED,11);world.m_iMonitorToken=token;
+    current=monitors;beforeWait=waitCalls;until([&]{return waitCalls>beforeWait;});
+    failNext=true;current->change->signaled=true;until([&]{return current->thread->done.load();});
+    dispatch();assert(world.m_bScriptFileChangedPending);failNext=false;
+    StopMonitoringThread(world.m_iMonitorToken);collectAll();world.m_bScriptFileChangedPending=false;
+    Frame.OnScriptFileContentsChanged((WPARAM)new CFileChangeNotification{11,token},0);
+    assert(!world.m_bScriptFileChangedPending);
+    token=start();current=monitors;beforeWait=waitCalls;until([&]{return waitCalls>beforeWait;});
+    failPost=true;beforePost=postCalls;current->change->signaled=true;
+    until([&]{return postCalls>beforePost;});
+    beforeErrors=errors.size();
+    until([&]{CollectMonitoringThreads();return errors.size()>beforeErrors;});
+    assert(!current->thread->done && errors.back().find("PostMessage")!=std::string::npos);
+    failPost=false;beforePost=postCalls;current->change->signaled=true;
+    until([&]{return postCalls>beforePost;});
+    until([]{std::lock_guard<std::mutex> lock(queueMutex);return !queue.empty();});
+    // A successful retry must not hide a later terminal rearm failure.
+    beforeWait=waitCalls;until([&]{return waitCalls>beforeWait;});
+    assert(!current->thread->done);
+    beforeErrors=errors.size();
+    failNext=true;current->change->signaled=true;
+    until([&]{return current->thread->done.load();});
+    collectAll();failNext=false;
+    assert(errors.size()==beforeErrors+1);
+    assert(errors.back().find("FindNextChangeNotification")!=std::string::npos);
+    StopMonitoringThread(token);
+#ifdef _DEBUG
+    // Both MFC pointer exceptions and standard allocation errors are contained.
+    for(int mode: {1,2}){
+        token=start();current=monitors;beforeWait=waitCalls;until([&]{return waitCalls>beforeWait;});
+        allocationFailure=mode;current->change->signaled=true;
+        until([&]{return current->thread->done.load();});StopMonitoringThread(token);collectAll();
+    }
+    assert(exceptionsDeleted==1);
+#endif
+    dispatch();
+    // Modal error handling may recursively collect and create/stop monitors.
+    failFirst=true;token=start();until([]{return monitors->thread->done.load();});
+    failFirst=false;
+    dialogHook=[]{auto nested=start();StopMonitoringThread(nested);collectAll();};
+    CollectMonitoringThreads();assert(!dialogHook);collectAll();
+    for(auto h:handles){assert(h->closed && !h->worker.joinable());delete h;}
+    puts("PASS: blocked setup, independent generations, stale notifications, wait failure, stop fallback, cleanup retries, startup and worker failures");
+}

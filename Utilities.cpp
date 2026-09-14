@@ -135,21 +135,20 @@ void FixFont (ptrCFont & pFont,
               const DWORD iCharset)
   {
 
-   delete pFont;         // get rid of old font
-
-   pFont = new CFont;    // create new font
-
-   if (pFont)
-    {
+   CFont * pNewFont = new CFont;    // create new font
 
     CDC dc;
 
-    dc.CreateCompatibleDC (NULL);
+    if (!dc.CreateCompatibleDC (NULL))
+      {
+      delete pNewFont;
+      AfxThrowResourceException ();
+      }
 
      int lfHeight = -MulDiv(iSize,
                     dc.GetDeviceCaps(LOGPIXELSY), 72);
 
-     pFont->CreateFont(lfHeight, // int nHeight,
+     if (!pNewFont->CreateFont(lfHeight, // int nHeight,
             0, // int nWidth,
             0, // int nEscapement,
             0, // int nOrientation,
@@ -162,21 +161,26 @@ void FixFont (ptrCFont & pFont,
             0, // BYTE nClipPrecision,
             0, // BYTE nQuality,
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,
-            strName);// LPCTSTR lpszFacename );
+            strName)) // LPCTSTR lpszFacename );
+       {
+       delete pNewFont;
+       AfxThrowResourceException ();
+       }
+
+      CFont * pOldFont = pFont;
+      pFont = pNewFont;
 
       // Get the metrics of the font.
 
 //      dc.SelectObject(pFont);
 
       editctrl.SetFont (pFont);
+      delete pOldFont;         // get rid of old font
       /*
       editctrl.SendMessage (WM_SETFONT,
                                    (WPARAM) pFont->m_hObject,
                                    MAKELPARAM (TRUE, 0));
       */
-     }  // end of having a font to select
-
-
   }   // end of FixFont
 
 
@@ -195,6 +199,11 @@ int i;
     // look for escape sequences ...
     if (c == '\\')
       {
+      if (p [1] == 0)
+        {
+        *pNew++ = c;
+        break;
+        }
       c = *(++p);
       switch (c)
         {
@@ -235,6 +244,15 @@ int i;
   return strDest;
 
 } // end of FixupEscapeSequences
+
+void SetFileDialogFileName (CFileDialog & dialog, CString & buffer,
+                            const CString & initialName)
+  {
+  buffer = initialName;
+  int iBufferLength = MAX (_MAX_PATH, buffer.GetLength () + 1);
+  dialog.m_ofn.nMaxFile = iBufferLength;
+  dialog.m_ofn.lpstrFile = buffer.GetBuffer (iBufferLength);
+  }
 
 
 
@@ -3345,7 +3363,20 @@ extern char file_browsing_dir [_MAX_PATH];
 void ChangeToFileBrowsingDirectory ()
   {
 
-  _chdir(file_browsing_dir);
+  if (_chdir(file_browsing_dir) != 0)
+    {
+    int iError = errno;
+    char strFailedDirectory [_MAX_PATH];
+    strcpy (strFailedDirectory, file_browsing_dir);
+
+    // Keep the error visible, but use a valid directory on the next attempt.
+    if (_chdir (working_dir) != 0)
+      AfxThrowFileException (CFileException::genericException, errno,
+                             working_dir);
+    strcpy (file_browsing_dir, working_dir);
+    AfxThrowFileException (CFileException::genericException, iError,
+                           strFailedDirectory);
+    }
 
   }  // end of ChangeToFileBrowsingDirectory
 
@@ -3354,18 +3385,30 @@ void ChangeToStartupDirectory ()
 
 // first, remember the file_browsing directory
 
-  _getdcwd (0, file_browsing_dir, sizeof (file_browsing_dir) - 1);
+  char strCurrentDirectory [_MAX_PATH];
+  if (!_getdcwd (0, strCurrentDirectory, sizeof (strCurrentDirectory) - 1))
+    {
+    int iError = errno;
+    if (_chdir (working_dir) != 0)
+      AfxThrowFileException (CFileException::genericException, errno,
+                             working_dir);
+    AfxThrowFileException (CFileException::genericException, iError);
+    }
 
 // make sure directory name ends in a slash
 
-  file_browsing_dir [sizeof (file_browsing_dir) - 2] = 0;
+  strCurrentDirectory [sizeof (strCurrentDirectory) - 2] = 0;
 
-  if (file_browsing_dir [strlen (file_browsing_dir) - 1] != '\\')
-    strcat (file_browsing_dir, "\\");
+  if (strCurrentDirectory [strlen (strCurrentDirectory) - 1] != '\\')
+    strcat (strCurrentDirectory, "\\");
+
+  strcpy (file_browsing_dir, strCurrentDirectory);
 
 
   // now change back to startup directory
-  _chdir(working_dir);
+  if (_chdir(working_dir) != 0)
+    AfxThrowFileException (CFileException::genericException, errno,
+                           working_dir);
 
   } // end of ChangeToStartupDirectory
 
