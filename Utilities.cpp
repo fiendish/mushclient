@@ -3380,7 +3380,9 @@ void ChangeToStartupDirectory ()
   if (!_getdcwd (0, strCurrentDirectory, sizeof (strCurrentDirectory) - 1))
     {
     int iError = errno;
-    _chdir (working_dir);
+    if (_chdir (working_dir) != 0)
+      AfxThrowFileException (CFileException::genericException, errno,
+                             working_dir);
     AfxThrowFileException (CFileException::genericException, iError);
     }
 
