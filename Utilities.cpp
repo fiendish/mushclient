@@ -3070,6 +3070,7 @@ unsigned char header [8];
   int png_transforms = PNG_TRANSFORM_STRIP_16 |    // Strip 16-bit samples to 8 bits
                        PNG_TRANSFORM_PACKING |     // Expand 1, 2 and 4-bit samples to bytes
                        PNG_TRANSFORM_EXPAND  |     // expand out to 8 bits if less
+                       PNG_TRANSFORM_GRAY_TO_RGB | // convert grayscale samples to RGB
                        PNG_TRANSFORM_BGR;          // Flip RGB to BGR, RGBA to BGRA
 
   // read the file
@@ -3108,7 +3109,21 @@ unsigned char header [8];
   hbmp = CreateDIBSection(NULL, &bmiB, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
 
   if (!hbmp)
+    {
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+    fclose(fp);
     return eUnableToLoadImage;
+    }
+
+  png_size_t rowBytes = png_get_rowbytes (png_ptr, info_ptr);
+  if (rowBytes > (png_size_t) bpl)
+    {
+    DeleteObject (hbmp);
+    hbmp = NULL;
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+    fclose(fp);
+    return eUnableToLoadImage;
+    }
 
   long row;
   unsigned char * p = pB;
@@ -3117,7 +3132,10 @@ unsigned char header [8];
 
   png_uint_32 iHeight = png_get_image_height (png_ptr, info_ptr);
   for (row = 0; row < iHeight; row++, p += bpl)
-     memcpy (p, row_pointers [iHeight - row - 1], bpl);
+    {
+    memset (p, 0, bpl);
+    memcpy (p, row_pointers [iHeight - row - 1], rowBytes);
+    }
 
   // done with data
   png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
@@ -3219,6 +3237,8 @@ long LoadPngMemory (unsigned char * Buffer, const size_t Length, HBITMAP & hbmp,
 
   int png_transforms = PNG_TRANSFORM_STRIP_16 |    // Strip 16-bit samples to 8 bits
                        PNG_TRANSFORM_PACKING |     // Expand 1, 2 and 4-bit samples to bytes
+                       PNG_TRANSFORM_EXPAND |      // expand palettes and low-bit samples
+                       PNG_TRANSFORM_GRAY_TO_RGB | // convert grayscale samples to RGB
                        PNG_TRANSFORM_BGR;          // Flip RGB to BGR, RGBA to BGRA
 
 
@@ -3261,7 +3281,19 @@ long LoadPngMemory (unsigned char * Buffer, const size_t Length, HBITMAP & hbmp,
   hbmp = CreateDIBSection(NULL, &bmiB, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
 
   if (!hbmp)
+    {
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
     return eUnableToLoadImage;
+    }
+
+  png_size_t rowBytes = png_get_rowbytes (png_ptr, info_ptr);
+  if (rowBytes > (png_size_t) bpl)
+    {
+    DeleteObject (hbmp);
+    hbmp = NULL;
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+    return eUnableToLoadImage;
+    }
 
   long row;
   unsigned char * p = pB;
@@ -3269,7 +3301,10 @@ long LoadPngMemory (unsigned char * Buffer, const size_t Length, HBITMAP & hbmp,
   // have to reverse row order
   png_uint_32 iHeight = png_get_image_height (png_ptr, info_ptr);
   for (row = 0; row < iHeight; row++, p += bpl)
-     memcpy (p, row_pointers [iHeight - row - 1], bpl);
+    {
+    memset (p, 0, bpl);
+    memcpy (p, row_pointers [iHeight - row - 1], rowBytes);
+    }
 
   // done with data
   png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
