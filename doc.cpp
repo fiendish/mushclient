@@ -4360,6 +4360,12 @@ if (!dc.CreateCompatibleDC (NULL))
       }
     catch (...)
       {
+      // A layout callback can replace this font reentrantly.
+      if (m_input_font != pNewInputFont)
+        {
+        delete pOldInputFont;
+        throw;
+        }
       m_input_font = pOldInputFont;
       m_InputFontHeight = iOldInputFontHeight;
       m_InputFontWidth = iOldInputFontWidth;
