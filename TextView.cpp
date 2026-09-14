@@ -144,6 +144,18 @@ void CTextView::Dump(CDumpContext& dc) const
 /////////////////////////////////////////////////////////////////////////////
 // CTextView message handlers
 
+BOOL CTextView::OnCmdMsg(UINT nID, int nCode, void* pExtra,
+                         AFX_CMDHANDLERINFO* pHandlerInfo)
+  {
+  CTextDocument * pDoc = (CTextDocument *) GetDocument ();
+
+  if (!pDoc)
+    return CEditView::OnCmdMsg (nID, nCode, pExtra, pHandlerInfo);
+
+  CTextDocumentOperationGuard operationGuard (pDoc);
+  return CEditView::OnCmdMsg (nID, nCode, pExtra, pHandlerInfo);
+  }
+
 BOOL CTextView::PreCreateWindow(CREATESTRUCT& cs) 
 {
 	cs.style &= ~FWS_ADDTOTITLE;  // do not add document name to window title

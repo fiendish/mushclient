@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "MUSHclient.h"
+#include "dialogs\ProgDlg.h"
 
 #include "doc.h"
 #include "childfrm.h"
@@ -135,8 +136,15 @@ BOOL CChildFrame::PreCreateWindow(CREATESTRUCT& cs)
 
 void CChildFrame::OnClose() 
 {
-
-  
+  if (m_pDoc && (CProgressDlg::IsPumpingMessages () ||
+                 m_pDoc->m_iActiveProgressOperations != 0))
+    {
+    MSG msg = {};
+    msg.hwnd = GetSafeHwnd ();
+    msg.message = WM_CLOSE;
+    App.DeferMessageUntilIdle (msg, m_pDoc->m_iUniqueDocumentNumber);
+    return;
+    }
 	CMDIChildWnd::OnClose();
 }
 
