@@ -26,7 +26,8 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 IMPLEMENT_DYNAMIC(CWorldSocket, CAsyncSocket)
 
-// Compare identities before accessing an object saved across a callback.
+// Compare saved addresses, but read identity through the current socket pointer.
+// A callback can destroy the old socket and reuse its address.
 static bool IsLiveWorldSocket (const CMUSHclientDoc * pDoc,
                                 const __int64 iDocumentNumber,
                                 const CWorldSocket * pSocket,
@@ -39,7 +40,7 @@ static bool IsLiveWorldSocket (const CMUSHclientDoc * pDoc,
     if (pLiveDoc == pDoc &&
         pLiveDoc->m_iUniqueDocumentNumber == iDocumentNumber)
       return pLiveDoc->m_pSocket == pSocket &&
-             pSocket->m_iSocketNumber == iSocketNumber;
+             pLiveDoc->m_pSocket->m_iSocketNumber == iSocketNumber;
     }
   return false;
   }

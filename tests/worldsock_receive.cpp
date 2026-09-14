@@ -463,18 +463,21 @@ static void bufferedReadCases() {
     frame.OnTimer(1);assert(f.socket.m_bBufferedReadPending);
     assert(frame.fallbacks==1 && frame.baseTimers==1);
   }
-  {
+  for (bool fail : {false, true}) {
     Fixture f; CMainFrame frame; SSL ssl{2};
     auto socket=std::make_unique<CWorldSocket>(&f.doc);f.doc.m_pSocket=socket.get();
     f.doc.m_pSSL=&ssl;f.doc.m_bSSL_Connected=true;
     auto oldId=socket->m_iSocketNumber;
     f.doc.receive=[&]{
-      // Model allocator address reuse. The replacement has a distinct identity.
-      auto *where=socket.get();where->~CWorldSocket();new(where) CWorldSocket(&f.doc);
-      throw &f.failure;
+      // Model allocator address reuse. Publish the pointer to the new object.
+      auto *where=socket.release();where->~CWorldSocket();
+      socket.reset(new(where) CWorldSocket(&f.doc));
+      f.doc.m_pSocket=socket.get();
+      if(fail)throw &f.failure;
     };
     bool caught=false;try{socket->OnReceive(0);}catch(ReceiveFailure *e){assert(e==&f.failure);caught=true;}
-    assert(caught && socket->m_iSocketNumber!=oldId && !socket->m_bBufferedReadPending && !socket->m_bInReceive);
+    assert(caught==fail && socket->m_iSocketNumber!=oldId && !socket->m_bBufferedReadPending && !socket->m_bInReceive);
+    assert(socket->baseCalls==0);
     frame.OnTimer(1);f.doc.m_pSocket=nullptr;
   }
   std::cout << "PASS: fallback deletion and same-address socket replacement do not reuse pending state\n";
