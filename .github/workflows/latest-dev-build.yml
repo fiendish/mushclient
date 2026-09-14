@@ -32,6 +32,15 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
 
+    - name: Check progress message dispatch
+      shell: cmd
+      run: |
+        for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars32.bat"
+        if errorlevel 1 exit /b %errorlevel%
+        set "CXX=cl /MD /DNDEBUG"
+        if "${{ matrix.configuration }}"=="Debug" set "CXX=cl /MDd /D_DEBUG"
+        python tests/check_progress_messages.py --native-windows
+
     - name: Build solution
       run: msbuild /m /p:Configuration=${{ matrix.configuration }} /p:Platform=Win32 /p:PreferredToolArchitecture=x86 /p:BuildProjectReferences=true /verbosity:normal /p:PRE_RELEASE=PRE_RELEASE ${{ env.SOLUTION_FILE_PATH }}
 
