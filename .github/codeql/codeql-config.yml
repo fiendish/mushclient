@@ -1,0 +1,5 @@
+name: MUSHclient CodeQL configuration
+
+paths-ignore:
+  # This file is an XML wrapper for JScript constants.
+  - plugins/constants.js
