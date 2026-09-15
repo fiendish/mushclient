@@ -135,21 +135,20 @@ void FixFont (ptrCFont & pFont,
               const DWORD iCharset)
   {
 
-   delete pFont;         // get rid of old font
-
-   pFont = new CFont;    // create new font
-
-   if (pFont)
-    {
+   CFont * pNewFont = new CFont;    // create new font
 
     CDC dc;
 
-    dc.CreateCompatibleDC (NULL);
+    if (!dc.CreateCompatibleDC (NULL))
+      {
+      delete pNewFont;
+      AfxThrowResourceException ();
+      }
 
      int lfHeight = -MulDiv(iSize,
                     dc.GetDeviceCaps(LOGPIXELSY), 72);
 
-     pFont->CreateFont(lfHeight, // int nHeight,
+     if (!pNewFont->CreateFont(lfHeight, // int nHeight,
             0, // int nWidth,
             0, // int nEscapement,
             0, // int nOrientation,
@@ -162,21 +161,26 @@ void FixFont (ptrCFont & pFont,
             0, // BYTE nClipPrecision,
             0, // BYTE nQuality,
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,
-            strName);// LPCTSTR lpszFacename );
+            strName)) // LPCTSTR lpszFacename );
+       {
+       delete pNewFont;
+       AfxThrowResourceException ();
+       }
+
+      CFont * pOldFont = pFont;
+      pFont = pNewFont;
 
       // Get the metrics of the font.
 
 //      dc.SelectObject(pFont);
 
       editctrl.SetFont (pFont);
+      delete pOldFont;         // get rid of old font
       /*
       editctrl.SendMessage (WM_SETFONT,
                                    (WPARAM) pFont->m_hObject,
                                    MAKELPARAM (TRUE, 0));
       */
-     }  // end of having a font to select
-
-
   }   // end of FixFont
 
 
@@ -195,6 +199,11 @@ int i;
     // look for escape sequences ...
     if (c == '\\')
       {
+      if (p [1] == 0)
+        {
+        *pNew++ = c;
+        break;
+        }
       c = *(++p);
       switch (c)
         {
@@ -235,6 +244,15 @@ int i;
   return strDest;
 
 } // end of FixupEscapeSequences
+
+void SetFileDialogFileName (CFileDialog & dialog, CString & buffer,
+                            const CString & initialName)
+  {
+  buffer = initialName;
+  int iBufferLength = MAX (_MAX_PATH, buffer.GetLength () + 1);
+  dialog.m_ofn.nMaxFile = iBufferLength;
+  dialog.m_ofn.lpstrFile = buffer.GetBuffer (iBufferLength);
+  }
 
 
 
@@ -3052,6 +3070,7 @@ unsigned char header [8];
   int png_transforms = PNG_TRANSFORM_STRIP_16 |    // Strip 16-bit samples to 8 bits
                        PNG_TRANSFORM_PACKING |     // Expand 1, 2 and 4-bit samples to bytes
                        PNG_TRANSFORM_EXPAND  |     // expand out to 8 bits if less
+                       PNG_TRANSFORM_GRAY_TO_RGB | // convert grayscale samples to RGB
                        PNG_TRANSFORM_BGR;          // Flip RGB to BGR, RGBA to BGRA
 
   // read the file
@@ -3090,7 +3109,21 @@ unsigned char header [8];
   hbmp = CreateDIBSection(NULL, &bmiB, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
 
   if (!hbmp)
+    {
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+    fclose(fp);
     return eUnableToLoadImage;
+    }
+
+  png_size_t rowBytes = png_get_rowbytes (png_ptr, info_ptr);
+  if (rowBytes > (png_size_t) bpl)
+    {
+    DeleteObject (hbmp);
+    hbmp = NULL;
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+    fclose(fp);
+    return eUnableToLoadImage;
+    }
 
   long row;
   unsigned char * p = pB;
@@ -3099,7 +3132,10 @@ unsigned char header [8];
 
   png_uint_32 iHeight = png_get_image_height (png_ptr, info_ptr);
   for (row = 0; row < iHeight; row++, p += bpl)
-     memcpy (p, row_pointers [iHeight - row - 1], bpl);
+    {
+    memset (p, 0, bpl);
+    memcpy (p, row_pointers [iHeight - row - 1], rowBytes);
+    }
 
   // done with data
   png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
@@ -3201,6 +3237,8 @@ long LoadPngMemory (unsigned char * Buffer, const size_t Length, HBITMAP & hbmp,
 
   int png_transforms = PNG_TRANSFORM_STRIP_16 |    // Strip 16-bit samples to 8 bits
                        PNG_TRANSFORM_PACKING |     // Expand 1, 2 and 4-bit samples to bytes
+                       PNG_TRANSFORM_EXPAND |      // expand palettes and low-bit samples
+                       PNG_TRANSFORM_GRAY_TO_RGB | // convert grayscale samples to RGB
                        PNG_TRANSFORM_BGR;          // Flip RGB to BGR, RGBA to BGRA
 
 
@@ -3243,7 +3281,19 @@ long LoadPngMemory (unsigned char * Buffer, const size_t Length, HBITMAP & hbmp,
   hbmp = CreateDIBSection(NULL, &bmiB, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
 
   if (!hbmp)
+    {
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
     return eUnableToLoadImage;
+    }
+
+  png_size_t rowBytes = png_get_rowbytes (png_ptr, info_ptr);
+  if (rowBytes > (png_size_t) bpl)
+    {
+    DeleteObject (hbmp);
+    hbmp = NULL;
+    png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+    return eUnableToLoadImage;
+    }
 
   long row;
   unsigned char * p = pB;
@@ -3251,7 +3301,10 @@ long LoadPngMemory (unsigned char * Buffer, const size_t Length, HBITMAP & hbmp,
   // have to reverse row order
   png_uint_32 iHeight = png_get_image_height (png_ptr, info_ptr);
   for (row = 0; row < iHeight; row++, p += bpl)
-     memcpy (p, row_pointers [iHeight - row - 1], bpl);
+    {
+    memset (p, 0, bpl);
+    memcpy (p, row_pointers [iHeight - row - 1], rowBytes);
+    }
 
   // done with data
   png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
@@ -3345,7 +3398,20 @@ extern char file_browsing_dir [_MAX_PATH];
 void ChangeToFileBrowsingDirectory ()
   {
 
-  _chdir(file_browsing_dir);
+  if (_chdir(file_browsing_dir) != 0)
+    {
+    int iError = errno;
+    char strFailedDirectory [_MAX_PATH];
+    strcpy (strFailedDirectory, file_browsing_dir);
+
+    // Keep the error visible, but use a valid directory on the next attempt.
+    if (_chdir (working_dir) != 0)
+      AfxThrowFileException (CFileException::genericException, errno,
+                             working_dir);
+    strcpy (file_browsing_dir, working_dir);
+    AfxThrowFileException (CFileException::genericException, iError,
+                           strFailedDirectory);
+    }
 
   }  // end of ChangeToFileBrowsingDirectory
 
@@ -3354,18 +3420,30 @@ void ChangeToStartupDirectory ()
 
 // first, remember the file_browsing directory
 
-  _getdcwd (0, file_browsing_dir, sizeof (file_browsing_dir) - 1);
+  char strCurrentDirectory [_MAX_PATH];
+  if (!_getdcwd (0, strCurrentDirectory, sizeof (strCurrentDirectory) - 1))
+    {
+    int iError = errno;
+    if (_chdir (working_dir) != 0)
+      AfxThrowFileException (CFileException::genericException, errno,
+                             working_dir);
+    AfxThrowFileException (CFileException::genericException, iError);
+    }
 
 // make sure directory name ends in a slash
 
-  file_browsing_dir [sizeof (file_browsing_dir) - 2] = 0;
+  strCurrentDirectory [sizeof (strCurrentDirectory) - 2] = 0;
 
-  if (file_browsing_dir [strlen (file_browsing_dir) - 1] != '\\')
-    strcat (file_browsing_dir, "\\");
+  if (strCurrentDirectory [strlen (strCurrentDirectory) - 1] != '\\')
+    strcat (strCurrentDirectory, "\\");
+
+  strcpy (file_browsing_dir, strCurrentDirectory);
 
 
   // now change back to startup directory
-  _chdir(working_dir);
+  if (_chdir(working_dir) != 0)
+    AfxThrowFileException (CFileException::genericException, errno,
+                           working_dir);
 
   } // end of ChangeToStartupDirectory
 

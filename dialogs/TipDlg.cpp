@@ -26,26 +26,7 @@ static const TCHAR szIntStartup[] = _T("Tip_StartUp");
 CTipDlg::CTipDlg(CWnd* pParent /*=NULL*/)
 	: CDialog(IDD_TIP, pParent)
 {
-char fullfilename[MAX_PATH];
-char filename [MAX_PATH];
-char * p;
-
-  // look for tips.txt in the same directory as the executable file
-  if (GetModuleFileName (NULL, fullfilename, sizeof (fullfilename)))
-   {
-
-// remove last part of file name to get working directory
-
-    strcpy (filename, fullfilename);
-
-    p = strrchr (filename, '\\');
-    if (p)
-      *p = 0;
-
-    strcat (filename, "\\tips.txt");
-    }
-  else
-    strcpy (filename, "tips.txt");
+CString filename = ExtractDirectory (App.m_strMUSHclientFileName) + "tips.txt";
 
 	//{{AFX_DATA_INIT(CTipDlg)
 	m_bStartup = TRUE;
