@@ -34,7 +34,7 @@ FUNCTIONS = {
 STORAGE_CASES = ['recall_storage_content', 'recall_storage_cancel',
                  'recall_storage_short', 'recall_storage_failure']
 CONTROLS = ['recall_control', 'recall_empty', 'recall_cancel',
-            'memory_control', 'memory_empty', 'memory_cancel']
+            'memory_control', 'memory_empty', 'memory_cancel', 'memory_mapper']
 REGRESSIONS = [
     f'{operation}_{action}_{event}'
     for operation in ('recall', 'memory')

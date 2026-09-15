@@ -235,13 +235,13 @@ BOOL CPrefsP1::OnInitDialog()
     rcSSL.right = rcSSL.left + 200;
     rcSSL.bottom = rcSSL.top + (rcSave.bottom - rcSave.top);
 
-    CButton * pCheck = new CButton;
-    pCheck->Create ("Use SSL/TLS for this connection",
-                    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                    rcSSL, this, IDC_USE_SSL);
-    pCheck->SetFont (GetFont ());
+    if (!m_ctlUseSSL.Create ("Use SSL/TLS for this connection",
+                             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                             rcSSL, this, IDC_USE_SSL))
+      AfxThrowResourceException ();
+    m_ctlUseSSL.SetFont (GetFont ());
     if (m_bUseSSL)
-      pCheck->SetCheck (BST_CHECKED);
+      m_ctlUseSSL.SetCheck (BST_CHECKED);
     }
 
   return CPropertyPage::OnInitDialog();
@@ -9107,6 +9107,26 @@ CalculateMemoryUsage ();
 void CPrefsP15::CalculateMemoryUsage ()
   {
   CWorldDocumentOperationGuard operationGuard (m_doc);
+  class CStatusLineGuard
+    {
+    public:
+      CStatusLineGuard (CMUSHclientDoc * pDoc)
+        : m_pDoc (pDoc), m_bActive (false) { }
+      ~CStatusLineGuard ()
+        {
+        if (m_bActive)
+          {
+          if (m_pDoc->m_bShowingMapperStatus)
+            m_pDoc->ShowStatusLine (true);
+          m_pDoc->ShowStatusLine (true);
+          }
+        }
+      void Activate () { m_bActive = true; }
+
+    private:
+      CMUSHclientDoc * m_pDoc;
+      bool m_bActive;
+    } statusLineGuard (m_doc);
   struct CLineMemory
     {
     long bytes;
@@ -9142,6 +9162,7 @@ void CPrefsP15::CalculateMemoryUsage ()
   long iCount = 0;
 
   Frame.SetStatusMessageNow (Translate ("Calculating size of output buffer..."));
+  statusLineGuard.Activate ();
 
   for (size_t i = 0; i < lines.size (); ++i)
     {
@@ -9177,14 +9198,7 @@ void CPrefsP15::CalculateMemoryUsage ()
     strMemory.Format ("%s", (LPCTSTR) strKb);
 
 	SetDlgItemText(IDC_OUTPUT_MEMORY, strMemory);
-
-  m_doc->ShowStatusLine ();
-	
   GetDlgItem (IDC_CALCULATE_MEMORY)->EnableWindow (FALSE);  // only do it once
-
-
-
-
   } // end of  CPrefsP15::CalculateMemoryUsage 
 
 
