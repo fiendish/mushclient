@@ -235,9 +235,16 @@ struct CProgressDlg {
 };
 struct CMUSHclientDoc {
   OwnedList<CLine> m_LineList;
-  bool m_bUTF_8 = false;
+  bool m_bUTF_8 = false, m_bShowingMapperStatus = false;
   int operations = 0, statusRestores = 0;
-  void ShowStatusLine() { ++statusRestores; Frame.status = "Ready"; }
+  void ShowStatusLine(bool = false) {
+    ++statusRestores;
+    if (m_bShowingMapperStatus) {
+      m_bShowingMapperStatus = false;
+      return;
+    }
+    Frame.status = "Ready";
+  }
   CString FormatTime(CTime time, const CString& format) {
     CHECK(format.value == "[%H:%M:%S] ", "supported timestamp preamble");
     char buffer[32];
@@ -335,17 +342,18 @@ void Mutate(CMUSHclientDoc& doc, const std::string& action) {
 
 struct Scenario {
   std::string action, event;
-  bool cancel = false, empty = false;
+  bool cancel = false, empty = false, mapper = false;
 };
 Scenario Parse(const std::string& name) {
   const auto suffix = name.substr(name.find('_') + 1);
   if (suffix == "control") return {};
-  if (suffix == "empty") return {"", "", false, true};
-  if (suffix == "cancel") return {"", "", true, false};
-  if (suffix == "clear_cancel") return {"clear", "create", true, false};
+  if (suffix == "empty") return {"", "", false, true, false};
+  if (suffix == "cancel") return {"", "", true, false, false};
+  if (suffix == "mapper") return {"", "", false, false, true};
+  if (suffix == "clear_cancel") return {"clear", "create", true, false, false};
   const auto split = suffix.find('_');
   CHECK(split != std::string::npos, "case has action and event");
-  return {suffix.substr(0, split), suffix.substr(split + 1), false, false};
+  return {suffix.substr(0, split), suffix.substr(split + 1), false, false, false};
 }
 
 void Arm(CMUSHclientDoc& doc, const Scenario& scenario, int& mutations, CPrefsP15* page = nullptr) {
@@ -486,6 +494,7 @@ MemoryExpected FillMemory(CMUSHclientDoc& doc, bool empty) {
 void MemoryCase(const Scenario& scenario) {
   harness = Harness{};
   CMUSHclientDoc doc;
+  doc.m_bShowingMapperStatus = scenario.mapper;
   const auto expected = FillMemory(doc, scenario.empty);
   CPrefsP15 page(&doc);
   int mutations = 0;
@@ -494,7 +503,7 @@ void MemoryCase(const Scenario& scenario) {
   const auto initialBufferLines = page.m_strBufferLines.value;
   page.CalculateMemoryUsage();
   if (scenario.action == "destroy" || scenario.action == "reuse") {
-    CHECK(page.writes == 0 && page.calculate.enabled && doc.statusRestores == 0,
+    CHECK(page.writes == 0 && page.calculate.enabled && doc.statusRestores == 1,
           "page window result: no UI publication after window identity changes");
     CHECK(page.m_strBufferLines.value == initialBufferLines &&
           page.lineLabel.value == "unchanged lines" && page.memoryLabel.value == "unchanged memory",
@@ -506,7 +515,7 @@ void MemoryCase(const Scenario& scenario) {
           "cancellation result: controls keep their prior values");
     CHECK(page.m_strBufferLines.value == initialBufferLines,
           "cancellation result: saved line label is unchanged");
-    CHECK(page.calculate.enabled && doc.statusRestores == 0,
+    CHECK(page.calculate.enabled && doc.statusRestores == 1,
           "cancellation result: calculation can be retried");
     CHECK(harness.polls == 70, "cancellation result: iteration stops at cancellation");
     const vector<long> positions = {64};
@@ -529,7 +538,9 @@ void MemoryCase(const Scenario& scenario) {
     }
     CHECK(page.memoryLabel.value == memory && page.lineLabel.value == lines,
           "snapshot result: captured memory, styles, and average denominator");
-    CHECK(page.writes == 2 && !page.calculate.enabled && doc.statusRestores == 1,
+    const int expectedStatusRestores = scenario.mapper ? 2 : 1;
+    CHECK(page.writes == 2 && !page.calculate.enabled &&
+          doc.statusRestores == expectedStatusRestores,
           "memory calculation publishes one complete result");
     CHECK(page.m_strBufferLines.value == lines, "saved line label matches result");
     CHECK(harness.polls == expected.lines, "snapshot result: all captured memory records visited");
