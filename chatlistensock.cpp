@@ -39,7 +39,7 @@ void CChatListenSocket::OnAccept(int nErrorCode)
 
   m_pDoc->ChatNote (eChatConnection, "Incoming chat call");
 
-CChatSocket * pSocket = new CChatSocket (m_pDoc);
+std::unique_ptr<CChatSocket> pSocket (new CChatSocket (m_pDoc));
 int SockAddrLen = sizeof(pSocket->m_ServerAddr) ;
 
   if (!Accept(*pSocket, 
@@ -47,7 +47,6 @@ int SockAddrLen = sizeof(pSocket->m_ServerAddr) ;
               &SockAddrLen))
     {
     m_pDoc->ChatNote (eChatConnection, "Cannot accept call.");
-    delete pSocket;
     return;
     }
 
@@ -63,9 +62,10 @@ int SockAddrLen = sizeof(pSocket->m_ServerAddr) ;
                             (LPCTSTR) pSocket->m_strServerName,
                             ntohs (pSocket->m_ServerAddr.sin_port)));
 
-  m_pDoc->m_ChatList.AddTail (pSocket);
-
   pSocket->m_iChatStatus = eChatAwaitingConnectionRequest;
+
+  m_pDoc->m_ChatList.AddTail (pSocket.get ());
+  pSocket.release ();
   } // end of OnAccept
 
 
