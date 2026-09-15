@@ -1,0 +1,288 @@
+#include <algorithm>
+#include <cctype>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <map>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+using namespace std;
+
+// Keep checks active when NDEBUG is set.
+#define CHECK(value) do { if (!(value)) { cerr << __LINE__ << ": " << #value << endl; exit(1); } } while (0)
+#define ASSERT CHECK
+using LPCTSTR = const char *;
+using POSITION = size_t;
+struct CString {
+    string value;
+    CString(const char *text = "") : value(text) {}
+    CString(string text) : value(std::move(text)) {}
+    operator const char *() const { return value.c_str(); }
+    bool operator==(const char *other) const { return value == other; }
+    bool operator!=(const char *other) const { return value != other; }
+    void Empty() { value.clear(); }
+    int GetLength() const { return static_cast<int>(value.size()); }
+    CString Left(size_t count) const { return value.substr(0, count); }
+    CString Mid(size_t start, size_t count = string::npos) const { return value.substr(start, count); }
+    void MakeLower() { for (char &ch : value) ch = tolower(static_cast<unsigned char>(ch)); }
+};
+CString CFormat(const char *format, ...) {
+    va_list args, copy;
+    va_start(args, format);
+    va_copy(copy, args);
+    const int length = vsnprintf(nullptr, 0, format, copy);
+    va_end(copy);
+    CHECK(length >= 0);
+    vector<char> buffer(static_cast<size_t>(length) + 1);
+    CHECK(vsnprintf(buffer.data(), buffer.size(), format, args) == length);
+    va_end(args);
+    return buffer.data();
+}
+#define TFormat CFormat
+#define PLURAL(count) count, ((count) == 1 ? "" : "s")
+@CONSTANTS@
+const char *SCRIPTERRORCONTEXTFORECOLOUR = "context";
+const char *SCRIPTERRORFORECOLOUR = "error";
+const int NORMAL = 0, MAX_CUSTOM = 1, eConnectConnectedToMud = 1;
+CString ColourToName(int) { return "custom"; }
+bool IsPluginID(CString id) { return id.GetLength() == PLUGIN_UNIQUE_ID_LENGTH; }
+struct CmcDateTimeSpan {
+    double seconds;
+    double GetTotalSeconds() const { return seconds; }
+};
+struct CmcDateTime {
+    double seconds = 0;
+    double GetTime() const { return seconds; }
+    static CmcDateTime GetTimeNow() { return {100}; }
+    CmcDateTimeSpan operator-(CmcDateTime other) const { return {seconds - other.seconds}; }
+};
+struct CTimer {
+    enum { eAtTime, eInterval };
+    CmcDateTime tFireTime;
+    CString strLabel;
+    bool bEnabled = true;
+    int iType = eAtTime, iAtHour = 1, iEveryHour = 0, iAtMinute = 2, iEveryMinute = 0;
+    double fAtSecond = 3.5, fEverySecond = 0;
+};
+// Each visit has constant work. The fixture controls the map enumeration order.
+struct CTimerMap {
+    vector<pair<CString, CTimer *>> entries;
+    size_t starts = 0, visits = 0;
+    POSITION GetStartPosition() { ++starts; return entries.empty() ? 0 : 1; }
+    void GetNextAssoc(POSITION &pos, CString &key, CTimer *&timer) {
+        CHECK(pos > 0 && pos <= entries.size());
+        const auto &entry = entries.at(pos - 1);
+        key = entry.first;
+        timer = entry.second;
+        ++visits;
+        pos = pos == entries.size() ? 0 : pos + 1;
+    }
+};
+struct CPlugin {
+    int m_iActiveScriptCalls = 0;
+    CString m_strID = "0123456789abcdef01234567", m_strName = "Fixture plugin";
+    CString m_strCallingPluginID;
+    bool m_bEnabled = true;
+    CTimerMap m_TimerMap;
+};
+struct CMUSHclientDoc {
+    CPlugin *m_CurrentPlugin = nullptr, *availablePlugin = nullptr;
+    unsigned short m_iNoteStyle = 7;
+    bool m_bNotesNotWantedNow = false, m_bEnableTimers = true;
+    int m_iConnectPhase = eConnectConnectedToMud, m_iNoteTextColour = -1;
+    int m_customtext[MAX_CUSTOM] = {};
+    CTimerMap m_TimerMap;
+    string output;
+    vector<pair<string, string>> links;
+    vector<string> colours;
+    @GET_TIMER_MAP@
+    CPlugin *GetPlugin(CString id) {
+        return availablePlugin && id.value == availablePlugin->m_strID.value ? availablePlugin : nullptr;
+    }
+    void Note(CString text) { output += text.value + "\n"; }
+    void ColourNote(CString, CString, CString text) { Note(text); }
+    void ColourTell(CString colour, CString, CString text) {
+        colours.push_back(colour.value);
+        output += text.value;
+    }
+    void Hyperlink(CString action, CString text, CString hint, CString colour, CString back, int url) {
+        CHECK(hint == "Click to view this timer" && colour == "cyan" && back == "" && url == 0);
+        links.emplace_back(action.value, text.value);
+        output += text.value;
+    }
+    void DebugHelper(const CString strAction, CString strArgument);
+};
+@GUARDS@
+@GUARD_METHODS@
+@DEBUG_HELPER@
+
+void CheckGuards() {
+    CPlugin caller, target;
+    CMUSHclientDoc doc;
+    target.m_strCallingPluginID = "previous";
+    doc.m_CurrentPlugin = &caller;
+    for (bool unwind : {false, true}) {
+        bool caught = false;
+        try {
+            CPluginCallGuard call(&target);
+            CPluginContextGuard context(&doc, &target, true, true);
+            CPluginNotesGuard notes(&doc);
+            CHECK(target.m_iActiveScriptCalls == 1);
+            CHECK(doc.m_CurrentPlugin == &target && doc.m_iNoteStyle == NORMAL);
+            CHECK(target.m_strCallingPluginID.value == caller.m_strID.value);
+            CHECK(doc.m_bNotesNotWantedNow);
+            {
+                CPluginCallGuard nestedCall(&target);
+                CPluginContextGuard world(&doc, nullptr);
+                CPluginNotesGuard nestedNotes(&doc);
+                CHECK(target.m_iActiveScriptCalls == 2 && doc.m_CurrentPlugin == nullptr);
+            }
+            CHECK(target.m_iActiveScriptCalls == 1 && doc.m_CurrentPlugin == &target);
+            CHECK(doc.m_bNotesNotWantedNow);
+            if (unwind) throw runtime_error("callback failure");
+        } catch (const runtime_error &error) {
+            CHECK(string(error.what()) == "callback failure");
+            caught = true;
+        }
+        CHECK(caught == unwind && target.m_iActiveScriptCalls == 0);
+        CHECK(doc.m_CurrentPlugin == &caller && doc.m_iNoteStyle == 7);
+        CHECK(!doc.m_bNotesNotWantedNow && target.m_strCallingPluginID == "previous");
+    }
+    CPluginCallGuard worldCall(nullptr, true);
+    cout << "Guard nesting, null call, and exception restoration passed" << endl;
+}
+
+void CheckTimerOutput() {
+    CMUSHclientDoc doc;
+    CPlugin previous;
+    doc.m_CurrentPlugin = &previous;
+    CTimer late, named, early;
+    late.tFireTime.seconds = 130;
+    named.tFireTime.seconds = 100;
+    named.strLabel = "Visible Label";
+    early.tFireTime.seconds = 110;
+    early.bEnabled = false;
+    early.iType = CTimer::eInterval;
+    doc.m_TimerMap.entries = {{"*late", &late}, {"internal-name", &named}, {"*early", &early}};
+    doc.DebugHelper("timerlist", "");
+    CHECK(doc.m_CurrentPlugin == &previous && previous.m_TimerMap.visits == 0);
+    CHECK(doc.output ==
+        "\n------ Timer List (firing order) ------\n\n"
+        "  1.  Enabled : Visible Label    At 01:02:3.50 - firing in      0.0 seconds.\n"
+        "  2. DISABLED : *early Every 01:02:3.50 - firing in     10.0 seconds.\n"
+        "  3.  Enabled : *late    At 01:02:3.50 - firing in     30.0 seconds.\n"
+        "3 timers.\n");
+    CHECK(doc.links.size() == 3);
+    CHECK(doc.links[0].first == "!!" DEBUG_PLUGIN_ID ":showtimer(Visible Label)");
+    CHECK(doc.links[1].first == "!!" DEBUG_PLUGIN_ID ":showtimer(*early)");
+    CHECK(doc.links[2].first == "!!" DEBUG_PLUGIN_ID ":showtimer(*late)");
+    CHECK(doc.colours.size() == 12);
+    for (size_t i = 0; i < doc.colours.size(); ++i)
+        CHECK(doc.colours[i] == (i >= 4 && i < 8 ? "gray" : "#0080FF"));
+
+    // Retain equal deadlines, including disabled and never-scheduled timers.
+    for (bool pluginContext : {false, true}) for (bool reverseOrder : {false, true})
+    for (double deadline : {0.0, 120.0})
+    for (bool firstEnabled : {false, true}) for (bool secondEnabled : {false, true}) {
+        CMUSHclientDoc equal;
+        CPlugin plugin;
+        equal.availablePlugin = &plugin;
+        equal.m_CurrentPlugin = &previous;
+        CTimer first, second, before, after;
+        first.tFireTime.seconds = second.tFireTime.seconds = deadline;
+        first.strLabel = "Visible Label";
+        first.bEnabled = firstEnabled;
+        second.bEnabled = secondEnabled;
+        second.iType = CTimer::eInterval;
+        before.tFireTime.seconds = deadline - 10;
+        after.tFireTime.seconds = deadline + 10;
+        CTimerMap &selected = pluginContext ? plugin.m_TimerMap : equal.m_TimerMap;
+        selected.entries = {{"*after", &after}, {"internal-name", &first},
+                            {"*interval", &second}, {"*before", &before}};
+        if (reverseOrder) reverse(selected.entries.begin(), selected.entries.end());
+        const string prefix = pluginContext ? "_0123456789abcdef01234567_" : "";
+        equal.DebugHelper("timerlist", prefix.c_str());
+        CHECK(equal.m_CurrentPlugin == &previous && previous.m_TimerMap.visits == 0);
+        CHECK(selected.starts == 1 && selected.visits == 4);
+        CHECK((pluginContext ? equal.m_TimerMap : plugin.m_TimerMap).visits == 0);
+        CHECK(equal.links.size() == 4);
+        const vector<string> labels = reverseOrder
+            ? vector<string>{"*before", "*interval", "Visible Label", "*after"}
+            : vector<string>{"*before", "Visible Label", "*interval", "*after"};
+        string expected = pluginContext ? "\n(For plugin: Fixture plugin)" : "";
+        expected += "\n------ Timer List (firing order) ------\n\n";
+        size_t colourIndex = 0;
+        for (size_t i = 0; i < labels.size(); ++i) {
+            const bool interval = labels[i] == "*interval";
+            const bool disabled = interval ? !secondEnabled
+                : labels[i] == "Visible Label" ? !firstEnabled : false;
+            CHECK(equal.links[i].second == labels[i]);
+            CHECK(equal.links[i].first == "!!" DEBUG_PLUGIN_ID ":showtimer(" + prefix + labels[i] + ")");
+            expected += CFormat("%3i. %8s : %s %5s 01:02:3.50", int(i + 1),
+                                disabled ? "DISABLED" : "Enabled", labels[i].c_str(),
+                                interval ? "Every" : "At").value;
+            const double fireTime = deadline + (i == 0 ? -10 : i == 3 ? 10 : 0);
+            if (fireTime > 0)
+                expected += CFormat(" - firing in %8.1f seconds.", fireTime - 100).value;
+            expected += "\n";
+            for (int segment = 0; segment < (fireTime > 0 ? 4 : 3); ++segment) {
+                CHECK(colourIndex < equal.colours.size());
+                CHECK(equal.colours[colourIndex++] == (disabled ? "gray" : "#0080FF"));
+            }
+        }
+        CHECK(colourIndex == equal.colours.size());
+        CHECK(equal.output == expected + "4 timers.\n");
+    }
+    CMUSHclientDoc single;
+    single.m_TimerMap.entries = {{"internal-name", &named}};
+    single.DebugHelper("timerlist", "");
+    CHECK(single.output == "\n------ Timer List (firing order) ------\n\n"
+                           "  1.  Enabled : Visible Label    At 01:02:3.50 - firing in      0.0 seconds.\n"
+                           "1 timer.\n");
+    CMUSHclientDoc empty;
+    empty.m_bEnableTimers = false;
+    empty.m_iConnectPhase = 0;
+    empty.DebugHelper("timerlist", "");
+    CHECK(empty.output == "\n------ Timer List (firing order) ------\n"
+                          "Warning: All timers disabled.\n"
+                          "Warning: Not connected - some timers may not fire.\n\n0 timers.\n");
+    CHECK(empty.m_TimerMap.starts == 1 && empty.m_TimerMap.visits == 0);
+    cout << "Timer labels, links, colours, formatting, warnings, and equal-time behavior passed" << endl;
+}
+
+void CheckTimerTraversal() {
+    for (size_t count : {1, 64, 128, 256}) for (bool pluginContext : {false, true}) {
+        CMUSHclientDoc doc;
+        CPlugin plugin;
+        doc.availablePlugin = &plugin;
+        CTimerMap &selected = pluginContext ? plugin.m_TimerMap : doc.m_TimerMap;
+        vector<CTimer> timers(count);
+        for (size_t i = 0; i < count; ++i) {
+            timers[i].tFireTime.seconds = 1000 + count - i;
+            selected.entries.emplace_back("*timer" + to_string(count - i), &timers[i]);
+        }
+        doc.DebugHelper("timerlist", pluginContext ? "_0123456789abcdef01234567_" : "");
+        CHECK(doc.links.size() == count);
+        for (size_t i = 0; i < count; ++i)
+            CHECK(doc.links[i].second == "*timer" + to_string(i + 1));
+        cout << (pluginContext ? "Plugin" : "World") << " timers=" << count
+             << " map_starts=" << selected.starts << " map_visits=" << selected.visits << endl;
+        CHECK(selected.starts == 1 && selected.visits == count);
+        CHECK((pluginContext ? doc.m_TimerMap : plugin.m_TimerMap).visits == 0);
+    }
+}
+
+int main(int argc, char **argv) {
+    CHECK(argc == 2);
+    const string phase = argv[1];
+    CHECK(phase == "guards" || phase == "timers" || phase == "all");
+    if (phase == "guards" || phase == "all") CheckGuards();
+    if (phase == "timers" || phase == "all") {
+        CheckTimerOutput();
+        CheckTimerTraversal();
+    }
+    return 0;
+}
