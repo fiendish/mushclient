@@ -187,7 +187,7 @@ static int myhash (lua_State *L)
   shsUpdate (&shsInfo, (UC *) text, textLength);
   shsFinal  (&shsInfo);
 
-  sprintf (buf, "%08x%08x%08x%08x%08x", 
+  sprintf (buf, "%08lx%08lx%08lx%08lx%08lx",
                 shsInfo.digest [0],
                 shsInfo.digest [1],
                 shsInfo.digest [2],
