@@ -37,6 +37,7 @@ CLine::CLine (const long nLineNumber,
   m_iPreambleOffset = 0;
   m_theTime = CTime::GetCurrentTime(); 
   QueryPerformanceCounter (&m_lineHighPerformanceTime);
+  nCreationNumber = App.GetUniqueNumber ();
   m_nLineNumber = nLineNumber;
 
   if (bUnicode)
@@ -56,14 +57,27 @@ CLine::CLine (const long nLineNumber,
     AfxThrowMemoryException ();
   flags = 0;      // no special flags yet (ie. normal output line)
 
-  CStyle * pStyle; 
+  try
+    {
+    std::unique_ptr<CStyle> pStyle (NEWSTYLE);
+    pStyle->iFlags = iFlags;
+    pStyle->iForeColour = iForeColour;
+    pStyle->iBackColour = iBackColour;
 
-  // have at least one style item in the list
-  styleList.AddTail (pStyle = NEWSTYLE);
-
-  pStyle->iFlags = iFlags;
-  pStyle->iForeColour = iForeColour;
-  pStyle->iBackColour = iBackColour;
+    // have at least one style item in the list
+    styleList.AddTail (pStyle.get ());
+    pStyle.release ();
+    }
+  catch (...)
+    {
+#ifdef USE_REALLOC
+    free (text);
+#else
+    delete [] text;
+#endif
+    text = NULL;
+    throw;
+    }
 
   }   // end of CLine::CLine
 
@@ -86,11 +100,33 @@ CLine::~CLine ()
 
   }
 
+void CLine::ResizeText (const int iNewSize)
+  {
+  ASSERT (iNewSize >= len);
+
+#ifdef USE_REALLOC
+  char * pNewText = (char *) realloc (text, iNewSize);
+  if (!pNewText)
+    AfxThrowMemoryException ();
+#else
+  char * pNewText = new char [iNewSize];
+  if (!pNewText)
+    AfxThrowMemoryException ();
+  memcpy (pNewText, text, len);
+  delete [] text;
+#endif
+
+  text = pNewText;
+  iMemoryAllocated = iNewSize;
+  } // end of CLine::ResizeText
+
 // for tracking down style allocation errors
 
 CStyle * GetNewStyle (const char * filename, const long linenumber)
   {
   CStyle * pNewStyle = new CStyle;
+  pNewStyle->nCreationNumber = App.GetUniqueNumber ();
+  pNewStyle->nRangeCreationNumber = pNewStyle->nCreationNumber;
   TRACE3 ("new CStyle at %p at file %s line %ld\n",
           pNewStyle,
           filename,

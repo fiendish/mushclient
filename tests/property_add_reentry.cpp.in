@@ -1,0 +1,321 @@
+// MFC and script substitutes for the extracted property-add functions.
+#ifdef NDEBUG
+#error Property add checks require assertions; remove NDEBUG.
+#endif
+#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using namespace std;
+using LPCTSTR = const char*;
+using HTREEITEM = void*;
+using DISPID = int;
+using POSITION = size_t;
+constexpr int IDOK = 1, TRUE = 1, FALSE = 0, LVIS_FOCUSED = 1, LVIS_SELECTED = 2;
+constexpr int MB_ICONINFORMATION = 64;
+enum Kind { Alias, Trigger, Timer };
+const char* KindName(Kind kind) { return kind == Alias ? "alias" : kind == Trigger ? "trigger" : "timer"; }
+
+struct CString : string {
+  using string::string;
+  CString() = default;
+  CString(const string& value) : string(value) {}
+  operator LPCTSTR() const { return c_str(); }
+  bool IsEmpty() const { return empty(); }
+  void MakeLower() {
+    transform(begin(), end(), begin(), [](unsigned char c) { return tolower(c); });
+  }
+  template<class... A> void Format(const char* format, A... args) {
+    char buffer[512];
+    int count = snprintf(buffer, sizeof buffer, format, args...);
+    assert(count >= 0 && size_t(count) < sizeof buffer);
+    assign(buffer);
+  }
+};
+template<class... A> CString TFormat(const char* format, A... args) {
+  CString result; result.Format(format, args...); return result;
+}
+vector<pair<CString, int>> uiMessages;
+void UMessageBox(const CString& message, int flags = 0) { uiMessages.emplace_back(message, flags); }
+struct AppType {
+  long long number = 0;
+  long long GetUniqueNumber() { return ++number; }
+  CString GetUniqueString() { return to_string(GetUniqueNumber()); }
+} App;
+
+struct CObject {
+  static set<CObject*> alive;
+  static int created, destroyed;
+  Kind kind;
+  bool candidate = false;
+  long long nCreationNumber = 0;
+  int iSequence = 10, dispid = 0;
+  CString name, trigger, strProcedure, strLabel, strInternalName;
+  explicit CObject(Kind value) : kind(value) { alive.insert(this); ++created; }
+  virtual ~CObject() { assert(alive.erase(this) == 1); ++destroyed; }
+  bool IsKindOf(Kind value) const { return kind == value; }
+};
+set<CObject*> CObject::alive;
+int CObject::created = 0, CObject::destroyed = 0;
+struct CAlias : CObject { static constexpr Kind type = Alias; CAlias() : CObject(Alias) {} };
+struct CTrigger : CObject { static constexpr Kind type = Trigger; CTrigger() : CObject(Trigger) {} };
+struct CTimer : CObject { static constexpr Kind type = Timer; CTimer() : CObject(Timer) {} };
+#define RUNTIME_CLASS(T) T::type
+#define ASSERT assert
+#define ASSERT_VALID(p) assert(CObject::alive.count(p) == 1)
+
+struct CObjectMap {
+  map<CString, CObject*> entries;
+  int writes = 0;
+  template<class T> bool Lookup(const CString& key, T*& value) {
+    auto found = entries.find(key);
+    if (found == entries.end()) return false;
+    value = static_cast<T*>(found->second); return true;
+  }
+  void SetAt(const CString& key, CObject* value) { entries[key] = value; ++writes; }
+  void RemoveKey(const CString& key) { entries.erase(key); ++writes; }
+  size_t GetCount() const { return entries.size(); }
+  POSITION GetStartPosition() const { return entries.empty() ? 0 : 1; }
+  template<class T> void GetNextAssoc(POSITION& pos, CString& key, T*& value) {
+    auto item = entries.begin(); advance(item, pos - 1);
+    key = item->first; value = static_cast<T*>(item->second);
+    pos = pos < entries.size() ? pos + 1 : 0;
+  }
+};
+using CAliasMap = CObjectMap;
+using CTriggerMap = CObjectMap;
+template<class T> struct ItemArray {
+  vector<T*> entries;
+  int writes = 0;
+  void SetSize(size_t size) { entries.resize(size); ++writes; }
+  void SetAt(size_t i, T* value) { entries.at(i) = value; ++writes; }
+};
+
+struct CMUSHclientDoc {
+  CObjectMap objects[3];
+  ItemArray<CAlias> aliases;
+  ItemArray<CTrigger> triggers;
+  void* m_ScriptEngine = this;
+  function<void()> callback = [] {};
+  int dispatchCalls = 0, modifiedCalls = 0;
+  void SetModifiedFlag(int value) { assert(value == TRUE); ++modifiedCalls; }
+  int GetProcedureDispid(const CString& script, const CString& type,
+                        const CString& label, CString& warning) {
+    assert(script == "handlers.callback" && label == "ExAmPlE");
+    assert(type == "alias" || type == "trigger" || type == "timer");
+    ++dispatchCalls; callback(); warning = "dispatch information"; return 73;
+  }
+  CAliasMap& GetAliasMap() { return objects[Alias]; }
+  CTriggerMap& GetTriggerMap() { return objects[Trigger]; }
+  ItemArray<CAlias>& GetAliasArray() { return aliases; }
+  ItemArray<CTrigger>& GetTriggerArray() { return triggers; }
+  void BuildAliasIndexes(vector<CAlias*>&, const set<CAlias*>*, CAliasMap* = nullptr);
+  void BuildTriggerIndexes(vector<CTrigger*>&, const set<CTrigger*>*, CTriggerMap* = nullptr);
+  void SortAliases(const set<CAlias*>* = nullptr);
+  void SortTriggers(const set<CTrigger*>* = nullptr);
+  ~CMUSHclientDoc() {
+    for (auto& objectsForKind : objects)
+      for (auto& item : objectsForKind.entries) delete item.second;
+  }
+};
+
+// UI rows own the lookup string only after successful production publication.
+struct Rows {
+  vector<CString*> names;
+  int adds = 0, deletes = 0, selections = 0, visibleCalls = 0;
+  ~Rows() { for (auto* name : names) delete name; }
+  int Add(CString* name) { names.push_back(name); ++adds; return int(names.size()) - 1; }
+  int DeleteItem(int row) { names.erase(names.begin() + row); ++deletes; return TRUE; }
+  void SetItemState(int row, int state, int mask) {
+    assert(row == 0 && state == (LVIS_FOCUSED | LVIS_SELECTED) && state == mask); ++selections;
+  }
+  void EnsureVisible(int row, int) { assert(row == 0); ++visibleCalls; }
+};
+struct Tree : Rows {
+  HTREEITEM AddTree(CString* name) { Add(name); return name; }
+  HTREEITEM GetParentItem(HTREEITEM) { return nullptr; }
+  int DeleteItem(HTREEITEM item) {
+    auto found = find(names.begin(), names.end(), item); assert(found != names.end());
+    return Rows::DeleteItem(int(found - names.begin()));
+  }
+  void SelectItem(HTREEITEM item) { assert(item == names.at(0)); ++selections; }
+  void EnsureVisible(HTREEITEM item) { assert(item == names.at(0)); ++visibleCalls; }
+};
+struct CDialog { int result = IDOK; int DoModal() { return result; } };
+struct CGenPropertyPage {
+  CMUSHclientDoc* m_doc;
+  CObjectMap* m_ObjectMap;
+  Kind kind;
+  Rows list;
+  Rows* m_ctlList = &list;
+  Tree m_cTreeCtrl;
+  bool m_bWantTreeControl = false, m_bReloadList = false;
+  CString m_strObjectType, m_strSelectedItem = "old selection";
+  CObject* candidate = nullptr;
+  int cancelToCloseCalls = 0, sortItemsCalls = 0;
+  CGenPropertyPage(CMUSHclientDoc* doc, Kind value)
+      : m_doc(doc), m_ObjectMap(&doc->objects[value]), kind(value), m_strObjectType(KindName(value)) {}
+  virtual ~CGenPropertyPage() = default;
+  void InitDialog(CDialog*) {}
+  CString GetObjectName(CDialog*) { return "ExAmPlE"; }
+  virtual CObject* MakeNewObject() = 0;
+  virtual void SetDispatchID(CObject*, const DISPID) = 0;
+  virtual void SetInternalName(CObject*, const CString) = 0;
+  virtual CString GetScriptName(CObject*) const = 0;
+  virtual CString GetLabel(CObject*) const = 0;
+  void UnloadDialog(CDialog*, CObject* item) {
+    candidate = item; item->candidate = true;
+    item->strLabel = "ExAmPlE"; item->strProcedure = "handlers.callback";
+  }
+  void CheckRow(CObject* item, CString* name) {
+    assert(item == candidate && *name == "example");
+    CObject* current = nullptr;
+    assert(!m_ObjectMap->Lookup(*name, current));
+  }
+  int add_list_item(CObject* item, CString* name, int, int) {
+    CheckRow(item, name); return list.Add(name);
+  }
+  HTREEITEM add_tree_item(CObject* item, CString* name) {
+    CheckRow(item, name); return m_cTreeCtrl.AddTree(name);
+  }
+  void CheckParentHasChildren(HTREEITEM) {}
+  void CancelToClose() { ++cancelToCloseCalls; }
+  bool CheckIfTemporary(CObject*) { return false; }
+  void SortItems() { ++sortItemsCalls; }
+  bool GetFilterFlag() { return true; }
+  void OnAddItem(CDialog&);
+};
+
+// INSERT EXACT PRODUCTION FUNCTIONS HERE
+
+enum Scenario { Collision, OtherLabel, NoCollision, InitialDuplicate, LookupFailure, NoEngine, Cancelled };
+const char* ScenarioName(Scenario value) {
+  const char* names[] = {"callback collision", "callback other label", "no collision",
+                        "initial duplicate", "lookup exception cleanup", "no script engine", "cancelled"};
+  return names[value];
+}
+
+template<class Page> void Check(bool tree, Scenario scenario) {
+  assert(CObject::alive.empty());
+  uiMessages.clear();
+  {
+    CMUSHclientDoc doc;
+    Page page(&doc);
+    page.m_bWantTreeControl = tree;
+    CDialog dialog;
+    if (scenario == NoEngine) doc.m_ScriptEngine = nullptr;
+    if (scenario == Cancelled) dialog.result = 0;
+    auto& objects = *page.m_ObjectMap;
+    // Model an Add API without replacement, then run the production sort path.
+    auto insert = [&](const CString& key) {
+      CObject* existing = nullptr;
+      assert(!objects.Lookup(key, existing));
+      auto* item = page.MakeNewObject();
+      item->iSequence = 1;
+      SetPropertyCreationNumber(item);
+      page.SetInternalName(item, key);
+      objects.SetAt(key, item);
+      SortPropertyObjects(&doc, item);
+      return item;
+    };
+    CObject* sentinel = insert("sentinel");
+    CObject* callbackItem = nullptr;
+    if (scenario == InitialDuplicate) callbackItem = insert("example");
+    auto savedMap = objects.entries;
+    auto savedAliases = doc.aliases.entries;
+    auto savedTriggers = doc.triggers.entries;
+    int savedMapWrites = objects.writes;
+    int savedIndexWrites = doc.aliases.writes + doc.triggers.writes;
+    int createdBefore = CObject::created, destroyedBefore = CObject::destroyed;
+    doc.callback = [&] {
+      assert(page.candidate && CObject::alive.count(page.candidate) == 1);
+      CObject* current = nullptr;
+      assert(!objects.Lookup("example", current));
+      assert(page.list.adds == 0 && page.m_cTreeCtrl.adds == 0);
+      if (scenario == LookupFailure) throw runtime_error("dispatch failure");
+      if (scenario == Collision || scenario == OtherLabel)
+        callbackItem = insert(scenario == Collision ? "example" : "other");
+      savedMap = objects.entries;
+      savedAliases = doc.aliases.entries; savedTriggers = doc.triggers.entries;
+      savedMapWrites = objects.writes;
+      savedIndexWrites = doc.aliases.writes + doc.triggers.writes;
+    };
+    bool threw = false;
+    try { page.OnAddItem(dialog); }
+    catch (const runtime_error& error) {
+      assert(scenario == LookupFailure && string(error.what()) == "dispatch failure");
+      threw = true;
+    }
+    assert(threw == (scenario == LookupFailure));
+    const bool prepared = scenario != InitialDuplicate && scenario != Cancelled;
+    const bool published = scenario == OtherLabel || scenario == NoCollision || scenario == NoEngine;
+    assert(doc.dispatchCalls == (prepared && scenario != NoEngine ? 1 : 0));
+    const int callbackCreated = scenario == Collision || scenario == OtherLabel ? 1 : 0;
+    assert(CObject::created - createdBefore == int(prepared) + callbackCreated);
+    assert(CObject::destroyed - destroyedBefore == int(prepared && !published));
+    assert(objects.entries.at("sentinel") == sentinel);
+    Rows& rows = tree ? static_cast<Rows&>(page.m_cTreeCtrl) : page.list;
+    Rows& unusedRows = tree ? page.list : static_cast<Rows&>(page.m_cTreeCtrl);
+    assert(unusedRows.adds == 0 && unusedRows.names.empty());
+    assert(rows.adds == int(published) && rows.deletes == 0);
+    assert(rows.selections == int(published) && rows.visibleCalls == int(published));
+    assert(page.cancelToCloseCalls == int(published) && page.sortItemsCalls == int(published));
+    assert(doc.modifiedCalls == int(published) && page.m_bReloadList == published);
+    if (published) {
+      auto* item = objects.entries.at("example");
+      assert(item == page.candidate && item->candidate && item->nCreationNumber > 0);
+      assert(item->kind == page.kind && item->dispid == (scenario == NoEngine ? 0 : 73));
+      assert(item->strInternalName == (page.kind == Timer ? "" : "example"));
+      assert(rows.names.size() == 1 && *rows.names.at(0) == "example");
+      assert(page.m_strSelectedItem == "example");
+      savedMap.emplace("example", item);
+      assert(objects.entries == savedMap && objects.writes == savedMapWrites + 1);
+      if (page.kind == Alias) {
+        savedAliases.push_back(static_cast<CAlias*>(item));
+        assert(doc.aliases.entries == savedAliases);
+      } else if (page.kind == Trigger) {
+        savedTriggers.push_back(static_cast<CTrigger*>(item));
+        assert(doc.triggers.entries == savedTriggers);
+      }
+      assert(uiMessages.size() == (scenario == NoEngine ? 0u : 1u));
+      if (!uiMessages.empty())
+        assert(uiMessages[0] == make_pair(CString("dispatch information"), MB_ICONINFORMATION));
+    } else {
+      assert(objects.entries == savedMap && objects.writes == savedMapWrites);
+      assert(doc.aliases.entries == savedAliases && doc.triggers.entries == savedTriggers);
+      assert(doc.aliases.writes + doc.triggers.writes == savedIndexWrites);
+      assert(rows.names.empty() && page.m_strSelectedItem == "old selection");
+      if (scenario == Collision || scenario == InitialDuplicate) {
+        assert(objects.entries.at("example") == callbackItem && CObject::alive.count(callbackItem) == 1);
+        CString expected = TFormat("The %s named \"ExAmPlE\" is already in the %s list",
+                                  KindName(page.kind), KindName(page.kind));
+        assert(uiMessages.size() == 1 && uiMessages[0] == make_pair(expected, 0));
+      } else assert(uiMessages.empty());
+    }
+    if (page.kind != Alias) assert(doc.aliases.entries.empty() && doc.aliases.writes == 0);
+    if (page.kind != Trigger) assert(doc.triggers.entries.empty() && doc.triggers.writes == 0);
+    assert(CObject::alive.size() == objects.GetCount());
+    cout << KindName(page.kind) << ": " << (tree ? "tree " : "list ")
+         << ScenarioName(scenario) << " passed\n";
+  }
+  assert(CObject::alive.empty() && CObject::created == CObject::destroyed);
+}
+
+int main() {
+  for (bool tree : {false, true})
+    for (Scenario scenario : {Collision, OtherLabel, NoCollision, InitialDuplicate, LookupFailure, NoEngine, Cancelled}) {
+      Check<CPrefsP7>(tree, scenario);
+      Check<CPrefsP8>(tree, scenario);
+      Check<CPrefsP16>(tree, scenario);
+    }
+}
