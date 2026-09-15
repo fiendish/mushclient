@@ -1944,7 +1944,11 @@ static int glyph_available (lua_State *L)
   // which glyph?
   const char * fontName   = luaL_checkstring (L, 1);
   // test a single character
-  WORD glyph = (WORD) luaL_checknumber (L, 2);  // which Unicode character
+  lua_Number glyphNumber = luaL_checknumber (L, 2);
+  // Preserve truncation when the result fits in WORD; also reject NaN.
+  luaL_argcheck (L, glyphNumber > -1 && glyphNumber < 65536, 2,
+                 "glyph value must truncate to a Unicode code unit from 0 to 65535");
+  WORD glyph = (WORD) glyphNumber;  // which Unicode character
 
   // this DLL might not be available
 	HMODULE hDLL = LoadLibrary ("gdi32");

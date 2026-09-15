@@ -1,0 +1,91 @@
+// The production input gate runs with real Lua errors. GDI is not called.
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+}
+
+typedef std::uint16_t WORD;
+static int reachedGdi = 0;
+
+@GLYPH_INPUT@
+  // Replace the resource acquisition and lookup with an observable boundary.
+  (void) fontName;
+  ++reachedGdi;
+  lua_pushnumber (L, glyph);
+  return 1;
+  }
+
+static void require(bool condition, const char *message) {
+  if (!condition) {
+    std::fprintf(stderr, "FAIL: %s\n", message);
+    std::exit(1);
+  }
+}
+
+static void begin(lua_State *L) {
+  lua_settop(L, 0);
+  reachedGdi = 0;
+  lua_pushcfunction(L, glyph_available);
+  lua_pushliteral(L, "Arial");
+}
+
+static void result(lua_State *L, int arguments, bool accepted, double expected = 0) {
+  const int status = lua_pcall(L, arguments, 1, 0);
+  if (accepted) {
+    require(status == 0, "a representable glyph was rejected");
+    require(reachedGdi == 1, "valid input did not reach the GDI boundary once");
+    require(lua_type(L, -1) == LUA_TNUMBER && lua_tonumber(L, -1) == expected,
+            "the converted glyph changed");
+  } else {
+    require(status == LUA_ERRRUN, "invalid input did not raise a Lua runtime error");
+    require(reachedGdi == 0, "invalid input reached the GDI boundary");
+    require(std::strstr(lua_tostring(L, -1), "bad argument #2") != NULL,
+            "the error did not identify argument 2");
+  }
+}
+
+int main() {
+  lua_State *L = luaL_newstate();
+  require(L != NULL, "Lua state allocation failed");
+  for (unsigned int glyph = 0; glyph <= 65535; ++glyph) {
+    begin(L);
+    lua_pushnumber(L, glyph);
+    result(L, 2, true, glyph);
+  }
+  const double valid[][2] = {
+    {-0.0, 0}, {-0.5, 0}, {0.5, 0}, {1.5, 1}, {65535.9, 65535},
+    {std::nextafter(-1.0, 0.0), 0}, {std::nextafter(65536.0, 0.0), 65535}
+  };
+  for (const auto &entry : valid) {
+    begin(L);
+    lua_pushnumber(L, entry[0]);
+    result(L, 2, true, entry[1]);
+  }
+  begin(L);
+  lua_pushliteral(L, "65.5");
+  result(L, 2, true, 65);
+
+  const double invalid[] = {
+    -1, 65536, std::nextafter(-1.0, -2.0), std::nextafter(65536.0, 65537.0),
+    -1e100, 1e100, std::numeric_limits<double>::quiet_NaN(),
+    std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()
+  };
+  for (double glyph : invalid) {
+    begin(L);
+    lua_pushnumber(L, glyph);
+    result(L, 2, false);
+  }
+  begin(L); result(L, 1, false);
+  begin(L); lua_pushnil(L); result(L, 2, false);
+  begin(L); lua_pushboolean(L, 1); result(L, 2, false);
+  begin(L); lua_newtable(L); result(L, 2, false);
+  begin(L); lua_pushliteral(L, "not a number"); result(L, 2, false);
+  lua_close(L);
+  std::puts("PASS: 65536 code units, fractional boundaries, numeric strings, invalid numbers and types");
+}
