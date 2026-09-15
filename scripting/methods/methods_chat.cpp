@@ -512,21 +512,29 @@ long CMUSHclientDoc::ChatAcceptCalls(short Port)
  class CChatStatusGuard
    {
    public:
-     CChatStatusGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc), m_bKeepStatus (false) { }
+     CChatStatusGuard (CMUSHclientDoc * pDoc)
+       : m_pDoc (pDoc), m_bStatusChanged (false), m_bKeepStatus (false) { }
      ~CChatStatusGuard ()
        {
-       if (!m_bKeepStatus)
+       if (m_bStatusChanged && !m_bKeepStatus)
+         {
+         if (m_pDoc->m_bShowingMapperStatus)
+           m_pDoc->ShowStatusLine (true);
          m_pDoc->ShowStatusLine (true);
+         }
        }
+     void StatusChanged () { m_bStatusChanged = true; }
      void KeepStatus () { m_bKeepStatus = true; }
 
    private:
      CMUSHclientDoc * m_pDoc;
+     bool m_bStatusChanged;
      bool m_bKeepStatus;
    } statusGuard (this);
 
  Frame.SetStatusMessageNow (TFormat ("Accepting chat calls on port %d",
                               m_IncomingChatPort));
+ statusGuard.StatusChanged ();
 
  std::unique_ptr<CChatListenSocket> pChatListenSocket (new CChatListenSocket (this));
 
