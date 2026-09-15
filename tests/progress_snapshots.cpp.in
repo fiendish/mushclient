@@ -1,0 +1,628 @@
+// Only the two inserted function bodies are production code. All other code is a fixture.
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <iostream>
+#include <memory>
+#include <regex>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+using std::size_t;
+using std::vector;
+
+void Check(bool condition, const char* message) {
+  if (!condition) {
+    std::cerr << "CHECK failed: " << message << '\n';
+    std::exit(EXIT_FAILURE);
+  }
+}
+#define CHECK(condition, message) Check(static_cast<bool>(condition), message)
+#define ASSERT(condition) CHECK(condition, #condition)
+using LPCTSTR = const char*;
+using POSITION = void*;
+constexpr int FALSE = 0, MB_ICONINFORMATION = 1;
+constexpr int COMMENT = 1, USER_INPUT = 2, NOTE_OR_COMMAND = 3;
+constexpr int PCRE_CASELESS = 1, PCRE_UTF8 = 2;
+constexpr int IDC_BUFFER_LINES = 1, IDC_OUTPUT_MEMORY = 2, IDC_CALCULATE_MEMORY = 3;
+const char* const ENDLINE = "\r\n";
+
+// Count snapshot text allocations before the first message-pumping boundary.
+// This measures call counts and payload sizes, not native CString heap overhead.
+struct TextAllocationProbe {
+  bool active = false;
+  size_t arrays = 0, bytes = 0, largest = 0, strings = 0;
+  int failAfter = -1;
+} textAllocations;
+size_t liveTextArrays = 0;
+void* operator new[](size_t size) {
+  if (textAllocations.active) {
+    if (textAllocations.failAfter == 0) throw std::bad_alloc();
+    if (textAllocations.failAfter > 0) --textAllocations.failAfter;
+    ++textAllocations.arrays;
+    textAllocations.bytes += size;
+    textAllocations.largest = std::max(textAllocations.largest, size);
+  }
+  void* result = std::malloc(size ? size : 1);
+  if (!result) throw std::bad_alloc();
+  ++liveTextArrays;
+  return result;
+}
+void operator delete[](void* value) noexcept {
+  if (value) { --liveTextArrays; std::free(value); }
+}
+void operator delete[](void* value, size_t) noexcept { ::operator delete[](value); }
+
+struct CString {
+  std::string value;
+  CString() = default;
+  CString(const char* text) : value(text) {}
+  CString(std::string text) : value(std::move(text)) {}
+  CString(const char* text, int length) : value(text, static_cast<size_t>(length)) {
+    if (textAllocations.active && length) ++textAllocations.strings;
+  }
+  operator LPCTSTR() const { return value.c_str(); }
+  CString& operator+=(const CString& text) { value += text.value; return *this; }
+  void Append(const char* text, int length) { value.append(text, static_cast<size_t>(length)); }
+  bool IsEmpty() const { return value.empty(); }
+  void Empty() { value.clear(); }
+  void MakeLower() {
+    for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  int Find(const CString& text) const {
+    const auto pos = value.find(text.value);
+    return pos == std::string::npos ? -1 : static_cast<int>(pos);
+  }
+  // Typed adapters avoid passing LP64 longs to Windows %i varargs formats.
+  // Unsupported formats fail instead of approximating native CString behavior.
+  void Format(const char* format, long count) {
+    const bool supported = std::strcmp(format, "%ld Kb") == 0;
+    CHECK(supported, "supported integer format");
+    value = std::to_string(count) + " Kb";
+  }
+  void Format(const char* format, double count) {
+    const bool supported = std::strcmp(format, "%5.1f Mb") == 0;
+    CHECK(supported, "supported floating point format");
+    char buffer[80];
+    const int length = std::snprintf(buffer, sizeof buffer, "%5.1f Mb", count);
+    CHECK(length > 0 && length < static_cast<int>(sizeof buffer), "formatted memory fits");
+    value = buffer;
+  }
+  void Format(const char* format, const char* text, long count) {
+    const bool supported = std::strcmp(format, "%s (%i bytes/line)") == 0;
+    CHECK(supported, "supported memory average format");
+    value = std::string(text) + " (" + std::to_string(count) + " bytes/line)";
+  }
+  void Format(const char* format, const char* text) {
+    const bool supported = std::strcmp(format, "%s") == 0;
+    CHECK(supported, "supported string format");
+    value = text;
+  }
+};
+
+CString Translate(const char* text) { return text; }
+CString TFormat(const char* format, const char* text) {
+  const bool supported = std::strcmp(format, "Recalling: %s") == 0;
+  CHECK(supported, "supported recall status format");
+  return std::string("Recalling: ") + text;
+}
+CString TFormat(const char* format, int count) {
+  const bool supported = std::strcmp(format, " (%i styles)") == 0;
+  CHECK(supported, "supported style count format");
+  return " (" + std::to_string(count) + " styles)";
+}
+CString TFormat(const char* format, const char* kind, const char* text) {
+  const bool supported = std::strcmp(format, "The %s \"%s\" was not found") == 0;
+  CHECK(supported, "supported recall miss format");
+  return std::string("The ") + kind + " \"" + text + "\" was not found";
+}
+struct CTime { int seconds = 0; };
+struct CException {
+  void ReportError() { throw std::runtime_error("Unexpected MFC exception"); }
+  void Delete() { delete this; }
+};
+void AfxThrowResourceException() { throw std::runtime_error("Resource creation failed"); }
+struct t_regexp { std::regex pattern; };
+t_regexp* regcomp(const CString& text, int flags) {
+  auto mode = std::regex::ECMAScript;
+  if (flags & PCRE_CASELESS) mode |= std::regex::icase;
+  return new t_regexp{std::regex(text.value, mode)};
+}
+bool regexec(t_regexp* pattern, const CString& text) {
+  return std::regex_search(text.value, pattern->pattern);
+}
+
+// Each POSITION points to a real allocation. Removal frees the node and value.
+// A baseline that retains a removed POSITION therefore fails under ASan.
+template<class T> struct OwnedList {
+  struct Node { Node* previous; Node* next; T* value; };
+  Node* head = nullptr;
+  Node* tail = nullptr;
+  long count = 0;
+  OwnedList() = default;
+  OwnedList(const OwnedList&) = delete;
+  OwnedList& operator=(const OwnedList&) = delete;
+  ~OwnedList() { Clear(); }
+  long GetCount() const { return count; }
+  POSITION GetHeadPosition() const { return head; }
+  POSITION GetTailPosition() const { return tail; }
+  T* GetNext(POSITION& position) const {
+    CHECK(position != nullptr, "nonempty list position");
+    Node* node = static_cast<Node*>(position);
+    position = node->next;
+    return node->value;
+  }
+  T* GetPrev(POSITION& position) const {
+    CHECK(position != nullptr, "nonempty reverse list position");
+    Node* node = static_cast<Node*>(position);
+    position = node->previous;
+    return node->value;
+  }
+  void AddTail(T* value) {
+    Node* node = new Node{tail, nullptr, value};
+    if (tail) tail->next = node;
+    else head = node;
+    tail = node;
+    ++count;
+  }
+  void RemoveHead() {
+    CHECK(head != nullptr, "nonempty list removal");
+    Node* node = head;
+    head = node->next;
+    if (head) head->previous = nullptr;
+    else tail = nullptr;
+    delete node->value;
+    delete node;
+    --count;
+  }
+  void Clear() { while (head) RemoveHead(); }
+};
+struct CStyle { unsigned short length = 0, flags = 0; unsigned colour = 0; };
+struct CLine {
+  bool hard_return = true;
+  unsigned char flags = 0;
+  int len = 0;
+  char* text = nullptr;
+  OwnedList<CStyle> styleList;
+  CTime m_theTime;
+  int iMemoryAllocated = 0;
+  explicit CLine(const std::string& value) { SetText(value); }
+  ~CLine() { delete[] text; }
+  void SetText(const std::string& value) {
+    auto buffer = std::make_unique<char[]>(value.size() + 1);
+    std::memcpy(buffer.get(), value.data(), value.size());
+    buffer[value.size()] = '\0';
+    delete[] text;
+    text = buffer.release();
+    len = static_cast<int>(value.size());
+    iMemoryAllocated = len + 1;
+  }
+};
+
+struct Harness {
+  std::function<void(const std::string&)> callback;
+  int creates = 0, destroys = 0, live = 0, polls = 0, cancelAt = 0;
+  int messages = 0;
+  long range = -1;
+  vector<long> positions;
+  void Event(const std::string& name) { if (callback) callback(name); }
+} harness;
+struct FrameAdapter {
+  CString status;
+  void SetStatusMessageNow(const CString& text) { status = text; }
+} Frame;
+void UMessageBox(const CString&, int) { ++harness.messages; }
+struct CProgressDlg {
+  CProgressDlg() { ++harness.live; }
+  ~CProgressDlg() { --harness.live; ++harness.destroys; }
+  bool Create() { ++harness.creates; harness.Event("create"); return true; }
+  void SetStatus(const CString&) {}
+  void SetRange(int, long upper) { harness.range = upper; }
+  void SetWindowText(const CString&) {}
+  void SetPos(long position) {
+    harness.positions.push_back(position);
+    harness.Event("setpos");
+  }
+  bool CheckCancelButton() {
+    ++harness.polls;
+    harness.Event("poll");
+    return harness.cancelAt != 0 && harness.polls >= harness.cancelAt;
+  }
+};
+struct CMUSHclientDoc {
+  OwnedList<CLine> m_LineList;
+  bool m_bUTF_8 = false;
+  int operations = 0, statusRestores = 0;
+  void ShowStatusLine() { ++statusRestores; Frame.status = "Ready"; }
+  CString FormatTime(CTime time, const CString& format) {
+    CHECK(format.value == "[%H:%M:%S] ", "supported timestamp preamble");
+    char buffer[32];
+    const int length = std::snprintf(buffer, sizeof buffer, "[%02d:%02d:%02d] ",
+                                   time.seconds / 3600, (time.seconds / 60) % 60,
+                                   time.seconds % 60);
+    CHECK(length == 11, "timestamp preamble length");
+    return buffer;
+  }
+  CString RecallText(CString, bool, bool, bool, bool, bool, int, CString);
+};
+// Retention is a counter stub. Native world-close deferral has separate tests.
+struct CWorldDocumentOperationGuard {
+  CMUSHclientDoc* document;
+  explicit CWorldDocumentOperationGuard(CMUSHclientDoc* doc) : document(doc) { ++doc->operations; }
+  ~CWorldDocumentOperationGuard() { --document->operations; }
+};
+struct Control { bool enabled = true; void EnableWindow(int value) { enabled = value != 0; } };
+struct CWnd {
+  int m_hWnd = 1;
+  static CWnd* FromHandlePermanent(int handle);
+};
+struct PageWindow { bool exists = false; CWnd* permanent = nullptr; } pageWindow;
+CWnd replacementWindow;
+bool IsWindow(int handle) { return handle == 1 && pageWindow.exists; }
+CWnd* CWnd::FromHandlePermanent(int handle) {
+  return IsWindow(handle) ? pageWindow.permanent : nullptr;
+}
+struct CPrefsP15 : CWnd {
+  CMUSHclientDoc* m_doc;
+  CString m_strBufferLines;
+  CString lineLabel = "unchanged lines", memoryLabel = "unchanged memory";
+  Control calculate;
+  int writes = 0;
+  explicit CPrefsP15(CMUSHclientDoc* doc)
+      : m_doc(doc), m_strBufferLines(std::to_string(doc->m_LineList.count) + " lines") {
+    pageWindow = {true, this};
+  }
+  void CheckWindow() const {
+    const bool exists = IsWindow(m_hWnd);
+    const CWnd* owner = CWnd::FromHandlePermanent(m_hWnd);
+    CHECK(exists && owner == this, "page window result: no UI access after destruction or reuse");
+  }
+  void SetDlgItemText(int id, const CString& text) {
+    CheckWindow();
+    ++writes;
+    if (id == IDC_BUFFER_LINES) {
+      lineLabel = text;
+      harness.Event("publish");
+    } else {
+      CHECK(id == IDC_OUTPUT_MEMORY, "known result control");
+      memoryLabel = text;
+    }
+  }
+  Control* GetDlgItem(int id) {
+    CheckWindow();
+    CHECK(id == IDC_CALCULATE_MEMORY, "known calculation control");
+    return &calculate;
+  }
+  void CalculateMemoryUsage();
+};
+
+@RECALL@
+
+@MEMORY@
+
+void Mutate(CMUSHclientDoc& doc, const std::string& action) {
+  if (action == "clear" || action == "replace") {
+    doc.m_LineList.Clear();
+    if (action == "replace") {
+      for (int i = 0; i < 7; ++i) {
+        auto* line = new CLine("match replacement");
+        line->flags = COMMENT;
+        line->m_theTime.seconds = 86399;
+        line->styleList.AddTail(new CStyle);
+        doc.m_LineList.AddTail(line);
+      }
+    }
+  } else if (action == "prune") {
+    for (int i = 0; i < 128; ++i) doc.m_LineList.RemoveHead();
+  } else if (action == "rewrite") {
+    for (auto* node = doc.m_LineList.head; node; node = node->next) {
+      auto* line = node->value;
+      line->SetText("match changed");
+      line->hard_return = false;
+      line->flags = COMMENT;
+      line->m_theTime.seconds = 86399;
+      line->iMemoryAllocated = 9000;
+      line->styleList.Clear();
+    }
+  } else {
+    throw std::runtime_error("Unknown mutation: " + action);
+  }
+}
+
+struct Scenario {
+  std::string action, event;
+  bool cancel = false, empty = false;
+};
+Scenario Parse(const std::string& name) {
+  const auto suffix = name.substr(name.find('_') + 1);
+  if (suffix == "control") return {};
+  if (suffix == "empty") return {"", "", false, true};
+  if (suffix == "cancel") return {"", "", true, false};
+  if (suffix == "clear_cancel") return {"clear", "create", true, false};
+  const auto split = suffix.find('_');
+  CHECK(split != std::string::npos, "case has action and event");
+  return {suffix.substr(0, split), suffix.substr(split + 1), false, false};
+}
+
+void Arm(CMUSHclientDoc& doc, const Scenario& scenario, int& mutations, CPrefsP15* page = nullptr) {
+  harness.callback = [&doc, &scenario, &mutations, page](const std::string& event) {
+    if (!scenario.action.empty() && scenario.event == event && mutations == 0) {
+      CHECK(harness.live == 1, "callback runs with a live progress dialog");
+      if (scenario.action == "destroy") {
+        CHECK(page != nullptr, "page exists during destruction callback");
+        page->m_hWnd = 0;
+        pageWindow = {};
+      } else if (scenario.action == "reuse") {
+        CHECK(page != nullptr, "page exists during handle reuse callback");
+        pageWindow = {true, &replacementWindow};
+      } else {
+        Mutate(doc, scenario.action);
+      }
+      ++mutations;
+    }
+  };
+}
+
+void CheckCleanup(const CMUSHclientDoc& doc, const Scenario& scenario, int mutations) {
+  CHECK(mutations == (scenario.action.empty() ? 0 : 1), "requested callback ran once");
+  CHECK(doc.operations == 0, "document operation count restored");
+  CHECK(harness.live == 0, "progress dialog destroyed");
+  CHECK(harness.creates == (scenario.empty ? 0 : 1), "progress creation count");
+  CHECK(harness.destroys == harness.creates, "progress destruction count");
+}
+
+void FillRecall(CMUSHclientDoc& doc) {
+  for (int i = 0; i < 544; ++i) {
+    auto* line = new CLine("filler");
+    line->m_theTime.seconds = i;
+    // Different metadata on the two wrap fragments verifies the final fragment
+    // supplies the logical line's flags and timestamp.
+    if (i == 0) { line->SetText("Ma"); line->flags = COMMENT; line->hard_return = false; }
+    if (i == 1) { line->SetText("tch early"); line->m_theTime.seconds = 3723; }
+    if (i == 2) { line->SetText("MATCH cmd"); line->flags = USER_INPUT; line->m_theTime.seconds = 7384; }
+    if (i == 3) { line->SetText("match note"); line->flags = COMMENT; line->m_theTime.seconds = 11045; }
+    if (i == 31) { line->SetText("ma"); line->flags = COMMENT; line->hard_return = false; }
+    if (i == 32) { line->SetText("tch wrapped"); line->m_theTime.seconds = 14706; }
+    if (i == 70) { line->SetText("match late"); line->flags = USER_INPUT; line->m_theTime.seconds = 18367; }
+    if (i == 543) {
+      // Explicit length must preserve embedded NUL text. The tail has no hard return.
+      line->SetText(std::string("match tail\0end", 14));
+      line->flags = COMMENT;
+      line->hard_return = false;
+      line->m_theTime.seconds = 22028;
+    }
+    doc.m_LineList.AddTail(line);
+  }
+}
+
+std::string ExpectedRecall(int filter, bool cancelled, bool preamble, bool sensitive, int limit) {
+  struct Result { const char* stamp; std::string text; int category; bool afterCancel; bool recent; };
+  const vector<Result> records = {
+    {"[01:02:03] ", "Match early", 2, false, false},
+    {"[02:03:04] ", "MATCH cmd", 1, false, false},
+    {"[03:04:05] ", "match note", 3, false, false},
+    {"[04:05:06] ", "match wrapped", 2, true, false},
+    {"[05:06:07] ", "match late", 1, true, false},
+    {"[06:07:08] ", std::string("match tail\0end", 14), 3, true, true},
+  };
+  std::string expected;
+  for (const auto& record : records) {
+    if (filter != 0 && filter != record.category) continue;
+    if (cancelled && record.afterCancel) continue;
+    if (sensitive && (record.text == "Match early" || record.text == "MATCH cmd")) continue;
+    if (limit != 0 && !record.recent) continue;
+    if (preamble) expected += record.stamp;
+    expected += record.text + "\r\n";
+  }
+  return expected;
+}
+
+void RecallCase(const Scenario& scenario) {
+  // Filters: all, commands, output, notes. Both regex and literal paths run.
+  // Additional passes check case-sensitive matching, no preamble, and iLines.
+  const int variants = scenario.cancel || scenario.empty ? 1 : 11;
+  for (int variant = 0; variant < variants; ++variant) {
+    harness = Harness{};
+    CMUSHclientDoc doc;
+    if (!scenario.empty) FillRecall(doc);
+    int mutations = 0;
+    Arm(doc, scenario, mutations);
+    harness.cancelAt = scenario.cancel ? 1 : 0;
+    const int filter = variant < 8 ? variant % 4 : 0;
+    const bool regexp = variant >= 4 && variant < 8;
+    const bool sensitive = variant == 8;
+    const bool preamble = variant != 9;
+    const int limit = variant == 10 ? 10 : 0;
+    const CString needle = regexp ? "^match" : (sensitive ? "match" : "mAtCh");
+    const auto result = doc.RecallText(needle, sensitive, regexp,
+                                      filter == 0 || filter == 1,
+                                      filter == 0 || filter == 2,
+                                      filter == 0 || filter == 3,
+                                      limit, preamble ? "[%H:%M:%S] " : "");
+    const auto expected = scenario.empty ? std::string{} :
+        ExpectedRecall(filter, scenario.cancel, preamble, sensitive, limit);
+    if (result.value != expected) {
+      std::cerr << "Recall variant " << variant << ": expected " << expected.size()
+                << " bytes, got " << result.value.size() << " bytes\n";
+    }
+    CHECK(result.value == expected, "snapshot result: recall text, wrapping, flags, time, and range");
+    CHECK(Frame.status.value == "Ready", "recall status restored");
+    CHECK(harness.messages == (scenario.empty ? 1 : 0), "recall no-match message count");
+    if (scenario.cancel) {
+      CHECK(harness.polls == 1, "cancellation result: recall stops on first cancellation");
+    }
+    if (!scenario.empty) CHECK(harness.range == 544, "snapshot result: recall progress range");
+    // iLines=10 has no SetPos or cancellation poll. The create callback still runs.
+    if (limit && scenario.event != "create" && !scenario.action.empty()) {
+      CHECK(mutations == 0, "short recall does not reach the progress interval");
+      CHECK(doc.operations == 0 && harness.live == 0, "short recall cleanup");
+    } else {
+      CheckCleanup(doc, scenario, mutations);
+    }
+  }
+}
+
+struct MemoryExpected { long lines = 0, allocations = 0, styles = 0; };
+MemoryExpected FillMemory(CMUSHclientDoc& doc, bool empty) {
+  MemoryExpected expected;
+  if (empty) return expected;
+  expected.lines = 1104;
+  for (int i = 0; i < expected.lines; ++i) {
+    auto* line = new CLine("memory line");
+    line->iMemoryAllocated = 64 + (i % 7) * 31;
+    const int styles = 1 + i % 4;
+    for (int j = 0; j < styles; ++j) line->styleList.AddTail(new CStyle);
+    expected.allocations += line->iMemoryAllocated;
+    expected.styles += styles;
+    doc.m_LineList.AddTail(line);
+  }
+  return expected;
+}
+
+void MemoryCase(const Scenario& scenario) {
+  harness = Harness{};
+  CMUSHclientDoc doc;
+  const auto expected = FillMemory(doc, scenario.empty);
+  CPrefsP15 page(&doc);
+  int mutations = 0;
+  Arm(doc, scenario, mutations, &page);
+  harness.cancelAt = scenario.cancel ? 70 : 0;
+  const auto initialBufferLines = page.m_strBufferLines.value;
+  page.CalculateMemoryUsage();
+  if (scenario.action == "destroy" || scenario.action == "reuse") {
+    CHECK(page.writes == 0 && page.calculate.enabled && doc.statusRestores == 0,
+          "page window result: no UI publication after window identity changes");
+    CHECK(page.m_strBufferLines.value == initialBufferLines &&
+          page.lineLabel.value == "unchanged lines" && page.memoryLabel.value == "unchanged memory",
+          "page window result: page data stays unchanged");
+    CHECK(harness.polls == expected.lines, "page window result: calculation reaches publication guard");
+  } else if (scenario.cancel) {
+    CHECK(page.writes == 0, "cancellation result: no partial result is published");
+    CHECK(page.lineLabel.value == "unchanged lines" && page.memoryLabel.value == "unchanged memory",
+          "cancellation result: controls keep their prior values");
+    CHECK(page.m_strBufferLines.value == initialBufferLines,
+          "cancellation result: saved line label is unchanged");
+    CHECK(page.calculate.enabled && doc.statusRestores == 0,
+          "cancellation result: calculation can be retried");
+    CHECK(harness.polls == 70, "cancellation result: iteration stops at cancellation");
+    const vector<long> positions = {64};
+    CHECK(harness.positions == positions, "cancellation result: one progress update before stop");
+  } else {
+    // Aggregate oracle uses the fixture's original input counts, not live lines.
+    const long bytes = expected.allocations + expected.lines * (sizeof(CLine) + 3 * sizeof(void*))
+                       + expected.styles * (sizeof(CStyle) + 3 * sizeof(void*));
+    char units[80];
+    int length;
+    if (bytes < 1024 * 1024) length = std::snprintf(units, sizeof units, "%ld Kb", bytes / 1024);
+    else length = std::snprintf(units, sizeof units, "%5.1f Mb", bytes / (1024.0 * 1024.0));
+    CHECK(length > 0 && length < static_cast<int>(sizeof units), "expected memory units fit");
+    std::string memory = units;
+    if (expected.lines) memory += " (" + std::to_string(bytes / expected.lines) + " bytes/line)";
+    const std::string lines = initialBufferLines + " (" + std::to_string(expected.styles) + " styles)";
+    if (page.memoryLabel.value != memory || page.lineLabel.value != lines) {
+      std::cerr << "Expected memory: " << memory << "; got: " << page.memoryLabel.value
+                << "\nExpected lines: " << lines << "; got: " << page.lineLabel.value << '\n';
+    }
+    CHECK(page.memoryLabel.value == memory && page.lineLabel.value == lines,
+          "snapshot result: captured memory, styles, and average denominator");
+    CHECK(page.writes == 2 && !page.calculate.enabled && doc.statusRestores == 1,
+          "memory calculation publishes one complete result");
+    CHECK(page.m_strBufferLines.value == lines, "saved line label matches result");
+    CHECK(harness.polls == expected.lines, "snapshot result: all captured memory records visited");
+    vector<long> positions;
+    for (long i = 64; i <= expected.lines; i += 64) positions.push_back(i);
+    CHECK(harness.positions == positions, "snapshot result: memory progress uses captured count");
+    CHECK(Frame.status.value == "Ready", "completed memory status restored");
+  }
+  if (!scenario.empty) CHECK(harness.range == expected.lines, "snapshot result: memory progress range");
+  CheckCleanup(doc, scenario, mutations);
+}
+
+void RecallStorageCase(const std::string& name) {
+  harness = Harness{};
+  CMUSHclientDoc doc;
+  const bool shortRange = name == "recall_storage_short";
+  const bool fail = name == "recall_storage_failure";
+  const bool cancel = name == "recall_storage_cancel";
+  const int count = cancel ? 500000 : 5000;
+  std::string expected;
+  size_t payload = 0;
+  for (int i = 0; i < count; ++i) {
+    std::string text(80, 'x');
+    if (!cancel && !shortRange && !fail) {
+      // Empty lines and lines around the block boundary test byte preservation.
+      if (i == 0) text.clear();
+      if (i == 1) text.assign(65535, 'a');
+      if (i == 2) text.assign(65536, 'b');
+      if (i == 3) text.assign(65537, 'c');
+      if (i == 4) text = "UTF-8: \xe2\x82\xac";
+    }
+    doc.m_LineList.AddTail(new CLine(text));
+    if (!shortRange || i >= count - 2) {
+      payload += text.size();
+      if (!cancel && !fail) expected += text + "\r\n";
+    }
+  }
+  const size_t arraysBefore = liveTextArrays;
+  textAllocations = TextAllocationProbe{};
+  textAllocations.active = true;
+  textAllocations.failAfter = fail ? 1 : -1;
+  harness.cancelAt = cancel ? 1 : 0;
+  harness.callback = [&](const std::string& event) {
+    if (event != "create") return;
+    textAllocations.active = false;
+    CHECK(textAllocations.strings == 0, "snapshot storage: no per-line string allocations");
+    CHECK(textAllocations.arrays > 0 && textAllocations.arrays < size_t(count) / 8,
+          "snapshot storage: text allocation count is below line count");
+    CHECK(textAllocations.bytes >= payload && textAllocations.bytes < payload + 256 * 1024,
+          "snapshot storage: bounded text allocation overhead");
+    CHECK(textAllocations.largest <= 256 * 1024, "snapshot storage: bounded text blocks");
+    if (shortRange) CHECK(textAllocations.bytes <= 256, "short snapshot uses selected range");
+    std::cout << "Snapshot text: " << payload << " bytes in " << textAllocations.arrays
+              << " allocations, " << textAllocations.bytes << " allocated bytes\n";
+    // All source text goes away before the snapshot is read.
+    doc.m_LineList.Clear();
+  };
+  bool threw = false;
+  try {
+    const auto result = doc.RecallText(cancel ? "missing" : "", true, false,
+                                      true, true, true, shortRange ? 1 : 0, "");
+    CHECK(result.value == expected, "snapshot storage: retained exact bytes");
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  textAllocations.active = false;
+  CHECK(threw == fail, "snapshot allocation failure propagates");
+  CHECK(doc.operations == 0 && harness.live == 0 && Frame.status.value == "Ready",
+        "snapshot storage: exception and normal cleanup");
+  if (fail) {
+    CHECK(harness.creates == 0 && doc.m_LineList.GetCount() == count,
+          "snapshot failure leaves original output intact");
+    CHECK(liveTextArrays == arraysBefore, "snapshot failure releases retained blocks");
+  } else {
+    CHECK(harness.creates == 1 && doc.m_LineList.GetCount() == 0 && liveTextArrays == 0,
+          "snapshot storage releases source and copied text");
+  }
+  if (cancel) CHECK(harness.polls == 1, "snapshot storage preserves first-poll cancellation");
+  harness.callback = nullptr;
+}
+
+int main(int argc, char** argv) {
+  CHECK(argc == 2, "one case argument required");
+  const std::string name = argv[1];
+  if (name.rfind("recall_storage_", 0) == 0) {
+    RecallStorageCase(name);
+    std::cout << "PASS: " << name << '\n';
+    return 0;
+  }
+  const Scenario scenario = Parse(name);
+  if (name.rfind("recall_", 0) == 0) RecallCase(scenario);
+  else if (name.rfind("memory_", 0) == 0) MemoryCase(scenario);
+  else throw std::runtime_error("Unknown case: " + name);
+  harness.callback = nullptr;
+  std::cout << "PASS: " << name << '\n';
+}
