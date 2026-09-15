@@ -1,0 +1,308 @@
+// Platform substitutes for the extracted hostname code. Resolver requests retain
+// their buffer until cancellation or completion; a late write checks its lifetime.
+#include <cstdarg>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <new>
+#include <set>
+#include <string>
+#include <vector>
+[[noreturn]] static void fail(const char *condition, int line) {
+    std::fprintf(stderr, "CHECK failed at line %d: %s\n", line, condition);
+    std::exit(EXIT_FAILURE);
+}
+// These checks remain active when the runner compiles with NDEBUG.
+#define CHECK(condition) do { if (!(condition)) fail(#condition, __LINE__); } while (0)
+
+using BOOL = int;
+using LPCTSTR = const char *;
+using HANDLE = void *;
+using WPARAM = uintptr_t;
+using LPARAM = long;
+using DWORD = unsigned long;
+using u_short = unsigned short;
+constexpr int TRUE=1, FALSE=0, AF_INET=2, SOCK_STREAM=1;
+constexpr int FD_READ=1, FD_WRITE=2, FD_CONNECT=4, FD_CLOSE=8;
+constexpr int SOCKET_ERROR=-1, WSAEINVAL=10022, WSAEALREADY=10037;
+constexpr int WSAEINPROGRESS=10036, WSAENETDOWN=10050, WSANOTINITIALISED=10093;
+constexpr int MAXGETHOSTSTRUCT=1024, WM_USER_HOST_NAME_RESOLVED=1234;
+constexpr int SIO_KEEPALIVE_VALS=1, eWorldAction=0, eOK=0, eWorldOpen=1;
+constexpr unsigned long INADDR_NONE=0xffffffffUL;
+enum {eConnectNotConnected, eConnectMudNameLookup, eConnectProxyNameLookup,
+      eConnectConnectingToMud, eConnectConnectingToProxy, eConnectConnectedToMud};
+enum {eProxyServerNone, eProxyServerSocks4, eProxyServerSocks5};
+struct CString : std::string {
+    using std::string::string;
+    CString(const std::string &s) : std::string(s) {}
+    bool IsEmpty() const { return empty(); }
+    operator const char *() const { return c_str(); }
+};
+CString TFormat(const char *format, ...) {
+    char text[2048]; va_list args; va_start(args, format);
+    vsnprintf(text, sizeof text, format, args); va_end(args); return text;
+}
+std::vector<std::string> reports;
+void UMessageBox(const CString &s) { reports.push_back(s); }
+void TMessageBox(const char *s) { UMessageBox(s); }
+const char *GetSocketError(int) { return "injected socket error"; }
+#define TRACE(...) ((void)0)
+struct DISPPARAMS { void *a; void *b; int c; int d; };
+struct in_addr { unsigned long s_addr; };
+using LPIN_ADDR = in_addr *;
+struct sockaddr_in { int sin_family=0; unsigned short sin_port=0; in_addr sin_addr{INADDR_NONE}; };
+struct hostent { char *h_addr; };
+struct tcp_keepalive { int a,b,c; };
+#undef htons
+unsigned short htons(unsigned short n) { return n; }
+unsigned long inet_addr(const char *s) {
+    if (std::strcmp(s, "192.0.2.1") == 0) return 0xc0000201;
+    return INADDR_NONE;
+}
+void WSAIoctl(int, int, void *, size_t, void *, int, DWORD *, void *, void *) {}
+int lastError=0;
+int GetLastError() { return lastError; }
+int WSAGetLastError() { return lastError; }
+int WSAGETASYNCERROR(LPARAM value) { return static_cast<int>(value); }
+struct {
+    bool m_bAutoConnectWorlds=true, m_bUpdateActivity=false;
+    bool m_bNotifyIfCannotConnect=true, m_bErrorNotificationToOutputWindow=true;
+} App;
+struct {
+    int hwnd=1;
+    int GetSafeHwnd() { return hwnd; }
+    void SetStatusMessageNow(const CString &) {}
+} Frame;
+
+struct Request { char *buffer; bool pending; };
+std::map<HANDLE, Request> requests;
+std::set<void *> buffers;
+bool failAllocation=false, failStart=false;
+int starts=0, cancels=0, cancelError=0, socketCreates=0, socketDeletes=0;
+uintptr_t nextHandle=1;
+void *operator new[](size_t size) {
+    if (failAllocation) { failAllocation=false; throw std::bad_alloc(); }
+    void *p=std::malloc(size);
+    if (!p) throw std::bad_alloc();
+    buffers.insert(p); return p;
+}
+void operator delete[](void *p) noexcept {
+    if (!p) return;
+    for (const auto &item: requests)
+        CHECK(!(item.second.pending && item.second.buffer==p) && "freed a pending resolver buffer");
+    const size_t removed = buffers.erase(p);
+    CHECK(removed==1); std::free(p);
+}
+HANDLE WSAAsyncGetHostByName(int hwnd, int message, const char *, char *buffer, int size) {
+    CHECK(hwnd && message==WM_USER_HOST_NAME_RESOLVED && size==MAXGETHOSTSTRUCT);
+    CHECK(buffers.count(buffer)); ++starts;
+    if (failStart) { lastError=WSAENETDOWN; return 0; }
+    const HANDLE handle=reinterpret_cast<HANDLE>(nextHandle++);
+    CHECK(!requests.count(handle) || !requests.at(handle).pending);
+    requests[handle]={buffer,true}; return handle;
+}
+int WSACancelAsyncRequest(HANDLE handle) {
+    ++cancels;
+    Request &r=requests.at(handle);
+    if (!cancelError) { r.pending=false; return 0; }
+    if (cancelError==WSAEINVAL || cancelError==WSAEALREADY) CHECK(!r.pending);
+    lastError=cancelError; return SOCKET_ERROR;
+}
+void complete(HANDLE handle, unsigned long address) {
+    Request &r=requests.at(handle);
+    CHECK(r.pending && buffers.count(r.buffer));
+    // Actual asynchronous result write, after the replacement attempt returned.
+    auto *value=reinterpret_cast<in_addr *>(r.buffer+sizeof(hostent));
+    value->s_addr=address;
+    reinterpret_cast<hostent *>(r.buffer)->h_addr=reinterpret_cast<char *>(value);
+    r.pending=false;
+}
+struct CWorldSocket {
+    int m_hSocket=1;
+    template<class T> explicit CWorldSocket(T *) { ++socketCreates; }
+    ~CWorldSocket() { ++socketDeletes; }
+    BOOL Create(int,int,int,void *) { return TRUE; }
+    BOOL AsyncSelect() { return TRUE; }
+};
+struct CMUSHclientDoc {
+    HANDLE m_hNameLookup=0;
+    char *m_pGetHostStruct=nullptr;
+    unsigned long m_iNameLookupGeneration=0, m_iConnectionAttemptNumber=0;
+    int m_iConnectPhase=eConnectNotConnected, m_iSocksProcessing=eProxyServerNone;
+    CString m_server="mud.example", m_strProxyServerName="proxy.example", m_mush_name="Test world";
+    int m_port=4000, m_iProxyServerPort=1080;
+    bool m_bEnableScripts=true; void *m_ScriptEngine=nullptr;
+    CString m_strWorldOpen="OnWorldOpen"; int m_dispidWorldOpen=1;
+    std::function<void()> onOpen;
+    bool m_bEnableAutoSay=true, m_bDisconnectOK=false, m_bCompress=false;
+    bool m_bSupports_MCCP_2=false, m_bNoEcho=false, m_bSendKeepAlives=false;
+    int m_iMCCP_type=0, m_iInputPacketCount=0, m_iOutputPacketCount=0, m_iUTF8ErrorCount=0;
+    sockaddr_in m_sockAddr, m_ProxyAddr;
+    CWorldSocket *m_pSocket=nullptr;
+    int connections=0;
+    void CreateScriptEngine() { m_ScriptEngine=this; }
+    bool SeeIfHandlerCanExecute(const CString &) { return true; }
+    void ExecuteScript(int,const CString &,int,const char *,const char *,DISPPARAMS &,long &) {
+        if (onOpen) onOpen();
+    }
+    void UpdateAllViews(void *) {}
+    void Note(const CString &s) { UMessageBox(s); }
+    void InitiateConnection() {
+        CHECK(m_pSocket);
+        ++connections;
+        m_iConnectPhase=(m_iSocksProcessing==eProxyServerNone ? eConnectConnectingToMud : eConnectConnectingToProxy);
+    }
+    BOOL OpenSession(); BOOL ConnectSocket(); bool LookupHostName(LPCTSTR);
+    void HostNameResolved(WPARAM,LPARAM); void OnConnectionConnect(); long Connect();
+    ~CMUSHclientDoc() {
+        // Test cleanup must not conceal an active request or leaked buffer.
+        CHECK(!m_hNameLookup && !m_pGetHostStruct);
+        delete m_pSocket;
+    }
+};
+@FUNCTIONS@
+struct Completion { HANDLE handle; unsigned long m_iGeneration; };
+Completion capture(const CMUSHclientDoc &doc) { return {doc.m_hNameLookup,doc.m_iNameLookupGeneration}; }
+void dispatch(CMUSHclientDoc *pDoc, Completion deferred, LPARAM error=0) {
+    HANDLE hLookup=deferred.handle;
+    struct { LPARAM lParam; } msg{error};
+    @DISPATCH@
+}
+void finish(CMUSHclientDoc &doc, unsigned long address=42) {
+    auto event=capture(doc); complete(event.handle,address); dispatch(&doc,event);
+}
+void reset() {
+    CHECK(buffers.empty());
+    for (auto &item: requests) CHECK(!item.second.pending);
+    requests.clear(); reports.clear();
+    failAllocation=failStart=false; starts=cancels=cancelError=socketCreates=socketDeletes=0;
+    nextHandle=1; Frame.hwnd=1; App.m_bAutoConnectWorlds=true; App.m_bUpdateActivity=false;
+}
+void worldOpen(bool proxy) {
+    reset(); CMUSHclientDoc doc;
+    if (proxy) { doc.m_server="192.0.2.1"; doc.m_iSocksProcessing=eProxyServerSocks5; }
+    doc.onOpen=[&] { CHECK(doc.Connect()==eOK); };
+    doc.OpenSession();
+    CHECK(starts==1 && cancels==0 && socketCreates==1 && socketDeletes==0);
+    CHECK(doc.m_iConnectionAttemptNumber==1 && doc.m_iNameLookupGeneration==1);
+    CHECK(doc.m_iConnectPhase==(proxy ? eConnectProxyNameLookup : eConnectMudNameLookup));
+    finish(doc); CHECK(doc.connections==1);
+}
+void repeatConnect(bool proxy) {
+    reset(); CMUSHclientDoc doc;
+    if (proxy) { doc.m_server="192.0.2.1"; doc.m_iSocksProcessing=eProxyServerSocks5; }
+    CHECK(doc.ConnectSocket());
+    auto event=capture(doc); auto *buffer=doc.m_pGetHostStruct; auto *socket=doc.m_pSocket;
+    int phase=doc.m_iConnectPhase;
+    CHECK(doc.ConnectSocket());
+    CHECK(doc.m_hNameLookup==event.handle && doc.m_iNameLookupGeneration==event.m_iGeneration);
+    CHECK(doc.m_pGetHostStruct==buffer && doc.m_pSocket==socket && doc.m_iConnectPhase==phase);
+    CHECK(starts==1 && socketCreates==1 && socketDeletes==0 && doc.m_iConnectionAttemptNumber==1);
+    finish(doc); CHECK(doc.connections==1);
+}
+void cancellationFailure(int error, bool proxy) {
+    reset(); CMUSHclientDoc doc;
+    if (proxy) { doc.m_server="192.0.2.1"; doc.m_iSocksProcessing=eProxyServerSocks5; }
+    CHECK(doc.ConnectSocket());
+    const auto event=capture(doc); auto *buffer=doc.m_pGetHostStruct; const int phase=doc.m_iConnectPhase;
+    cancelError=error;
+    CHECK(doc.LookupHostName("replacement.example"));
+    CHECK(cancels==1 && starts==1 && buffers.size()==1);
+    CHECK(doc.m_hNameLookup==event.handle && doc.m_pGetHostStruct==buffer);
+    CHECK(doc.m_iNameLookupGeneration==event.m_iGeneration && doc.m_iConnectPhase==phase);
+    CHECK(reports.size()==1 && reports[0].find(std::to_string(error))!=std::string::npos);
+    complete(event.handle,99); dispatch(&doc,event);
+    CHECK((proxy ? doc.m_ProxyAddr : doc.m_sockAddr).sin_addr.s_addr==99);
+    CHECK(doc.connections==1 && buffers.empty());
+}
+void replacement(int error, bool reuseHandle) {
+    reset(); CMUSHclientDoc doc; CHECK(doc.ConnectSocket());
+    const auto old=capture(doc); auto *buffer=doc.m_pGetHostStruct;
+    if (error) complete(old.handle,11); // complete the request before cancellation
+    cancelError=error;
+    if (reuseHandle) nextHandle=reinterpret_cast<uintptr_t>(old.handle);
+    CHECK(!doc.LookupHostName("replacement.example"));
+    CHECK(cancels==1 && starts==2 && doc.m_iNameLookupGeneration==old.m_iGeneration+1);
+    CHECK(doc.m_pGetHostStruct!=buffer && buffers.size()==1 && reports.empty());
+    // This event already carries a saved generation for deferred dispatch.
+    // A raw Win32 message received after handle reuse is outside this fixture.
+    dispatch(&doc,old);
+    CHECK(doc.connections==0 && doc.m_hNameLookup && doc.m_pGetHostStruct);
+    finish(doc,22); CHECK(doc.connections==1 && doc.m_sockAddr.sin_addr.s_addr==22);
+}
+void allocationFailure(bool pending) {
+    reset(); CMUSHclientDoc doc;
+    if (pending) CHECK(doc.ConnectSocket());
+    const auto old=capture(doc); auto *buffer=doc.m_pGetHostStruct;
+    failAllocation=true; bool threw=false;
+    try {
+        if (pending) doc.LookupHostName("replacement.example");
+        else doc.ConnectSocket();
+    } catch (const std::bad_alloc &) { threw=true; }
+    CHECK(threw && !failAllocation && cancels==0);
+    CHECK(doc.m_hNameLookup==old.handle && doc.m_pGetHostStruct==buffer);
+    CHECK(doc.m_iNameLookupGeneration==old.m_iGeneration);
+    if (pending) { CHECK(doc.m_iConnectPhase==eConnectMudNameLookup); finish(doc); }
+    else {
+        CHECK(starts==0 && doc.m_iConnectPhase==eConnectNotConnected && App.m_bUpdateActivity);
+        CHECK(doc.ConnectSocket()); finish(doc); // retry remains available
+    }
+}
+void startupFailure(bool window) {
+    reset(); CMUSHclientDoc doc;
+    Frame.hwnd=window ? 1 : 0; failStart=window;
+    CHECK(!doc.ConnectSocket());
+    CHECK(!doc.m_hNameLookup && !doc.m_pGetHostStruct && buffers.empty());
+    CHECK(doc.m_iConnectPhase==eConnectNotConnected && reports.size()==1);
+}
+void completedWithoutWindow() {
+    reset(); CMUSHclientDoc doc; CHECK(doc.ConnectSocket());
+    const auto old=capture(doc); complete(old.handle,11);
+    cancelError=WSAEALREADY; Frame.hwnd=0;
+    CHECK(doc.LookupHostName("replacement.example"));
+    CHECK(!doc.m_hNameLookup && !doc.m_pGetHostStruct && buffers.empty());
+    dispatch(&doc,old); CHECK(doc.connections==0 && reports.size()==1);
+}
+void mudThenProxy() {
+    reset(); CMUSHclientDoc doc; doc.m_iSocksProcessing=eProxyServerSocks5;
+    CHECK(doc.ConnectSocket()); finish(doc,11);
+    CHECK(starts==2 && cancels==0 && doc.m_iNameLookupGeneration==2);
+    CHECK(doc.m_iConnectPhase==eConnectProxyNameLookup && doc.connections==0);
+    finish(doc,22);
+    CHECK(doc.connections==1 && doc.m_sockAddr.sin_addr.s_addr==11 && doc.m_ProxyAddr.sin_addr.s_addr==22);
+}
+void openPhaseAndOptions() {
+    reset();
+    for (int phase: {eConnectConnectingToMud,eConnectConnectingToProxy,eConnectConnectedToMud}) {
+        CMUSHclientDoc doc; doc.onOpen=[&] { doc.m_iConnectPhase=phase; };
+        doc.OpenSession(); CHECK(starts==0 && socketCreates==0);
+    }
+    { CMUSHclientDoc doc; CHECK(doc.OpenSession()); finish(doc); }
+    App.m_bAutoConnectWorlds=false;
+    { CMUSHclientDoc doc; CHECK(!doc.OpenSession()); CHECK(starts==1); }
+    { CMUSHclientDoc doc; doc.onOpen=[&] { CHECK(doc.Connect()==eOK); };
+      doc.OpenSession(); CHECK(starts==2); finish(doc); }
+}
+int main() {
+    worldOpen(false); worldOpen(true);
+    std::cout << "PASS: world-open Connect and auto-connect, MUD and proxy\n";
+    repeatConnect(false); repeatConnect(true);
+    std::cout << "PASS: pending ConnectSocket preserves socket, phase, request, and generation\n";
+    for (int error: {WSAEINPROGRESS,WSAENETDOWN,WSANOTINITIALISED,12345})
+        for (bool proxy: {false,true}) cancellationFailure(error,proxy);
+    std::cout << "PASS: cancellation failures retain writable buffers and deliver MUD/proxy completion\n";
+    for (int error: {0,WSAEINVAL,WSAEALREADY})
+        for (bool reuse: {false,true}) replacement(error,reuse);
+    std::cout << "PASS: cancellation and completed requests retire safely; stale deferred generations are rejected\n";
+    allocationFailure(false); allocationFailure(true);
+    std::cout << "PASS: allocation exceptions propagate; initial retry and pending completion work\n";
+    startupFailure(false); startupFailure(true); completedWithoutWindow();
+    std::cout << "PASS: startup failures return failure and release buffers without stale handles\n";
+    mudThenProxy(); openPhaseAndOptions(); reset();
+    std::cout << "PASS: MUD-to-proxy handoff and world-open phase/auto-connect options\n";
+}
