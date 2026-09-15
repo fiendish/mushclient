@@ -249,16 +249,16 @@ void CMUSHclientDoc::DeleteCommandHistory()
 long CMUSHclientDoc::Execute(LPCTSTR Command) 
 {
 
+CWorldDocumentOperationGuard executeOperationGuard (this);
+
 // remember current plugin
-CPlugin *  pCurrentPlugin = m_CurrentPlugin;
+CValueStateGuard<CPlugin *> pluginGuard (m_CurrentPlugin, m_CurrentPlugin);
 
 // stop an alias from recalling itself indefinitely
 
-if (++m_iExecutionDepth > MAX_EXECUTION_DEPTH)
-  {
-  m_iExecutionDepth--;
+CValueStateGuard<int> executionDepthGuard (m_iExecutionDepth, m_iExecutionDepth + 1);
+if (m_iExecutionDepth > MAX_EXECUTION_DEPTH)
   return eCommandsNestedTooDeeply;
-  }
 
 CString strFixedCommand = Command;
 
@@ -276,7 +276,7 @@ if (!m_strScriptPrefix.IsEmpty () &&    // and we *have* a script prefix
   // if scripting enabled, do it
   if (m_bEnableScripts)
     {
-    m_bInSendToScript = false;   // they can do DeleteLines here I think
+    CBoolStateGuard sendToScriptGuard (m_bInSendToScript, false);
 
     if (m_ScriptEngine)      // scripting might be enabled, but not OK to run
       m_ScriptEngine->Parse (strCommand, "Command line");
@@ -284,10 +284,6 @@ if (!m_strScriptPrefix.IsEmpty () &&    // and we *have* a script prefix
       ColourNote ("white", "red", 
           Translate ("Scripting is not active yet, or script file had a parse error."));
 
-    m_bInSendToScript = true;
-    
-    m_iExecutionDepth--;
-    m_CurrentPlugin = pCurrentPlugin;  // restore whatever plugin we are in
     return eOK;
     }
 
@@ -353,14 +349,9 @@ for (POSITION command_pos = strList.GetHeadPosition (); command_pos; )
 
   if (!m_bPluginProcessingCommand)
       {
-      m_bPluginProcessingCommand = true;  // so we don't go into a loop
+      CBoolStateGuard processingGuard (m_bPluginProcessingCommand, true);
       if (!SendToAllPluginCallbacks (ON_PLUGIN_COMMAND, str))
-        {
-        m_bPluginProcessingCommand = false;
         continue;
-        }
-
-      m_bPluginProcessingCommand = false;
       }
 
   // empty line - just send it
@@ -370,8 +361,6 @@ for (POSITION command_pos = strList.GetHeadPosition (); command_pos; )
       // pressing <enter> might be trying to connect
       if (CheckConnected ())
         {
-        m_iExecutionDepth--;
-        m_CurrentPlugin = pCurrentPlugin;  // restore whatever plugin we are in
         return eWorldClosed;
         }
 
@@ -386,10 +375,6 @@ for (POSITION command_pos = strList.GetHeadPosition (); command_pos; )
  
   }   // end of processing each line individually
 
-// this command has completed, so we can reduce the execution depth
-
-  m_iExecutionDepth--;
-  m_CurrentPlugin = pCurrentPlugin;  // restore whatever plugin we are in
 	return eOK;
 }   // end of CMUSHclientDoc::Execute
 
@@ -402,7 +387,12 @@ int nID = StringToCommandID (Command);
   if (nID == 0)
     return eNoSuchCommand;
 
-  Frame.PostMessage(WM_COMMAND, nID, 0);
+  MSG msg;
+  ZeroMemory (&msg, sizeof msg);
+  msg.hwnd = Frame.GetSafeHwnd ();
+  msg.message = WM_COMMAND;
+  msg.wParam = nID;
+  App.DeferMessageUntilIdle (msg);
 
 	return eOK;
 }   // end of  CMUSHclientDoc::DoCommand

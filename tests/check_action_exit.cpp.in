@@ -1,0 +1,179 @@
+// MFC and callback substitutes. The runner inserts production source blocks.
+#include <cstdlib>
+#include <functional>
+#include <iostream>
+#include <string>
+using UINT = unsigned int;
+using BOOL = int;
+constexpr int FALSE = 0, VK_RETURN = 13;
+int failures = 0;
+void Check(bool value, const char *expression, int line) {
+  if (!value) {
+    ++failures;
+    std::cerr << "line " << line << ": check failed: " << expression << '\n';
+  }
+}
+#define CHECK(x) Check(static_cast<bool>(x), #x, __LINE__)
+#define ASSERT_VALID(x) CHECK(x)
+struct CString : std::string {
+  using std::string::string;
+  CString(const std::string &value) : std::string(value) {}
+  bool IsEmpty() const { return empty(); }
+  int GetLength() const { return static_cast<int>(size()); }
+  CString Left(int count) const { return substr(0, count); }
+};
+@ACTION_ENUM@
+@VALUE_GUARD@
+const std::string ON_PLUGIN_COMMAND_ENTERED = "OnPluginCommandEntered";
+void SetUpVariantShort(short &result, unsigned short value) { result = value; }
+struct CMUSHclientDoc {
+  unsigned short m_iCurrentActionSource = eUnknownActionSource;
+  bool m_bSpellCheckOnSend = false, m_bEnableScripts = false, m_bAutoRepeat = false;
+  CString m_strScriptPrefix;
+  std::function<void(CString &)> callback;
+  std::function<void()> status = [] {};
+  int callbacks = 0;
+  void ShowStatusLine() { status(); }
+  short GetAction() {
+    short vaResult = -1;
+    switch (239) { @GET_ACTION@ }
+    return vaResult;
+  }
+  void SendToAllPluginCallbacksRtn(const std::string &name, CString &text) {
+    CHECK(name == ON_PLUGIN_COMMAND_ENTERED);
+    ++callbacks;
+    auto *m_pDoc = this;
+    const unsigned short iReason = eDontChangeAction;
+    @LUA_ACTION_GUARD@
+    const auto callbackToRun = callback;
+    callbackToRun(text);
+  }
+};
+struct CEdit {
+  CString text = "look";
+  int reads = 0;
+  std::function<void()> read = [] {};
+  void GetWindowText(CString &result) { ++reads; read(); result = text; }
+};
+struct CEditView {
+  int baseCalls = 0;
+  std::function<void()> base = [] {};
+  void OnChar(UINT character, UINT count, UINT flags) {
+    CHECK(character == 'x' && count == 2 && flags == 3);
+    ++baseCalls;
+    base();
+  }
+};
+struct CSendView : CEditView {
+  CMUSHclientDoc *doc;
+  CEdit edit;
+  int sends = 0, clears = 0;
+  CString sent;
+  std::function<void()> send = [] {}, clear = [] {};
+  explicit CSendView(CMUSHclientDoc *document) : doc(document) {}
+  CMUSHclientDoc *GetDocument() { return doc; }
+  CEdit &GetEditCtrl() { return edit; }
+  void SetCommand(const char *text) { ++clears; clear(); edit.text = text; }
+  void SendCommand(const CString &text, BOOL echo) {
+    CHECK(echo == FALSE);
+    ++sends;
+    send();
+    sent = text;
+  }
+  void OnChar(UINT, UINT, UINT);
+};
+const char *Translate(const char *text) { return text; }
+struct FrameType { void SetStatusMessageNow(const char *) {} } Frame;
+struct AppType {
+  int spells = 0;
+  std::function<bool()> spell;
+  bool SpellCheck(CSendView *, CEdit *) { ++spells; return spell(); }
+} App;
+@ON_CHAR@
+
+struct OriginalError {};
+void RunCase(unsigned short source, const std::string &name) {
+  const int before = failures;
+  CMUSHclientDoc doc;
+  doc.m_iCurrentActionSource = source;
+  CSendView view(&doc);
+  OriginalError original;
+  bool caught = false;
+  const bool ordinaryKey = name == "ordinary-key" || name == "ordinary-key-error";
+  auto typing = [&] { CHECK(doc.GetAction() == eUserTyping); };
+  doc.callback = [&](CString &text) {
+    typing();
+    // A nested script can change the action temporarily and must restore it.
+    { CValueStateGuard<unsigned short> guard(doc.m_iCurrentActionSource, eTimerFired); }
+    CHECK(doc.GetAction() == eUserTyping);
+    if (name == "discard" || name == "repeat" || name == "discard-error") text = "\t";
+    if (name == "ignore") text = "\r";
+    if (name == "callback-error") throw &original;
+    if (name == "nested" || name == "nested-error") {
+      CMUSHclientDoc &sameDoc = doc;
+      CSendView nested(&sameDoc);
+      auto savedCallback = doc.callback;
+      doc.callback = [&](CString &result) {
+        typing();
+        if (name == "nested-error") throw &original;
+        result = "\t";
+      };
+      bool nestedCaught = false;
+      try { nested.OnChar(VK_RETURN, 1, 0); }
+      catch (OriginalError *error) { CHECK(error == &original); nestedCaught = true; }
+      CHECK(nestedCaught == (name == "nested-error"));
+      CHECK(doc.GetAction() == eUserTyping);
+      doc.callback = savedCallback;
+      text = "\r";
+    }
+  };
+  view.send = [&] { typing(); if (name == "send-error") throw &original; };
+  view.clear = [&] { typing(); if (name == "discard-error") throw &original; };
+  doc.status = [&] { typing(); if (name == "status-error") throw &original; };
+  view.edit.read = [&] { typing(); if (name == "read-error") throw &original; };
+  view.base = [&] {
+    CHECK(doc.GetAction() == source);
+    if (name == "ordinary-key-error") throw &original;
+  };
+  App.spells = 0;
+  App.spell = [&] {
+    typing();
+    if (name == "spell-error") throw &original;
+    view.edit.text = "corrected";
+    return name != "spell-cancel";
+  };
+  doc.m_bAutoRepeat = name == "repeat";
+  doc.m_bSpellCheckOnSend = name == "spell-cancel" || name == "spell-error" ||
+      name == "spell-success" || name == "script-prefix" || name == "empty-prefix";
+  if (name == "script-prefix" || name == "empty-prefix") {
+    doc.m_bEnableScripts = true;
+    doc.m_strScriptPrefix = name == "script-prefix" ? "lo" : "";
+  }
+  try { view.OnChar(ordinaryKey ? 'x' : VK_RETURN, 2, 3); }
+  catch (OriginalError *error) { CHECK(error == &original); caught = true; }
+  CHECK(doc.GetAction() == source);
+  const bool expectedError = name.find("-error") != std::string::npos && name != "nested-error";
+  CHECK(caught == expectedError);
+  CHECK(view.baseCalls == (ordinaryKey ? 1 : 0));
+  const bool noSend = ordinaryKey || name == "spell-cancel" || name == "spell-error" ||
+      name == "read-error" || name == "callback-error" || name == "discard" ||
+      name == "repeat" || name == "ignore" || name == "discard-error" ||
+      name == "nested" || name == "nested-error";
+  CHECK(view.sends == (noSend ? 0 : 1));
+  CHECK(view.clears == ((name == "discard" || name == "discard-error") ? 1 : 0));
+  CHECK(App.spells == (doc.m_bSpellCheckOnSend && name != "script-prefix" ? 1 : 0));
+  if (view.sends && !caught) CHECK(view.sent ==
+      (name == "spell-success" || name == "empty-prefix" ? "corrected" : "look"));
+  if (name == "discard") CHECK(view.edit.text.empty());
+  if (name == "repeat" || name == "ignore") CHECK(view.edit.text == "look");
+  std::cout << "{\"case\":\"" << name << "-source-" << source
+            << "\",\"failures\":" << failures - before << "}\n";
+}
+int main() {
+  for (unsigned short source : {eUnknownActionSource, eUserTyping, eTriggerFired, eTimerFired})
+    for (const char *name : {"normal", "discard", "repeat", "ignore", "spell-cancel",
+         "spell-success", "script-prefix", "empty-prefix", "callback-error", "send-error",
+         "status-error", "read-error", "spell-error", "discard-error", "nested", "nested-error",
+         "ordinary-key", "ordinary-key-error"}) RunCase(source, name);
+  return failures ? 1 : 0;
+}
