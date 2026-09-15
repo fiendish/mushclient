@@ -1,0 +1,457 @@
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+using std::string;
+#define CHECK(condition, message) do { if (!(condition)) { \
+    std::fprintf(stderr, "FAIL: %s\n", message); std::exit(2); } } while (false)
+#define ASSERT(condition) CHECK(condition, #condition)
+#define _T(text) text
+#define CHAT_DEBUG 0
+#define MUSHCLIENT_VERSION "test"
+#define ENDLINE "\r\n"
+using LPCTSTR = const char*;
+using __int64 = long long;
+using POSITION = std::size_t;
+using BOOL = int;
+constexpr int SOCKET_ERROR=-1, TRUE=1, FALSE=0, WM_CLOSE=16;
+constexpr int MB_YESNO=4, MB_ICONQUESTION=32, IDYES=6, IDNO=7;
+constexpr int eOK=0, eCommandsNestedTooDeeply=1, eWorldClosed=2, eChatIDNotFound=3, MAX_EXECUTION_DEPTH=20;
+enum { eReloadNever, eReloadAlways, eReloadConfirm };
+enum { eChatAwaitingConnectConfirm, eChatAwaitingConnectionRequest, eChatConnected,
+       eChatClosed, eChatMudMaster, eChatZMud, eChatConnection, eChatSession,
+       eChatCommand, eChatInformation, eChatMessage };
+enum { CHAT_TEXT_EVERYBODY=1, CHAT_TEXT_PERSONAL, CHAT_MESSAGE, CHAT_TEXT_GROUP,
+       CHAT_PING_REQUEST, CHAT_PING_RESPONSE, CHAT_VERSION, CHAT_REQUEST_CONNECTIONS,
+       CHAT_CONNECTION_LIST, CHAT_PEEK_CONNECTIONS, CHAT_PEEK_LIST, CHAT_SNOOP,
+       CHAT_SNOOP_DATA, CHAT_NAME_CHANGE, CHAT_SEND_COMMAND, CHAT_FILE_START,
+       CHAT_FILE_DENY, CHAT_FILE_BLOCK_REQUEST, CHAT_FILE_BLOCK, CHAT_FILE_END,
+       CHAT_FILE_CANCEL, CHAT_ICON, CHAT_STATUS, CHAT_EMAIL_ADDRESS, CHAT_STAMP,
+       CHAT_REQUEST_PGP_KEY, CHAT_PGP_KEY, CHAT_END_OF_COMMAND=255 };
+enum { ON_PLUGIN_CHAT_NEWUSER, ON_PLUGIN_CHAT_ACCEPT, ON_PLUGIN_CHAT_MESSAGE,
+       ON_PLUGIN_COMMAND };
+
+struct CString {
+    string value;
+    CString()=default;
+    CString(const char* p):value(p){}
+    CString(string p):value(std::move(p)){}
+    CString(const char* p,int n):value(p,n){}
+    CString(char c):value(1,c){}
+    operator const char*() const { return value.c_str(); }
+    bool IsEmpty() const { return value.empty(); }
+    int GetLength() const { return static_cast<int>(value.size()); }
+    char operator[](int n) const { return value.at(n); }
+    CString Left(int n) const { return value.substr(0,n); }
+    CString Right(int n) const { return value.substr(value.size()-n); }
+    CString Mid(int n,int count=-1) const { return value.substr(n,count<0?string::npos:count); }
+    int Find(char c) const { auto n=value.find(c); return n==string::npos?-1:static_cast<int>(n); }
+    void Delete(int start,int count) { value.erase(start,count); }
+    void TrimLeft() { value.erase(0,value.find_first_not_of(" \t")); }
+    int CompareNoCase(const char* p) const {
+        string a=value,b=p;
+        for(char& c:a)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for(char& c:b)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return a.compare(b);
+    }
+    void Replace(const CString& from,const CString& to) {
+        std::size_t pos=0;
+        while((pos=value.find(from.value,pos))!=string::npos) {
+            value.replace(pos,from.value.size(),to.value); pos+=to.value.size();
+        }
+    }
+    CString& operator+=(const CString& rhs) { value+=rhs.value; return *this; }
+    bool operator==(const CString& rhs) const { return value==rhs.value; }
+};
+CString Replace(CString input,const CString& from,const CString& to) { input.Replace(from,to);return input; }
+template<class... T> CString TFormat(const char* text,T...) { return text; }
+template<class... T> CString CFormat(const char* text,T...) { return text; }
+const char* Translate(const char* text) { return text; }
+struct CStringList {
+    std::vector<CString> items;
+    bool IsEmpty() const { return items.empty(); }
+    void AddTail(const CString& item) { items.push_back(item); }
+    POSITION GetHeadPosition() const { return items.empty()?0:1; }
+    CString GetNext(POSITION& p) { auto result=items.at(p-1);p=p==items.size()?0:p+1;return result; }
+};
+void StringToList(const CString& input,const char*,CStringList& list) { if(!input.IsEmpty())list.AddTail(input); }
+struct CTime { static int GetCurrentTime() { return 1; } };
+struct CFileStatus { int m_mtime=2; };
+struct CFile { static void GetStatus(const CString&,CFileStatus& status) { status.m_mtime=2; } };
+struct Address { int sin_addr=0; };
+const char* inet_ntoa(int) { return "127.0.0.1"; }
+CString MakeStamp(int) { return "stamp"; }
+struct CProgressDlg { static bool IsPumpingMessages() { return false; } };
+struct MSG { void* hwnd=nullptr; int message=0; };
+struct CPlugin {};
+struct CChatSocket;
+struct CMUSHclientDoc;
+// Minimal MFC list substitute. Cleanup always breaks after removing one node.
+struct ChatList {
+    std::vector<CChatSocket*> items;
+    POSITION GetHeadPosition() const { return items.empty()?0:1; }
+    CChatSocket* GetNext(POSITION& p) const {
+        auto socket=items.at(p-1);p=p==items.size()?0:p+1;return socket;
+    }
+    void RemoveAt(POSITION p) { items.erase(items.begin()+p-1); }
+};
+std::function<void(CMUSHclientDoc*)> commandHook;
+struct State {
+    bool worldDestroyed=false,chatDestroyed=false,throwCommand=false,throwReload=false;
+    bool throwPrompt=false,closeDuringCommand=true,closeDuringPrompt=true;
+    int commands=0,afterCommands=0,disabled=0,created=0,prompts=0,answer=IDYES;
+    int commandNotes=0,closeRequests=0,completedCommands=0,expectedExecutionDepth=1;
+};
+State* state=nullptr;
+struct CDocument {
+    virtual ~CDocument()=default;
+    void OnCloseDocument() { delete this; }
+};
+struct ScriptEngine {
+    CMUSHclientDoc* doc;
+    void Parse(const CString&,const char*);
+};
+struct CMUSHclientDoc: CDocument {
+    CChatSocket* chat=nullptr;
+    ChatList m_ChatList;
+    int timerContinuations=0;
+    CPlugin plugin;
+    CPlugin* m_CurrentPlugin=&plugin;
+    ScriptEngine engine{this};
+    ScriptEngine* m_ScriptEngine=&engine;
+    int m_iActiveProgressOperations=0,m_iExecutionDepth=7,m_nReloadOption=eReloadConfirm;
+    int m_timeScriptFileMod=1;
+    __int64 m_iUniqueDocumentNumber=1;
+    bool m_bWorldCloseQueued=false,m_bWorldClosePending=false;
+    bool m_bInScriptFileChanged=false,m_bSyntaxErrorOnly=false,m_bEnableScripts=true;
+    bool m_bInSendToScript=true,m_bPluginProcessingCommand=false,m_enable_command_stack=false;
+    bool m_display_my_input=false,m_bValidateIncomingCalls=false;
+    CString m_strScriptFilename="world.lua",m_strScriptPrefix="/",m_strCommandStackCharacter=";";
+    CString m_mush_name="world",m_strOurChatName="local";
+    ~CMUSHclientDoc() override;
+    void BeginProgressOperation();
+    void EndProgressOperation();
+    void OnCloseDocument();
+    void OnScriptFileChanged(bool force=false);
+    long Execute(LPCTSTR);
+    long ChatDisconnect(long);
+    CChatSocket* GetChatSocket(const long) const;
+    void CleanupTick();
+    template<class... T> bool SendToAllPluginCallbacks(T...) { return true; }
+    void ChatNote(int kind,const CString&);
+    void Activate(){}
+    void ColourNote(const char*,const char*,const char*){}
+    bool CheckConnected() { return false; }
+    bool LoggingInput() { return false; }
+    void SendMsg(const char*,bool,bool,bool){}
+    bool EvaluateCommand(const CString&,bool,bool&) { return false; }
+    void DisableScripting() { ++state->disabled; }
+    void CreateScriptEngine();
+};
+struct AppStub {
+    CMUSHclientDoc* doc=nullptr;
+    bool documentClose=false,frameClose=false;
+    void DeferWorldDocumentClose(__int64) { documentClose=true; }
+    void DeferMessageUntilIdle(const MSG& msg,__int64) { CHECK(msg.message==WM_CLOSE,"frame close queued");frameClose=true; }
+    // Model the application's idle gate. Never drain while a document operation is active.
+    void Drain() {
+        if(doc->m_iActiveProgressOperations) return;
+        if(documentClose || frameClose) {
+            documentClose=frameClose=false;
+            doc->OnCloseDocument();
+        }
+    }
+} App;
+struct CMDIChildWnd {
+    CMUSHclientDoc* doc;
+    explicit CMDIChildWnd(CMUSHclientDoc* p):doc(p){}
+    void OnClose() { doc->OnCloseDocument(); }
+};
+struct CChildFrame: CMDIChildWnd {
+    CMUSHclientDoc* m_pDoc;
+    explicit CChildFrame(CMUSHclientDoc* p):CMDIChildWnd(p),m_pDoc(p){}
+    void* GetSafeHwnd() { return this; }
+    void OnClose();
+};
+bool closeThroughFrame=false;
+void RequestClose(CMUSHclientDoc* doc) {
+    ++state->closeRequests;
+    if(closeThroughFrame) { CChildFrame frame(doc);frame.OnClose(); }
+    else doc->OnCloseDocument();
+}
+void ExpectRetained(CMUSHclientDoc* doc,const char* message) {
+    RequestClose(doc);
+    CHECK(!state->worldDestroyed,message);
+    App.Drain();
+    CHECK(!state->worldDestroyed,message);
+    CHECK(!state->chatDestroyed,"owned chat retained");
+}
+// ChatNote can call OnPluginChatDisplay. This hook models a close request
+// from that callback on the second packet, after the command has returned.
+void CMUSHclientDoc::ChatNote(int kind,const CString&) {
+    if(kind==eChatCommand)++state->commandNotes;
+    if(kind!=eChatMessage)return;
+    ++state->afterCommands;
+    CHECK(m_iExecutionDepth==7,"command depth restored before next packet");
+    CHECK(m_CurrentPlugin==&plugin,"plugin restored before next packet");
+    ExpectRetained(this,"world retained after command");
+}
+struct CChatSocket {
+    CMUSHclientDoc* m_pDoc;
+    int m_iChatStatus=eChatConnected,m_iChatConnectionType=eChatMudMaster;
+    int m_tLastIncoming=0,m_iChatID=3,m_iFileBlockSize=500,m_iAllegedPort=0,m_zChatStamp=0;
+    bool m_bDeleteMe=false,m_bWasConnected=false,m_bCanSendCommands=true,m_bIgnore=false;
+    int m_iCountMessages=0;
+    Address m_ServerAddr;
+    CString m_strRemoteUserName="remote",m_strAllegedAddress;
+    CString m_outstanding_input;
+    string incoming;
+    explicit CChatSocket(CMUSHclientDoc* p):m_pDoc(p){}
+    bool* destructionFlag=nullptr;
+    ~CChatSocket() {
+        if(destructionFlag)*destructionFlag=true;
+        else state->chatDestroyed=true;
+    }
+    int Receive(char* buffer,int size) { CHECK(incoming.size()<=static_cast<std::size_t>(size),"packet fits");
+        std::memcpy(buffer,incoming.data(),incoming.size());return static_cast<int>(incoming.size()); }
+    int GetLastError() { return 0; }
+    void OnClose(int);
+    void SendData(const CString&){}
+    void SendChatMessage(int,const CString&){}
+    void OnReceive(int);
+    void ProcessChatMessage(int,const CString);
+    void Process_Send_command(const CString);
+    void Process_Message(const CString);
+#define UNUSED_HANDLER(name) void name(const CString&){}
+    UNUSED_HANDLER(Process_Text_everybody) UNUSED_HANDLER(Process_Text_personal)
+    UNUSED_HANDLER(Process_Text_group) UNUSED_HANDLER(Process_Ping_request)
+    UNUSED_HANDLER(Process_Ping_response) UNUSED_HANDLER(Process_Version)
+    UNUSED_HANDLER(Process_Request_connections) UNUSED_HANDLER(Process_Connection_list)
+    UNUSED_HANDLER(Process_Peek_connections) UNUSED_HANDLER(Process_Peek_list)
+    UNUSED_HANDLER(Process_Snoop) UNUSED_HANDLER(Process_Snoop_data)
+    UNUSED_HANDLER(Process_Name_change) UNUSED_HANDLER(Process_File_start)
+    UNUSED_HANDLER(Process_File_deny) UNUSED_HANDLER(Process_File_block_request)
+    UNUSED_HANDLER(Process_File_block) UNUSED_HANDLER(Process_File_end)
+    UNUSED_HANDLER(Process_File_cancel) UNUSED_HANDLER(Process_Icon)
+    UNUSED_HANDLER(Process_Status) UNUSED_HANDLER(Process_EmailAddress)
+    UNUSED_HANDLER(Process_Stamp) UNUSED_HANDLER(Process_RequestPGPkey)
+    UNUSED_HANDLER(Process_PGPkey)
+#undef UNUSED_HANDLER
+};
+CMUSHclientDoc::~CMUSHclientDoc() {
+    state->worldDestroyed=true;delete chat;
+    for(auto socket:m_ChatList.items)delete socket;
+}
+// List ownership is a substitute. Lookup, disconnect, and close use extracted source.
+void CMUSHclientDoc::CleanupTick() {
+    @CHAT_CLEANUP@
+    // The rest of CheckTimerList is outside this fixture. A return above is a failure.
+    ++timerContinuations;
+}
+void ScriptEngine::Parse(const CString&,const char*) {
+    ++state->commands;
+    CHECK(doc->m_iExecutionDepth==state->expectedExecutionDepth,"execution depth set for command source");
+    CHECK(doc->m_CurrentPlugin==nullptr,"Execute clears current plugin");
+    if(state->closeDuringCommand)ExpectRetained(doc,"world retained during command");
+    if(commandHook)commandHook(doc);
+    if(state->throwCommand)throw std::runtime_error("command callback failure");
+    ++state->completedCommands;
+}
+void CMUSHclientDoc::CreateScriptEngine() {
+    ++state->created;
+    ExpectRetained(this,"world retained during script reload");
+    if(state->throwReload)throw std::runtime_error("reload callback failure");
+}
+int UMessageBox(const CString&,int) {
+    ++state->prompts;
+    if(state->closeDuringPrompt)ExpectRetained(App.doc,"world retained during script reload");
+    if(state->throwPrompt)throw std::runtime_error("prompt callback failure");
+    return state->answer;
+}
+@GUARDS@
+@FUNCTIONS@
+
+void Reset(State& s) { state=&s;commandHook={};App=AppStub{};App.doc=new CMUSHclientDoc; }
+void Finish() {
+    CHECK(!state->worldDestroyed,"world alive until callback returns");
+    CHECK(App.doc->m_iActiveProgressOperations==0,"operation depth restored");
+    CHECK(App.doc->m_iExecutionDepth==7,"execution depth restored");
+    CHECK(App.doc->m_CurrentPlugin==&App.doc->plugin,"plugin restored");
+    CHECK(App.doc->m_bInSendToScript,"script-send state restored");
+    CHECK(!App.doc->m_bInScriptFileChanged,"reload state restored");
+    if(App.documentClose || App.frameClose)App.Drain();
+    else App.doc->OnCloseDocument();
+    CHECK(state->worldDestroyed,"world closes after callback returns");
+}
+void ExecuteCases() {
+    for(bool throughFrame:{false,true})for(bool throws:{false,true}) {
+        State s;Reset(s);closeThroughFrame=throughFrame;s.throwCommand=throws;
+        s.expectedExecutionDepth=8;
+        bool caught=false;
+        try { CHECK(App.doc->Execute("/test")==eOK,"direct command returns success"); }
+        catch(const std::runtime_error& error) {
+            caught=true;CHECK(string(error.what())=="command callback failure","direct command preserves original exception");
+        }
+        CHECK(caught==throws,"direct command exception propagates");
+        CHECK(s.commands==1 && s.completedCommands==(throws?0:1),"direct command runs once");
+        Finish();
+    }
+    std::puts("PASS: direct Execute retains state through close requests and exceptions");
+}
+string Packet(int protocol,int command,const string& payload) {
+    if(protocol==eChatMudMaster)return string(1,static_cast<char>(command))+payload+static_cast<char>(CHAT_END_OF_COMMAND);
+    return string{static_cast<char>(command),0,static_cast<char>(payload.size()),0}+payload;
+}
+void ChatCases() {
+    for(int protocol:{eChatMudMaster,eChatZMud})for(bool throughFrame:{false,true})for(bool throws:{false,true}) {
+        State s;Reset(s);closeThroughFrame=throughFrame;s.throwCommand=throws;
+        auto chat=App.doc->chat=new CChatSocket(App.doc);
+        chat->m_iChatConnectionType=protocol;
+        chat->incoming=Packet(protocol,CHAT_SEND_COMMAND,"/test")+Packet(protocol,CHAT_MESSAGE,"next");
+        bool caught=false;
+        try { chat->OnReceive(0); }
+        catch(const std::runtime_error& error) { caught=true;CHECK(string(error.what())=="command callback failure","original exception preserved"); }
+        CHECK(caught==throws,"command exception propagates");
+        CHECK(s.commands==1 && s.commandNotes==1,"accepted command runs once");
+        CHECK(s.completedCommands==(throws?0:1),"accepted command completes after close request");
+        CHECK(s.afterCommands==(throws?0:1),"remaining chat packet runs after command");
+        CHECK(chat->m_iCountMessages==(throws?0:1),"real message handler updates owned socket");
+        Finish();CHECK(s.chatDestroyed,"world deletes owned chat after receive returns");
+    }
+    // The guard must release on empty input and on the denied-command path.
+    for(bool denied:{false,true}) {
+        State s;Reset(s);auto chat=App.doc->chat=new CChatSocket(App.doc);
+        if(denied) { chat->m_bCanSendCommands=false;chat->incoming=Packet(eChatMudMaster,CHAT_SEND_COMMAND,"/test"); }
+        chat->OnReceive(0);CHECK(s.commands==0,"empty or denied input does not execute");Finish();
+    }
+    std::puts("PASS: chat success, throw, close request, both protocols, outer processing, early return");
+}
+void ScriptCases() {
+    for(bool throughFrame:{false,true})for(int mode=0;mode<5;++mode) {
+        State s;Reset(s);closeThroughFrame=throughFrame;
+        const bool force=mode==3;
+        s.throwReload=mode==1;s.answer=mode==2?IDNO:IDYES;s.throwPrompt=mode==4;
+        bool caught=false;
+        try { App.doc->OnScriptFileChanged(force); }
+        catch(const std::runtime_error& error) { caught=true;
+            CHECK(string(error.what())==(s.throwPrompt?"prompt callback failure":"reload callback failure"),"reload exception preserved"); }
+        CHECK(caught==(s.throwReload || s.throwPrompt),"reload exception propagates");
+        CHECK(s.prompts==(force?0:1),"force preserves prompt behavior");
+        const int reloads=(s.answer==IDNO || s.throwPrompt)?0:1;
+        CHECK(s.disabled==reloads && s.created==reloads,"accepted reload runs after close request");
+        Finish();
+    }
+    for(int mode=0;mode<5;++mode) {
+        State s;Reset(s);
+        if(mode==0)App.doc->m_bInScriptFileChanged=true;
+        if(mode==1)App.doc->m_ScriptEngine=nullptr;
+        if(mode==2)App.doc->m_strScriptFilename="";
+        if(mode==3)App.doc->m_nReloadOption=eReloadNever;
+        if(mode==4)App.doc->m_timeScriptFileMod=2;
+        App.doc->OnScriptFileChanged();
+        CHECK(s.prompts==0 && s.created==0,"reload early return preserves behavior");
+        CHECK(App.doc->m_bInScriptFileChanged==(mode==0),"existing reload state preserved");
+        App.doc->m_bInScriptFileChanged=false;Finish();
+    }
+    std::puts("PASS: reload yes, no, force, throw, close request, and early returns");
+}
+CChatSocket* AddChat(CMUSHclientDoc* doc,int id,bool& destroyed) {
+    auto socket=new CChatSocket(doc);socket->m_iChatID=id;socket->destructionFlag=&destroyed;
+    doc->m_ChatList.items.push_back(socket);return socket;
+}
+void TimerCases() {
+    for(int protocol:{eChatMudMaster,eChatZMud})for(bool throws:{false,true})for(bool outerOperation:{false,true}) {
+        State s;Reset(s);s.closeDuringCommand=false;s.throwCommand=throws;
+        auto doc=App.doc;
+        bool liveDeleted=false,activeDeleted=false,markedDeleted=false;
+        bool otherLiveDeleted=false,otherFirstDeleted=false,otherSecondDeleted=false;
+        AddChat(doc,10,liveDeleted);
+        auto active=AddChat(doc,11,activeDeleted);
+        AddChat(doc,12,markedDeleted);
+        CHECK(doc->ChatDisconnect(12)==eOK,"existing marked chat disconnects");
+        auto other=new CMUSHclientDoc;
+        AddChat(other,20,otherLiveDeleted);AddChat(other,21,otherFirstDeleted);AddChat(other,22,otherSecondDeleted);
+        CHECK(other->ChatDisconnect(21)==eOK && other->ChatDisconnect(22)==eOK,"other world chats disconnect");
+        active->m_iChatConnectionType=protocol;
+        active->incoming=Packet(protocol,CHAT_SEND_COMMAND,"/disconnect")+Packet(protocol,CHAT_MESSAGE,"next");
+        std::unique_ptr<CWorldDocumentOperationGuard> outer;
+        if(outerOperation)outer=std::make_unique<CWorldDocumentOperationGuard>(doc);
+        commandHook=[&](CMUSHclientDoc* current) {
+            CHECK(current==doc,"command uses its owning world");
+            CHECK(doc->m_iActiveProgressOperations==2+outerOperation,"execute guard nests in receive and prior operations");
+            CHECK(doc->ChatDisconnect(11)==eOK,"command disconnects its own chat");
+            CHECK(active->m_bDeleteMe && active->m_iChatStatus==eChatClosed,"real OnClose marks the active chat");
+            CHECK(doc->GetChatSocket(11)==nullptr && doc->ChatDisconnect(11)==eChatIDNotFound,
+                  "disconnected chat becomes unavailable before physical deletion");
+            CHECK(!activeDeleted && doc->m_ChatList.items.size()==3,"disconnect preserves allocation until safe cleanup");
+            CHECK(doc->GetChatSocket(10)!=nullptr && doc->GetChatSocket(12)==nullptr,
+                  "live chat remains available and marked chat stays unavailable");
+            // Model a modal script callback that dispatches a timer while Parse is active.
+            {
+                CWorldDocumentOperationGuard nested(doc);
+                CHECK(doc->m_iActiveProgressOperations==3+outerOperation,"nested operation depth retained");
+                const int before=doc->timerContinuations;
+                doc->CleanupTick();
+                CHECK(!activeDeleted,"marked chat survives modal timer cleanup");
+                CHECK(doc->timerContinuations==before+1,"timer work continues during an active operation");
+                CHECK(!markedDeleted && !liveDeleted,"same-world marked and live chats survive active operation");
+                other->CleanupTick();
+                CHECK(otherFirstDeleted && !otherSecondDeleted && !otherLiveDeleted,"other world cleans one marked chat during active receive");
+                CHECK(other->timerContinuations==1,"other world continues timer work after deletion");
+                other->CleanupTick();
+                CHECK(otherSecondDeleted && !otherLiveDeleted,"other world next tick cleans remaining marked chat");
+                CHECK(other->timerContinuations==2,"other world timer work continues on each tick");
+            }
+            CHECK(doc->m_iActiveProgressOperations==2+outerOperation,"inner guard restores execute operation depth");
+            doc->CleanupTick();
+            CHECK(!activeDeleted && !markedDeleted,"receive guard retains marked chats after inner scope");
+            CHECK(doc->timerContinuations==2,"timer work continues after inner scope");
+        };
+        bool caught=false;
+        try { active->OnReceive(0); }
+        catch(const std::runtime_error& error) {
+            caught=true;CHECK(string(error.what())=="command callback failure","timer callback preserves original exception");
+        }
+        commandHook={};
+        CHECK(caught==throws,"timer callback exception propagates");
+        CHECK(!activeDeleted,"marked socket survives receive return or throw");
+        CHECK(doc->GetChatSocket(11)==nullptr,"marked socket stays unavailable while cleanup is deferred");
+        CHECK(doc->m_iActiveProgressOperations==outerOperation,"receive unwind restores outer depth");
+        CHECK(doc->m_iExecutionDepth==7 && doc->m_CurrentPlugin==&doc->plugin && doc->m_bInSendToScript,
+              "command state restores before marked socket deletion");
+        CHECK(s.commands==1 && s.completedCommands==(throws?0:1),"accepted command completes or propagates its error");
+        CHECK(s.afterCommands==0 && !active->m_outstanding_input.IsEmpty(),"real receive loop stops buffered input after chat disconnect");
+        if(outerOperation) {
+            doc->CleanupTick();
+            CHECK(!activeDeleted && !markedDeleted,"outer operation defers cleanup after receive returns");
+            CHECK(doc->timerContinuations==3,"outer operation does not stop timer work");
+            outer.reset();
+        }
+        CHECK(doc->m_iActiveProgressOperations==0,"all operation guards release before later tick");
+        const int before=doc->timerContinuations;
+        doc->CleanupTick();
+        CHECK(activeDeleted && !markedDeleted && !liveDeleted,"later tick deletes active marked chat only");
+        CHECK(doc->m_ChatList.items.size()==2 && doc->timerContinuations==before+1,"deletion removes one list entry and continues timers");
+        doc->CleanupTick();
+        CHECK(markedDeleted && !liveDeleted,"next tick deletes remaining marked chat only");
+        doc->CleanupTick();
+        CHECK(doc->m_ChatList.items.size()==1 && !liveDeleted,"live unmarked chat remains on later ticks");
+        CHECK(doc->timerContinuations==before+3,"timer work continues after all marked chats are gone");
+        CHECK(!s.worldDestroyed,"chat cleanup does not close either world");
+        Finish();CHECK(liveDeleted,"world teardown releases surviving chat");
+        delete other;CHECK(otherLiveDeleted,"other world teardown releases surviving chat");
+    }
+    std::puts("PASS: timer cleanup retains active chat, preserves other worlds and timer work, and deletes on later ticks after return or throw");
+}
+int main(int argc,char** argv) {
+    if(argc==1 || string(argv[1])=="execute")ExecuteCases();
+    if(argc==1 || string(argv[1])=="chat")ChatCases();
+    if(argc==1 || string(argv[1])=="script")ScriptCases();
+    if(argc==1 || string(argv[1])=="timer")TimerCases();
+}
