@@ -1939,10 +1939,18 @@ typedef struct tagGLYPHSET
 */
 
 // sees if a glyph is available in the current font
+// Keep NaN validation effective in Release builds that use /fp:fast.
+#pragma float_control (precise, on, push)
 static int glyph_available (lua_State *L) 
   {
   // which glyph?
   const char * fontName   = luaL_checkstring (L, 1);
+  // test a single character
+  lua_Number glyphNumber = luaL_checknumber (L, 2);
+  // Preserve truncation when the result fits in WORD; also reject NaN.
+  luaL_argcheck (L, glyphNumber > -1 && glyphNumber < 65536, 2,
+                 "glyph value must truncate to a Unicode code unit from 0 to 65535");
+  WORD glyph = (WORD) glyphNumber;  // which Unicode character
 
   // this DLL might not be available
 	HMODULE hDLL = LoadLibrary ("gdi32");
@@ -1952,15 +1960,28 @@ static int glyph_available (lua_State *L)
     return 1;
     }
 
+  class CModuleGuard
+    {
+    public:
+    explicit CModuleGuard (HMODULE hModule) : m_hModule (hModule) {}
+    ~CModuleGuard () { FreeLibrary (m_hModule); }
+    private:
+    HMODULE m_hModule;
+    } moduleGuard (hDLL);
+
   // make a device contect
   CDC dc;
-  dc.CreateCompatibleDC (NULL);
+  if (!dc.CreateCompatibleDC (NULL))
+    {
+    lua_pushnil (L);
+    return 1;
+    }
 
   int lfHeight = -MulDiv(5, dc.GetDeviceCaps(LOGPIXELSY), 72);
   CFont font;
 
   // select requested font into it
-  font.CreateFont(lfHeight, // int nHeight, 
+  if (!font.CreateFont (lfHeight, // int nHeight,
         0,                  // int nWidth, 
         0,                  // int nEscapement, 
         0,                  // int nOrientation, 
@@ -1973,12 +1994,18 @@ static int glyph_available (lua_State *L)
         CLIP_DEFAULT_PRECIS,// BYTE nClipPrecision, 
         DEFAULT_QUALITY,    // BYTE nQuality, 
         FF_DONTCARE,        // BYTE nPitchAndFamily,  
-        fontName);          // LPCTSTR lpszFacename
+        fontName))                // LPCTSTR lpszFacename
+    {
+    lua_pushnil (L);
+    return 1;
+    }
 
-  dc.SelectObject(font);
-
-  // test a single character
-  WORD glyph = luaL_checknumber(L, 2);    // which Unicode character
+  CFont * pOldFont = dc.SelectObject (&font);
+  if (!pOldFont)
+    {
+    lua_pushnil (L);
+    return 1;
+    }
 
   typedef DWORD (CALLBACK* GetGlyphIndicesW_PROC)(HDC, LPCWSTR, int, LPWORD, DWORD);
   GetGlyphIndicesW_PROC pGetGlyphIndicesW = NULL;
@@ -1986,20 +2013,19 @@ static int glyph_available (lua_State *L)
   // get function address
   pGetGlyphIndicesW = (GetGlyphIndicesW_PROC) GetProcAddress(hDLL, "GetGlyphIndicesW");
 
-  // if it exists, call it
-  if (pGetGlyphIndicesW)
-    {
-	  WORD indice;
+  WORD indice = 0;
 
-	  if ((*pGetGlyphIndicesW)((HDC) dc.m_hDC, (LPCWSTR) &glyph, 1,
-	                            &indice, GGI_MARK_NONEXISTING_GLYPHS ) != GDI_ERROR &&
-	          indice != 0xffff)
-      lua_pushnumber (L, indice);  
-    else
-      lua_pushnumber (L, 0); 
-    }
-  else
-    lua_pushnumber (L, 0); 
+  // if it exists, call it
+  if (pGetGlyphIndicesW &&
+      (*pGetGlyphIndicesW)((HDC) dc.m_hDC, (LPCWSTR) &glyph, 1,
+                           &indice, GGI_MARK_NONEXISTING_GLYPHS) == GDI_ERROR)
+    indice = 0;
+
+  if (indice == 0xffff)
+    indice = 0;
+
+  dc.SelectObject (pOldFont);
+  lua_pushnumber (L, indice);
   
   return 1;   // one result
 
@@ -2041,6 +2067,7 @@ static int glyph_available (lua_State *L)
 
 
   } // end of glyph_available
+#pragma float_control (pop)
 
 extern  COLORREF xterm_256_colours [256];
   
