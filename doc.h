@@ -15,6 +15,7 @@
 #include "miniwindow.h"
 #include "plugins.h"
 #include "version.h"
+#include "output_line_buffer.h"
 
 #define COMPRESS_BUFFER_LENGTH 10000   // size of decompression buffer
 extern CString MUSHCLIENT_VERSION;
@@ -66,6 +67,37 @@ class CChildFrame;
 class CSendView;
 class CTextDocument;
 class UDPsocket;
+class COutputAppendTransaction;
+class CMUSHclientDoc;
+
+// XML parser targets are local to a load. Script APIs use the live document.
+struct CXMLLoadContext
+  {
+  explicit CXMLLoadContext (CMUSHclientDoc * pDoc);
+  CAliasMap * pAliasMap;
+  CAliasArray * pAliasArray;
+  CTriggerMap * pTriggerMap;
+  CTriggerArray * pTriggerArray;
+  CTimerMap * pTimerMap;
+  };
+
+// Non-owning XML load journal entry. The loader owns pNew until publication.
+// After publication, the map owns the active object and the loader retains pOld.
+// On commit, the loader retires pOld. On rollback, CXMLLoadChangeGuard restores
+// the map and retires pNew or pOld according to bRollbackOwnsNew.
+template <class T>
+struct CXMLLoadChange
+  {
+  CXMLLoadChange () : pOld (NULL), pNew (NULL),
+    iNewCreationNumber (0), bApplied (false),
+    bRollbackOwnsNew (false) {}
+  CString strName;
+  T * pOld;
+  T * pNew;
+  __int64 iNewCreationNumber;
+  bool bApplied;
+  bool bRollbackOwnsNew;
+  };
 
 #define ESC '\x1B'
 
@@ -489,11 +521,14 @@ class ScriptItem
   ScriptItem (CPlugin * pPlugin,
               const string sText, 
               const string sSource) :
-        pWhichPlugin  (pPlugin), 
+        sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
+        iPluginInstanceNumber
+          (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
         sScriptText   (sText), 
         sScriptSource (sSource) {};
 
-  CPlugin * pWhichPlugin;        // which plugin
+  const string sPluginID;        // which plugin, or empty for the world
+  const __int64 iPluginInstanceNumber;
   const string sScriptText;      // the script to execute
   const string sScriptSource;    // what it is, eg. "Trigger X"
   };
@@ -506,12 +541,18 @@ class OneShotItem
 
   // constructor
   OneShotItem (CPlugin * pPlugin,
-              const string sKey) :
-        pWhichPlugin  (pPlugin), 
-        sItemKey   (sKey) {};
+              const string sKey,
+              const __int64 iCreationNumber) :
+        sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
+        iPluginInstanceNumber
+          (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
+        sItemKey   (sKey),
+        iCreationNumber (iCreationNumber) {};
 
-  CPlugin * pWhichPlugin;     // which plugin
+  const string sPluginID;     // which plugin, or empty for the world
+  const __int64 iPluginInstanceNumber;
   const string sItemKey;      // the key to delete
+  const __int64 iCreationNumber; // exact object instance that fired
   };
 
 typedef list<OneShotItem> OneShotItemMap;
@@ -693,12 +734,12 @@ public:
 
   CAliasMap m_AliasMap;
   CAliasArray m_AliasArray;       // array of aliases for sequencing
-  CAliasRevMap m_AliasRevMap;     // for getting name back from pointer
+  CAlias * m_pRetiredAliases;  // replaced while their script was active
   CTriggerMap m_TriggerMap;       
   CTriggerArray m_TriggerArray;   // array of triggers for sequencing
-  CTriggerRevMap m_TriggerRevMap; // for getting name back from pointer
+  CTrigger * m_pRetiredTriggers;  // replaced while their script was active
   CTimerMap m_TimerMap;
-  CTimerRevMap m_TimerRevMap;     // for getting name back from pointer
+  CTimer * m_pRetiredTimers;  // replaced while their script was active
 
 
 // new in version 7
@@ -715,6 +756,7 @@ public:
 // new in version 8
 
   LONG    m_maxlines;   // maximum lines in scrollback buffer
+  __int64 m_iOutputGeneration;  // changes when output line positions become invalid
   LONG    m_nHistoryLines;  // maximum lines in command history
   unsigned short  m_nWrapColumn;    // column to wrap at
 
@@ -1132,6 +1174,10 @@ public:
   int m_iMXP_previousMode; // previous mode before mode 4 (secure-once mode)
   bool m_bInParagraph; // discard newlines (wrap)
   bool m_bMXP_script;   // in script collection mode
+  __int64 m_iMXPParagraphOwner;
+  __int64 m_iMXPPreOwner;
+  __int64 m_iMXPScriptOwner;
+  __int64 m_iMXPListOwner;
   bool m_bSuppressNewline;        // newline does NOT start a new line
 
   // NB - lists are being done in a hurry - I should really allow for nesting them
@@ -1160,6 +1206,7 @@ public:
 
   __int64 m_iMXPerrors;
   __int64 m_iMXPtags;
+  __int64 m_iMXPGeneration;  // changes when MXP is reset, stopped, or restarted
   __int64 m_iMXPentities;
 
   // end MXP stuff
@@ -1169,6 +1216,11 @@ public:
   int m_lastGoTo;         // last line we went to
 
   bool  m_bWorldClosing;    // true if world is closing
+  bool  m_bWorldCloseQueued;
+  bool  m_bWorldClosePending;
+  int   m_iActiveProgressOperations;
+  void BeginProgressOperation ();
+  void EndProgressOperation ();
 
 // we save the current style here on any style change *from the mud*
 // we don't want to mix up notes/user input with mud-set styles
@@ -1208,7 +1260,9 @@ public:
 
   HANDLE      m_hNameLookup;
   char *      m_pGetHostStruct;
+  unsigned long m_iNameLookupGeneration;
   int         m_iConnectPhase;    // see enum above
+  unsigned long m_iConnectionAttemptNumber;
 
 
 // chatting
@@ -1254,9 +1308,9 @@ public:
 
   CString m_strLastImmediateExpression;
 
-	HANDLE	m_pThread;			// Notification thread
-	CEvent  m_eventScriptFileChanged;		// script file changed thread event
+  __int64 m_iMonitorToken;  // Current monitor generation; zero means stopped.
   bool m_bInScriptFileChanged;
+  bool m_bScriptFileChangedPending;
   CTime m_timeScriptFileMod;
 
   CString m_strStatusMessage;   // "ready" or user-supplied message
@@ -1332,6 +1386,11 @@ public:
   bool        m_bPluginProcessingCommand; // plugin is doing ON_PLUGIN_COMMAND
   bool        m_bPluginProcessingSend; // plugin is doing ON_PLUGIN_SEND
   bool        m_bPluginProcessingSent; // plugin is doing ON_PLUGIN_SENT
+  bool        m_bInPluginListChanged;
+  bool        m_bPluginListChangedPending;
+  int         m_iPluginListChangedDeferralDepth;
+  bool        m_bPluginListChangedDeferred;
+  bool        m_bInScreendraw;
 
   CString     m_strLastCommandSent;   // for spam prevention
   int         m_iLastCommandCount;    // number of times last command sent
@@ -1440,8 +1499,12 @@ public:
                const bool bLogIt);
 	void ReceiveMsg();
 	void DisplayMsg(LPCTSTR lpszText, int size, const int flags, const bool fake = false);
-  void AddToLine (LPCTSTR lpszText, const int flags);
-  void StartNewLine_KeepPreviousStyle (const int flags);
+  bool AddToLine (LPCTSTR lpszText, const int flags);
+  bool AddToLineInternal (LPCTSTR lpszText, const int flags,
+                          COutputAppendTransaction * pTransaction);
+  bool StartNewLine_KeepPreviousStyle (const int flags,
+                                       bool * pbCreated = NULL,
+                                       const bool bFinishTransition = false);
   void Phase_ESC (const unsigned char c);  
   void Phase_UTF8 (const unsigned char c);  
   void Phase_ANSI (const unsigned char c);           
@@ -1490,22 +1553,29 @@ public:
   void MXP_Attlist (CString strName, CString strTag);
   void MXP_StartTag (CString strTag);
   void MXP_EndTag (CString strTag);
-  void MXP_CloseTag (CString strTag, const bool bOpen = false);
+  bool MXP_PrepareCloseTag (CString strTag, const bool bOpen,
+                            const __int64 iExpectedOpeningStyleCreationNumber,
+                            const vector<int> & closeActions,
+                            const CActiveTag * pActiveTag,
+                            CPreparedMXPClose & preparedClose);
+  void MXP_FinishCloseTag (const CPreparedMXPClose & preparedClose);
   void MXP_CloseOpenTags (void);
   void MXP_CloseAllTags (void);
   void MXP_On (const bool bPueblo = false, const bool bManual = false);     // turning MXP/Pueblo on
   void MXP_Off (const bool bCompletely = false);  // turning MXP off
-  void MXP_OpenAtomicTag (const CString strTag,   // name
+  bool MXP_OpenAtomicTag (const CString strTag,   // name
                           int iAction,            // action code
                           CStyle * pStyle,        // style it should modify
+                          __int64 & iResultStyleCreationNumber, // exact style identity
                           CString & strAction,    // new action
                           CString & strHint,      // new hint
                           CString & strVariable,  // new variable
-                          CArgumentList & ArgumentList);  // args
+                          CArgumentList & ArgumentList,
+                          const __int64 iStateOwner,
+                          COutputAppendTransaction * pOutputTransaction,
+                          vector<CDeferredMXPMessage> & deferredMessages);  // args
   void MXP_CloseAtomicTag (const int iAction, 
-                           const CString & strText,
-                           const POSITION firstlinepos,
-                           const POSITION firststylepos);
+                           const CPreparedMXPClose & preparedClose);
   CString MXP_GetEntity (CString & strName);
   bool BuildArgumentList (CArgumentList & ArgumentList, 
                           CString strTag);
@@ -1575,21 +1645,34 @@ public:
                      CAction *            pAction = NULL,
                      CLine *              pLine = NULL);
 
+  void RefreshMXPMissingTagAnchors (void);
+
   void RememberStyle (const CStyle * pStyle); 
 
-  void StartNewLine (const bool hard_break, const int flags);
+  bool StartNewLine (const bool hard_break, const int flags,
+                     const bool bResizePrevious = true,
+                     bool * pbCreated = NULL);
+  bool FinishNewLine (const int flags, const bool bResizePrevious,
+                      bool * pbCreated);
   bool ProcessPreviousLine (void);
   void SendLineToPlugin (void);
   void SetNewLineColour (const int flags);
 
+  struct CTriggerLineSnapshot
+    {
+    __int64 iCreationNumber;
+    int iColumn;  // byte offset in the original paragraph
+    int iLength;
+    };
+
   void ProcessOneTriggerSequence (CString & strCurrentLine,
                             CPaneLine & StyledLine,
                             CString & strResponse,
-                            const POSITION prevpos,
+                            const vector<CTriggerLineSnapshot> & triggerLines,
                             bool & bNoLog,
                             bool & bNoOutput,
                             bool & bChangedColour,
-                            CTriggerList & triggerList,
+                            OneShotItemMap & triggerList,
                             CString & strExtraOutput,
                             ScriptItemMap & mapDeferredScripts,
                             OneShotItemMap & mapOneShotItems);
@@ -1598,12 +1681,13 @@ public:
                             const bool bCountThem,
                             bool & bOmitFromLog,
                             bool & bEchoAlias,
-                            CAliasList & AliasList,
+                            OneShotItemMap & AliasList,
                             OneShotItemMap & mapOneShotItems);
 
   void WriteToLog (const char * text, size_t len);
   void WriteToLog (const CString & strText);
-  void LogLineInHTMLcolour (POSITION startpos);
+  void LogLineInHTMLcolour (POSITION startpos,
+                            const map<__int64, int> * pLineLengths = NULL);
   void LogCommand (const char * text);
   void OutputBadUTF8characters (void);
 
@@ -1699,7 +1783,8 @@ public:
                         UINT * piVariables = NULL,
                         UINT * piColours = NULL,
                         UINT * piKeypad = NULL,
-                        UINT * piPrinting = NULL);
+                        UINT * piPrinting = NULL,
+                        CXMLLoadContext * pLoadContext = NULL);
 
   void LoadError (const char * sType, const char * sMessage, UINT iLine = 0);
   void CheckUsed (CXMLelement & node);
@@ -1716,7 +1801,8 @@ public:
                       UINT * piVariables,
                       UINT * piColours,
                       UINT * piKeypad,
-                      UINT * piPrinting);
+                      UINT * piPrinting,
+                      CXMLLoadContext * pLoadContext = NULL);
   void Load_One_Include_XML (CXMLelement & node,
                       const unsigned long iMask,
                       const unsigned long iFlags,
@@ -1728,26 +1814,33 @@ public:
                       UINT * piVariables,
                       UINT * piColours,
                       UINT * piKeypad,
-                      UINT * piPrinting);
+                      UINT * piPrinting,
+                      CXMLLoadContext * pLoadContext = NULL);
 
   void Load_General_XML (CXMLelement & parent, 
     const unsigned long iFlags);
   UINT Load_Triggers_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Trigger_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadChange<CTrigger> & change,
+    CTriggerMap & objectMap);
   UINT Load_Aliases_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Alias_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadChange<CAlias> & change,
+    CAliasMap & objectMap);
   UINT Load_Variables_XML (CXMLelement & parent, 
     const unsigned long iMask,
     const unsigned long iFlags);
@@ -1758,12 +1851,15 @@ public:
     const unsigned long iFlags);
   UINT Load_Timers_XML (CXMLelement & parent, 
     const unsigned long iMask,
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadContext * pLoadContext = NULL);
   bool Load_One_Timer_XML (CXMLelement & node, 
     const unsigned long iMask,
     const long iVersion, 
     bool bUseDefault, 
-    const unsigned long iFlags);
+    const unsigned long iFlags,
+    CXMLLoadChange<CTimer> & change,
+    CTimerMap & objectMap);
   UINT Load_Macros_XML (CXMLelement & parent, 
     const unsigned long iFlags);
   void Load_One_Macro_XML (CXMLelement & node, 
@@ -1807,11 +1903,21 @@ public:
   void InternalLoadPlugin (const CString & strName);
 
   // set up trigger array after adding a trigger or two
-  void SortTriggers (void);
+  void SortTriggers (const set<CTrigger *> * pExclude = NULL);
+  void BuildTriggerIndexes (vector<CTrigger *> & triggerArray,
+                            const set<CTrigger *> * pExclude = NULL,
+                            CTriggerMap * pObjectMap = NULL);
   // set up alias array after adding an alias or two
-  void SortAliases (void);
-  // set up timer reverse map after adding timers
-  void SortTimers (void);
+  void SortAliases (const set<CAlias *> * pExclude = NULL);
+  void BuildAliasIndexes (vector<CAlias *> & aliasArray,
+                          const set<CAlias *> * pExclude = NULL,
+                          CAliasMap * pObjectMap = NULL);
+  void RetireAlias (CAlias * pAlias);
+  void RetireTrigger (CTrigger * pTrigger);
+  void RetireTimer (CTimer * pTimer);
+  void DeleteRetiredAliases ();
+  void DeleteRetiredTriggers ();
+  void DeleteRetiredTimers ();
 
   BOOL Load_Set (const int set_type, 
                  CString strFileName,
@@ -1826,9 +1932,9 @@ public:
 
   CTrigger * EvaluateTrigger (const CString & input, 
                               CString & output, 
-                              int & iItem,
                               int & iStartCol,
-                              int & iEndCol);
+                              int & iEndCol,
+                              CTrigger * trigger_item);
 
   CString FixSendText (const CString strSource, 
                             const int iSendTo,
@@ -1935,7 +2041,6 @@ public:
   bool CreateScriptEngine();
   void DisableScripting (void);
   void CreateMonitoringThread();
-	static void ThreadFunc(LPVOID pParam);
   void OnScriptFileChanged(const bool bForce = false);
   DISPID GetProcedureDispid (const CString & strName, 
                              const CString & strType,
@@ -2120,6 +2225,10 @@ public:
                     const char * sText);
 
   void PluginListChanged (void);
+  void BeginPluginListChangedDeferral (void);
+  bool EndPluginListChangedDeferral (void);
+  CPlugin * GetPluginInstance (LPCTSTR PluginID,
+                               __int64 iPluginInstanceNumber);
 
   CString RecallText (const CString strSearchString,   // what to search for
                       const bool bMatchCase,
@@ -2201,14 +2310,6 @@ public:
       return m_TriggerArray;
     };
 
-  CTriggerRevMap & GetTriggerRevMap (void)
-    {
-    if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_TriggerRevMap;
-    else
-      return m_TriggerRevMap;
-    };
-
   CAliasMap & GetAliasMap (void)
     {
     if (m_CurrentPlugin)
@@ -2225,28 +2326,12 @@ public:
       return m_AliasArray;
     };
 
-  CAliasRevMap & GetAliasRevMap (void)
-    {
-    if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_AliasRevMap;
-    else
-      return m_AliasRevMap;
-    };
-
   CTimerMap & GetTimerMap (void)
     {
     if (m_CurrentPlugin)
       return m_CurrentPlugin->m_TimerMap;
     else
       return m_TimerMap;
-    };
-
-  CTimerRevMap & GetTimerRevMap (void)
-    {
-    if (m_CurrentPlugin)
-      return m_CurrentPlugin->m_TimerRevMap;
-    else
-      return m_TimerRevMap;
     };
 
   CVariableMap & GetVariableMap (void)
@@ -2303,6 +2388,7 @@ public:
 	// ClassWizard generated virtual function overrides
 	//{{AFX_VIRTUAL(CMUSHclientDoc)
 	public:
+	virtual void OnCloseDocument();
 	virtual BOOL OnNewDocument();
 	virtual BOOL OnOpenDocument(LPCTSTR lpszPathName);
 	protected:
@@ -2879,6 +2965,166 @@ public:
 
 /////////////////////////////////////////////////////////////////////////////
 
+class COutputAppendTransaction
+  {
+  public:
+    COutputAppendTransaction (CMUSHclientDoc * pDoc, const size_t iLength);
+    ~COutputAppendTransaction ();
+
+    __int64 Identity () const;
+    void Reserve (const size_t iLength);
+    void TrackLine (const CLine * pLine);
+    void MarkCurrentLineStyles ();
+    CStyle * PrepareAppendStyle ();
+    void OwnStyle (CStyle * pStyle);
+    void RecordCreatedLine ();
+    bool StartNewLine (const bool bHardBreak,
+                       const int iFlags,
+                       const bool bResizePrevious,
+                       bool * pbCreated);
+    void SetLineFlags (CLine * pLine, const unsigned char iFlags);
+    void SetListCount (const int iListCount);
+    size_t PrepareWrap (CLine * pPreviousLine, const int iSplitLength);
+    void PublishWrap (const size_t iWrap,
+                      const __int64 iNewLineCreationNumber,
+                      std::unique_ptr<COutputLineBuffer> pTextBuffer);
+    void Commit ();
+    void Rollback ();
+
+  private:
+    COutputAppendTransaction (const COutputAppendTransaction &);
+    COutputAppendTransaction & operator= (const COutputAppendTransaction &);
+
+    struct CCreatedLine
+      {
+      __int64 iLineCreationNumber;
+      __int64 iStyleCreationNumber;
+      __int64 iStyleRangeCreationNumber;
+      unsigned short iFlags;
+      COLORREF iForeColour;
+      COLORREF iBackColour;
+      CAction * pAction;
+      };
+
+    struct CWrapStyleBackup
+      {
+      __int64 iStyleCreationNumber;
+      unsigned short iOldLength;
+      unsigned short iRetainedLength;
+      };
+
+    struct CWrapMove
+      {
+      __int64 iPreviousLineCreationNumber;
+      __int64 iNewLineCreationNumber;
+      int iSplitLength;
+      vector<CWrapStyleBackup> styleBackups;
+      std::unique_ptr<COutputLineBuffer> pTextBuffer;
+      bool bPublished;
+      };
+
+    struct CLineBreakState
+      {
+      __int64 iLineCreationNumber;
+      bool bOldHardReturn;
+      bool bExpectedHardReturn;
+      bool bPublished;
+      };
+
+    struct CLineFlagsState
+      {
+      __int64 iLineCreationNumber;
+      unsigned char iOldFlags;
+      unsigned char iExpectedFlags;
+      };
+
+    struct CListCountState
+      {
+      int iListMode;
+      int iOldListCount;
+      int iExpectedListCount;
+      __int64 iListOwner;
+      };
+
+    void RestoreWrap (const CWrapMove & wrap);
+    CLine * FindLine (const __int64 iLineCreationNumber,
+                      POSITION * pPosition = NULL) const;
+
+    CMUSHclientDoc * m_pDoc;
+    __int64 m_iAppendCreationNumber;
+    __int64 m_iFirstAffectedLineCreationNumber;
+    vector<CCreatedLine> m_CreatedLines;
+    vector<CWrapMove> m_Wraps;
+    vector<CLineBreakState> m_LineBreaks;
+    vector<CLineFlagsState> m_LineFlags;
+    vector<CListCountState> m_ListCounts;
+    bool m_bCommitted;
+  };
+
+/////////////////////////////////////////////////////////////////////////////
+
+class CAliasExecutionGuard
+  {
+  public:
+  CAliasExecutionGuard (CMUSHclientDoc * pDoc, CAlias * pAlias) :
+      m_pDoc (pDoc), m_pAlias (pAlias), m_bSavedValue (pAlias->bExecutingScript)
+    { m_pAlias->bExecutingScript = true; }
+  ~CAliasExecutionGuard ()
+    {
+    m_pAlias->bExecutingScript = m_bSavedValue;
+    m_pDoc->DeleteRetiredAliases ();
+    }
+
+  private:
+  CAliasExecutionGuard (const CAliasExecutionGuard &);
+  CAliasExecutionGuard & operator= (const CAliasExecutionGuard &);
+  CMUSHclientDoc * m_pDoc;
+  CAlias * m_pAlias;
+  bool m_bSavedValue;
+  };
+
+class CTriggerExecutionGuard
+  {
+  public:
+  CTriggerExecutionGuard (CMUSHclientDoc * pDoc, CTrigger * pTrigger) :
+      m_pDoc (pDoc), m_pTrigger (pTrigger), m_bSavedValue (pTrigger->bExecutingScript)
+    { m_pTrigger->bExecutingScript = true; }
+  ~CTriggerExecutionGuard ()
+    {
+    m_pTrigger->bExecutingScript = m_bSavedValue;
+    m_pDoc->DeleteRetiredTriggers ();
+    }
+
+  private:
+  CTriggerExecutionGuard (const CTriggerExecutionGuard &);
+  CTriggerExecutionGuard & operator= (const CTriggerExecutionGuard &);
+  CMUSHclientDoc * m_pDoc;
+  CTrigger * m_pTrigger;
+  bool m_bSavedValue;
+  };
+
+class CTimerExecutionGuard
+  {
+  public:
+  CTimerExecutionGuard (CMUSHclientDoc * pDoc, CTimer * pTimer) :
+      m_pDoc (pDoc), m_pTimer (pTimer), m_bSavedValue (pTimer->bExecutingScript)
+    { m_pTimer->bExecutingScript = true; }
+  ~CTimerExecutionGuard ()
+    {
+    m_pTimer->bExecutingScript = m_bSavedValue;
+    m_pDoc->DeleteRetiredTimers ();
+    }
+
+  private:
+  CTimerExecutionGuard (const CTimerExecutionGuard &);
+  CTimerExecutionGuard & operator= (const CTimerExecutionGuard &);
+  CMUSHclientDoc * m_pDoc;
+  CTimer * m_pTimer;
+  bool m_bSavedValue;
+  };
+
+/////////////////////////////////////////////////////////////////////////////
+
 
 // MXP-oriented utilities
 
@@ -2939,3 +3185,16 @@ class timer
 
       }
   };    // end of class timer
+
+// Retain a world until a synchronous operation and its callbacks unwind.
+class CWorldDocumentOperationGuard
+  {
+  public:
+    explicit CWorldDocumentOperationGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc)
+      { m_pDoc->BeginProgressOperation (); }
+    ~CWorldDocumentOperationGuard () { m_pDoc->EndProgressOperation (); }
+  private:
+    CMUSHclientDoc * m_pDoc;
+    CWorldDocumentOperationGuard (const CWorldDocumentOperationGuard &);
+    CWorldDocumentOperationGuard & operator= (const CWorldDocumentOperationGuard &);
+  };
