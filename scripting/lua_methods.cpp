@@ -1121,23 +1121,16 @@ static int L_CallPlugin (lua_State *L)
         } // end of for each argument
       }   // end of not calling ourselves
 
-    unsigned short iOldStyle = pDoc->m_iNoteStyle;
-    pDoc->m_iNoteStyle = NORMAL;    // back to default style
-
-    CString strOldCallingPluginID = pPlugin->m_strCallingPluginID;
-
-    pPlugin->m_strCallingPluginID.Empty ();
-    
-    if (pDoc->m_CurrentPlugin)
-      pPlugin->m_strCallingPluginID = pDoc->m_CurrentPlugin->m_strID;
-
-    // do this so plugin can find its own state (eg. with GetPluginID)
-    CPlugin * pSavedPlugin = pDoc->m_CurrentPlugin; 
-    pDoc->m_CurrentPlugin = pPlugin;  
+    CPluginCallGuard callGuard (pPlugin);
+    int iCallError;
+    CString strLuaError;
+    {
+    CPluginContextGuard contextGuard (pDoc, pPlugin, true, true);
     
     // now call the routine in the plugin
 
-    if (CallLuaWithTraceBack (pL, n, LUA_MULTRET))   // true on error
+    iCallError = CallLuaWithTraceBack (pL, n, LUA_MULTRET);
+    if (iCallError)
       {
 
       // here for execution error in plugin function ...
@@ -1148,17 +1141,17 @@ static int L_CallPlugin (lua_State *L)
                                    sRoutine ); 
 
       // grab the Lua error from the stack before we clear it
-      CString strLuaError (lua_tostring(pL, -1));
+      strLuaError = lua_tostring (pL, -1);
 
       // this will display the error, and the error context
       LuaError (pL, "Run-time error", sRoutine, strType, strReason, pDoc);
 
-      // back to who *we* are (had to wait until after LuaError)
-      pDoc->m_CurrentPlugin = pSavedPlugin;
-      pDoc->m_iNoteStyle = iOldStyle;
-
       lua_settop (pL, 0);     // clean stack up
+      }
+    }
 
+    if (iCallError)
+      {
       // the error code for the caller (result value 1)
       lua_pushnumber (L, eErrorCallingPluginRoutine);
 
@@ -1172,15 +1165,8 @@ static int L_CallPlugin (lua_State *L)
       // what the exact Lua error message was (result value 3)
       lua_pushstring (L, strLuaError);
 
-      pPlugin->m_strCallingPluginID = strOldCallingPluginID;
-
       return 3;  // ie. eErrorCallingPluginRoutine, explanation, Lua error message
       }
-
-    // back to who *we* are (if no error)
-    pDoc->m_CurrentPlugin = pSavedPlugin;
-    pDoc->m_iNoteStyle = iOldStyle;
-    pPlugin->m_strCallingPluginID = strOldCallingPluginID;
 
     int ret_n = lua_gettop(pL);  // number of returned values (might be zero)
 
@@ -3549,15 +3535,10 @@ static int L_GetPluginVariableList (lua_State *L)
     if (!pPlugin)             
 	    return 0;   // no results - non-empty plugin not found     
     }                         
-  // save current plugin
-  CPlugin * pOldPlugin = pDoc->m_CurrentPlugin;  
-  pDoc->m_CurrentPlugin = pPlugin;               
+  CPluginContextGuard contextGuard (pDoc, pPlugin);
                       
   // now get the variable list 
   GetVariableListHelper (L, pDoc);                   
-
-  // restore current plugin
-  pDoc->m_CurrentPlugin = pOldPlugin;            
 
   return 1;     // one result (one table)
 

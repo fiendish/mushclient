@@ -1,0 +1,141 @@
+// Native supplement. This code requires Windows, user32.lib and ws2_32.lib.
+// The queue and socket APIs are real. MFC window wrappers, dialog navigation,
+// Lua argument errors, and document registries remain explicit test substitutes.
+#ifndef PROGRESS_NATIVE_WINDOWS
+#error Compile this supplement with PROGRESS_NATIVE_WINDOWS.
+#endif
+std::thread arrange_sent_message(HWND window, std::function<void()> callback) {
+    size_t id = ++nextCallback;
+    callbacks.emplace(id, std::move(callback));
+    std::thread sender([window, id] {
+        SendMessageA(window, callbackMessage, static_cast<WPARAM>(id), 0);
+    });
+    // Do not dispatch the sent message here. The production PeekMessage call
+    // must dispatch it. GetQueueStatus does not remove or dispatch messages.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    for (;;) {
+        DWORD status = GetQueueStatus(QS_SENDMESSAGE);
+        if (HIWORD(status) & QS_SENDMESSAGE) break;
+        CHECK(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::yield();
+    }
+    return sender;
+}
+struct NativeSocketPair {
+    SOCKET writer = INVALID_SOCKET, reader = INVALID_SOCKET;
+    NativeSocketPair() {
+        WSADATA data{};
+        int error = WSAStartup(MAKEWORD(2, 2), &data); CHECK(error == 0);
+        SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); CHECK(listener != INVALID_SOCKET);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        int result = bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof address); CHECK(result == 0);
+        int length = sizeof address;
+        result = getsockname(listener, reinterpret_cast<sockaddr *>(&address), &length); CHECK(result == 0);
+        result = listen(listener, 1); CHECK(result == 0);
+        writer = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); CHECK(writer != INVALID_SOCKET);
+        result = connect(writer, reinterpret_cast<sockaddr *>(&address), sizeof address); CHECK(result == 0);
+        reader = accept(listener, nullptr, nullptr); CHECK(reader != INVALID_SOCKET);
+        result = closesocket(listener); CHECK(result == 0);
+        int bufferSize = 4096;
+        result = setsockopt(writer, SOL_SOCKET, SO_SNDBUF,
+                            reinterpret_cast<const char *>(&bufferSize), sizeof bufferSize); CHECK(result == 0);
+        u_long nonblocking = 1;
+        result = ioctlsocket(reader, FIONBIO, &nonblocking); CHECK(result == 0);
+    }
+    ~NativeSocketPair() {
+        int result = closesocket(reader); CHECK(result == 0);
+        result = closesocket(writer); CHECK(result == 0);
+        result = WSACleanup(); CHECK(result == 0);
+    }
+};
+void test_native_socket() {
+    NativeSocketPair sockets;
+    TestProgress progress; progress.create();
+    CWnd notificationWindow; notificationWindow.attach();
+    CChatSocket chat;
+    int writeNotifications = 0;
+    int lastSendResult = 0;
+    std::string accepted;
+    bool recordAccepted = true;
+    chat.transport = [&](const char *bytes, int size) {
+        int result = send(sockets.writer, bytes, size, 0);
+        lastSendResult = result;
+        if (result == SOCKET_ERROR) chat.lastError = WSAGetLastError();
+        else if (recordAccepted) accepted.append(bytes, result);
+        return result;
+    };
+    socketDispatch = [&](WPARAM socket, LPARAM event) {
+        CHECK(static_cast<SOCKET>(socket) == sockets.writer);
+        CHECK(WSAGETSELECTERROR(event) == 0);
+        CHECK(WSAGETSELECTEVENT(event) == FD_WRITE);
+        CHECK(CProgressDlg::IsPumpingMessages());
+        ++writeNotifications;
+        chat.OnSend(0);
+    };
+    int result = WSAAsyncSelect(sockets.writer, notificationWindow.m_hWnd, socketMessage, FD_WRITE);
+    CHECK(result == 0);
+    // Fill the real socket, then require OnSend itself to observe a blocked
+    // send. TCP can free capacity between two send calls without an application
+    // reader, so retry if the small chat payload gets through. Record every
+    // accepted byte. The final pending payload is small enough to fit after
+    // draining; partial-send scheduling is outside this queue smoke test.
+    const std::string payload = "pending chat payload";
+    const std::string filler(65536, 'F');
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    for (;;) {
+        for (;;) {
+            int sent = send(sockets.writer, filler.data(), static_cast<int>(filler.size()), 0);
+            if (sent == SOCKET_ERROR) {
+                int error = WSAGetLastError(); CHECK(error == WSAEWOULDBLOCK); break;
+            }
+            CHECK(sent > 0);
+            accepted.append(filler.data(), sent);
+            CHECK(accepted.size() < 128 * 1024 * 1024);
+            CHECK(std::chrono::steady_clock::now() < deadline);
+        }
+        if (chat.m_outstanding_output.empty()) chat.m_outstanding_output = payload;
+        chat.OnSend(0);
+        if (lastSendResult == SOCKET_ERROR) { CHECK(chat.lastError == WSAEWOULDBLOCK); break; }
+        CHECK(lastSendResult > 0);
+        CHECK(std::chrono::steady_clock::now() < deadline);
+    }
+    CHECK(!chat.m_outstanding_output.empty());
+    recordAccepted = false;
+    const size_t prefixBytes = accepted.size();
+    const int expectedChatBytes = chat.doc.m_nBytesOut + chat.m_outstanding_output.GetLength();
+    const std::string expected = accepted + chat.m_outstanding_output;
+    std::string received;
+    while (received.size() < prefixBytes) {
+        char bytes[65536];
+        int count = recv(sockets.reader, bytes, sizeof bytes, 0);
+        if (count == SOCKET_ERROR) {
+            int error = WSAGetLastError(); CHECK(error == WSAEWOULDBLOCK);
+        } else { CHECK(count > 0); received.append(bytes, count); }
+        CHECK(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::yield();
+    }
+    // recv frees send capacity; only the production progress pump can dispatch
+    // FD_WRITE and call the extracted OnSend. There is no main-loop drain.
+    while (received.size() < expected.size() || !chat.m_outstanding_output.empty()) {
+        char bytes[65536];
+        int count = recv(sockets.reader, bytes, sizeof bytes, 0);
+        if (count == SOCKET_ERROR) {
+            int error = WSAGetLastError(); CHECK(error == WSAEWOULDBLOCK);
+        } else {
+            CHECK(count > 0); received.append(bytes, count);
+        }
+        progress.PumpMessages();
+        CHECK(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::yield();
+    }
+    CHECK(writeNotifications > 0);
+    CHECK(chat.m_outstanding_output.empty());
+    CHECK(chat.doc.m_nBytesOut == expectedChatBytes);
+    CHECK(received == expected);
+    result = WSAAsyncSelect(sockets.writer, notificationWindow.m_hWnd, 0, 0); CHECK(result == 0);
+    // Dispatch any notification already posted before disabling registration.
+    progress.PumpMessages();
+    socketDispatch = nullptr;
+}
