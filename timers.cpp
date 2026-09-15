@@ -76,7 +76,8 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     POSITION oldpos = chatpos;
     CChatSocket * pSocket = m_ChatList.GetNext (chatpos);
     // A modal callback can run timers while a chat socket is still in use.
-    if (pSocket->m_bDeleteMe && m_iActiveProgressOperations == 0)
+    if (pSocket->m_bDeleteMe && m_iActiveProgressOperations == 0 &&
+        !pSocket->m_bInReceive)
       {
       m_ChatList.RemoveAt (oldpos);
       delete pSocket;
