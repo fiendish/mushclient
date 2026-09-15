@@ -98,14 +98,11 @@ CAlias * alias_item;
 
   bool bTemporary = alias_item->bTemporary;
 
-  // the alias seems to exist - delete its pointer
+  set<CAlias *> aliasesToDelete;
+  aliasesToDelete.insert (alias_item);
+  SortAliases (&aliasesToDelete);
+  VERIFY (GetAliasMap ().RemoveKey (strAliasName));
   delete alias_item;
-
-  // now delete its entry
-  if (!GetAliasMap ().RemoveKey (strAliasName))
-    return eAliasNotFound;
-
-  SortAliases ();
 
   if (!m_CurrentPlugin && !bTemporary) // plugin mods don't really count
     SetModifiedFlag (TRUE);   // document has changed
@@ -179,24 +176,13 @@ bool bReplace = false;
     return eBadRegularExpression;
     } // end of catch
 
-  // alias replacement wanted
-  if (bReplace)
-    {
-    // the alias seems to exist - delete its pointer
-    delete alias_item;
-
-    // now delete its entry
-    GetAliasMap ().RemoveKey (strAliasName);
-    }
-
-  // create new alias item and insert in alias map
-  GetAliasMap ().SetAt (strAliasName, alias_item = new CAlias);
-
-  if ((Flags & eTemporary) == 0)
-    if (!m_CurrentPlugin) // plugin mods don't really count
-      SetModifiedFlag (TRUE);
+  CAlias * old_alias_item = bReplace ? alias_item : NULL;
+  std::unique_ptr<t_regexp> new_regexp (regexp);
+  std::unique_ptr<CAlias> new_alias_item (new CAlias);
+  alias_item = new_alias_item.get ();
 
   alias_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
+  alias_item->nCreationNumber  = App.GetUniqueNumber ();
   alias_item->strInternalName  = strAliasName;    // for deleting one-shot aliases
 
   alias_item->name             = MatchText;
@@ -215,7 +201,7 @@ bool bReplace = false;
   alias_item->strProcedure     = ScriptName;
   alias_item->strLabel         = AliasName;
   alias_item->dispid           = dispid;
-  alias_item->regexp           = regexp;
+  alias_item->regexp           = new_regexp.release ();
 
   // fix up "sendto" appropriately
 
@@ -224,7 +210,28 @@ bool bReplace = false;
   else if (Flags & eAliasQueue)
      alias_item->iSendTo = eSendToCommandQueue;
 
-  SortAliases ();
+  GetAliasMap ().SetAt (strAliasName, alias_item);
+  new_alias_item.release ();
+
+  try
+    {
+    SortAliases ();
+    }
+  catch (...)
+    {
+    if (old_alias_item)
+      GetAliasMap ().SetAt (strAliasName, old_alias_item);
+    else
+      GetAliasMap ().RemoveKey (strAliasName);
+    delete alias_item;
+    throw;
+    }
+
+  RetireAlias (old_alias_item);
+
+  if ((Flags & eTemporary) == 0)
+    if (!m_CurrentPlugin) // plugin mods don't really count
+      SetModifiedFlag (TRUE);
 
 	return eOK;
 }   // end of CMUSHclientDoc::AddAlias
@@ -475,25 +482,35 @@ CAlias * alias_item;
 
 long CMUSHclientDoc::DeleteTemporaryAliases() 
 {
-long iCount = 0;
 POSITION pos;
 CString strAliasName;
 CAlias * alias_item;
+vector<pair<string, CAlias *> > aliasesToDelete;
+set<CAlias *> excludedAliases;
 
   for (pos = GetAliasMap ().GetStartPosition(); pos; )
     {
     GetAliasMap ().GetNextAssoc (pos, strAliasName, alias_item);
     if (alias_item->bTemporary && !alias_item->bExecutingScript)
       {
-      delete alias_item;
-      GetAliasMap ().RemoveKey (strAliasName);
-      iCount++;
+      aliasesToDelete.push_back (make_pair (string ((LPCTSTR) strAliasName), alias_item));
+      excludedAliases.insert (alias_item);
       }
     }   // end of deleting aliases
 
-  SortAliases ();
+  SortAliases (&excludedAliases);
+  if (!aliasesToDelete.empty ())
+    {
+    for (vector<pair<string, CAlias *> >::const_iterator it = aliasesToDelete.begin ();
+         it != aliasesToDelete.end ();
+         ++it)
+      {
+      VERIFY (GetAliasMap ().RemoveKey (it->first.c_str ()));
+      delete it->second;
+      }
+    }
 
-	return iCount;
+	return aliasesToDelete.size ();
 }
 
 
@@ -538,7 +555,8 @@ long CMUSHclientDoc::DeleteAliasGroup(LPCTSTR GroupName)
   if (strlen (GroupName) == 0)
     return 0;
 
-  vector<string> vToDelete;
+  vector<pair<string, CAlias *> > vToDelete;
+  set<CAlias *> excludedAliases;
 
   // do aliases
   for (pos = GetAliasMap ().GetStartPosition(); pos; )
@@ -551,23 +569,23 @@ long CMUSHclientDoc::DeleteAliasGroup(LPCTSTR GroupName)
       if (alias_item->bExecutingScript)
         continue;
 
-      delete alias_item;
-
       // remember to delete from alias map
-      vToDelete.push_back ((LPCTSTR) strAliasName);
+      vToDelete.push_back (make_pair (string ((LPCTSTR) strAliasName), alias_item));
+      excludedAliases.insert (alias_item);
 
       }
     }   // end of aliases
 
-  // now delete from map, do it this way in case deleting whilst looping throws things out
-  for (vector<string>::const_iterator it = vToDelete.begin (); 
-       it != vToDelete.end ();
-       it++)
-      GetAliasMap ().RemoveKey (it->c_str ());
-
   if (!vToDelete.empty ())
     {
-    SortAliases ();
+    SortAliases (&excludedAliases);
+    for (vector<pair<string, CAlias *> >::const_iterator it = vToDelete.begin ();
+         it != vToDelete.end ();
+         ++it)
+      {
+      VERIFY (GetAliasMap ().RemoveKey (it->first.c_str ()));
+      delete it->second;
+      }
     if (!m_CurrentPlugin) // plugin mods don't really count
       SetModifiedFlag (TRUE);   // document has changed
     }
@@ -691,6 +709,8 @@ bool bChanged;
     if (AliasOptionsTable [iItem].iFlags & OPT_CANNOT_WRITE)
     	return ePluginCannotSetOption;  // not available for writing at all    
 
+    unsigned short iOldSequence = Alias_item->iSequence;
+
     iResult = SetBaseOptionItem (iItem,
                         AliasOptionsTable,
                         NUMITEMS (AliasOptionsTable),
@@ -698,15 +718,28 @@ bool bChanged;
                         iValue,
                         bChanged);
 
+    if (iResult != eOK)
+      return iResult;
+
+    if (strOptionName == "sequence")
+      {
+      try
+        {
+        SortAliases ();
+        }
+      catch (...)
+        {
+        Alias_item->iSequence = iOldSequence;
+        throw;
+        }
+      }
+
     if (bChanged)
       {
       if (!m_CurrentPlugin) // plugin mods don't really count
         SetModifiedFlag (TRUE);   // document has changed
       Alias_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks
       }
-
-    if (strOptionName == "sequence")
-      SortAliases ();
 
     return iResult;
 
@@ -727,14 +760,15 @@ bool bChanged;
     	  return ePluginCannotSetOption;  // not available for writing at all    
 
       // ------ preliminary validation before setting the option
+      std::unique_ptr<t_regexp> newRegexp;
+      DISPID newDispid = DISPID_UNKNOWN;
+      bool bUpdateDispid = false;
 
       // cannot have null match text
       if (strOptionName == "match")
         {
         if (strValue.IsEmpty ())
           return eAliasCannotBeEmpty;
-
-        t_regexp * regexp = NULL;
 
         CString strRegexp; 
 
@@ -746,11 +780,11 @@ bool bChanged;
         // compile regular expression
         try 
           {
-          regexp = regcomp (strRegexp, (Alias_item->bIgnoreCase ? PCRE_CASELESS : 0)
+          newRegexp.reset (regcomp (strRegexp, (Alias_item->bIgnoreCase ? PCRE_CASELESS : 0)
 #if ALIASES_USE_UTF8
                              | (m_bUTF_8 ? PCRE_UTF8 : 0)
 #endif // ALIASES_USE_UTF8
-              );
+              ));
           }   // end of try
         catch(CException* e)
           {
@@ -758,9 +792,6 @@ bool bChanged;
           return eBadRegularExpression;
           } // end of catch
       
-        delete Alias_item->regexp;    // get rid of old one
-        Alias_item->regexp = regexp;
-
         } // end of option "match"  
       else if (strOptionName == "script")
         {
@@ -769,12 +800,11 @@ bool bChanged;
 
         if (GetScriptEngine () && !strValue.IsEmpty ())
           {
-          DISPID dispid = DISPID_UNKNOWN;
           CString strMessage;
-          dispid = GetProcedureDispid (strValue, "Alias", AliasName, strMessage);
-          if (dispid == DISPID_UNKNOWN)
+          newDispid = GetProcedureDispid (strValue, "Alias", AliasName, strMessage);
+          if (newDispid == DISPID_UNKNOWN)
             return eScriptNameNotLocated;
-          Alias_item->dispid  = dispid;   // update dispatch ID
+          bUpdateDispid = true;
           }
         } // end of option "script"
 
@@ -787,6 +817,18 @@ bool bChanged;
                         (char *) Alias_item,  
                         strValue,
                         bChanged);
+
+      if (iResult != eOK)
+        return iResult;
+
+      if (newRegexp.get ())
+        {
+        delete Alias_item->regexp;
+        Alias_item->regexp = newRegexp.release ();
+        }
+
+      if (bUpdateDispid)
+        Alias_item->dispid = newDispid;
 
       if (bChanged)
         {
