@@ -693,11 +693,10 @@ void CMUSHclientDoc::OutputOutstandingLines (void)
   if (m_OutstandingLines.empty ())
     return;
 
-  // save old colours
-  bool bOldNotesInRGB = m_bNotesInRGB;
-  COLORREF iOldNoteColourFore = m_iNoteColourFore;
-  COLORREF iOldNoteColourBack = m_iNoteColourBack;
-  unsigned short  iOldNoteStyle = m_iNoteStyle;
+  CValueStateGuard<bool> notesRGBGuard (m_bNotesInRGB, m_bNotesInRGB);
+  CValueStateGuard<COLORREF> noteForeGuard (m_iNoteColourFore, m_iNoteColourFore);
+  CValueStateGuard<COLORREF> noteBackGuard (m_iNoteColourBack, m_iNoteColourBack);
+  CValueStateGuard<unsigned short> noteStyleGuard (m_iNoteStyle, m_iNoteStyle);
 
   m_bNotesInRGB = true;
 
@@ -714,18 +713,6 @@ void CMUSHclientDoc::OutputOutstandingLines (void)
     }
 
   m_OutstandingLines.clear ();
-
-  // put the colours back
-  if (bOldNotesInRGB)
-    {
-    m_iNoteColourFore = iOldNoteColourFore;
-    m_iNoteColourBack = iOldNoteColourBack;
-    }
-  else  
-    m_bNotesInRGB = false;
-
-  m_iNoteStyle = iOldNoteStyle;
-
 
   } // end of CMUSHclientDoc::OutputOutstandingLines
 
@@ -779,8 +766,11 @@ void CMUSHclientDoc::SetUpOutputWindow (void)
   if (!m_pCurrentLine)
     {
     m_total_lines = 0;
-    m_pCurrentLine = new CLine (++m_total_lines, m_nWrapColumn, 0, WHITE, BLACK, m_bUTF_8);
-    m_LineList.AddTail (m_pCurrentLine);
+    std::unique_ptr<CLine> pNewLine
+      (new CLine (m_total_lines + 1, m_nWrapColumn, 0, WHITE, BLACK, m_bUTF_8));
+    m_LineList.AddTail (pNewLine.get ());
+    m_pCurrentLine = pNewLine.release ();
+    m_total_lines++;
     }
 
   Note ("");
@@ -950,7 +940,8 @@ BOOL CMUSHclientDoc::OpenSession (void)
       }
     } // end of executing open script
 
-  if (App.m_bAutoConnectWorlds)
+  if (App.m_bAutoConnectWorlds &&
+      m_iConnectPhase == eConnectNotConnected)
 	  if (ConnectSocket())
 		  return TRUE;
 
@@ -987,6 +978,10 @@ void CMUSHclientDoc::Dump(CDumpContext& dc) const
 
 BOOL CMUSHclientDoc::ConnectSocket(void)
 {
+
+  // Keep the socket and completion phase of an existing host name lookup.
+  if (m_hNameLookup)
+    return TRUE;    // the connection attempt is still waiting for its address
 
 CString str;
 
@@ -1043,6 +1038,8 @@ CString str;
 
     } // end of switch
 
+  m_iConnectionAttemptNumber++;
+
 	m_bEnableAutoSay = FALSE;		// auto-say off at start of session
 
   m_bDisconnectOK = false;    // not OK to disconnect
@@ -1059,13 +1056,11 @@ CString str;
               (const char *) m_mush_name, m_port);
   Frame.SetStatusMessageNow (str);
 
-// get rid of any earlier socket
+// create the replacement before releasing the current socket
 
+  CWorldSocket * pNewSocket = new CWorldSocket(this);
   delete m_pSocket;
-
-// now create a new one 
-
-	m_pSocket = new CWorldSocket(this);
+  m_pSocket = pNewSocket;
 
 	if (!m_pSocket->Create(0,
                          SOCK_STREAM,
@@ -1269,6 +1264,7 @@ void CMUSHclientDoc::DoSendMsg(const CString & strText,
                                const bool bEchoIt,
                                const bool bLogIt)
 {
+CWorldDocumentOperationGuard operationGuard (this);
 CString str = strText;
 
   // cannot change what we are sending in OnPluginSent
@@ -1287,13 +1283,9 @@ CString str = strText;
 
   if (!m_bPluginProcessingSend)
     {
-    m_bPluginProcessingSend = true;  // so we don't go into a loop
+    CBoolStateGuard processingGuard (m_bPluginProcessingSend, true);
     if (!SendToAllPluginCallbacks (ON_PLUGIN_SEND, str.Left (str.GetLength () - 2)))
-      {
-      m_bPluginProcessingSend = false;
       return;     // plugin declines to send this line
-      }
-    m_bPluginProcessingSend = false;
     }
 
 // count number of times we sent this
@@ -1326,9 +1318,8 @@ CString str = strText;
 
   if (!m_bPluginProcessingSent)
     {
-    m_bPluginProcessingSent = true;  // so we don't go into a loop
+    CBoolStateGuard processingGuard (m_bPluginProcessingSent, true);
     SendToAllPluginCallbacks (ON_PLUGIN_SENT, str.Left (str.GetLength () - 2));
-    m_bPluginProcessingSent = false;
     }
 
 // echo sent text if required
@@ -1541,11 +1532,12 @@ int count;
        // See: http://www.gammon.com.au/forum/?id=11160 
        if (iCompressResult == Z_BUF_ERROR)
          {
-         m_nCompressionOutputBufferSize += COMPRESS_BUFFER_LENGTH;
-         m_zCompress.avail_out += COMPRESS_BUFFER_LENGTH;
-         m_CompressOutput = (Bytef *) realloc (m_CompressOutput, m_nCompressionOutputBufferSize);
+         const int nNewBufferSize =
+           m_nCompressionOutputBufferSize + COMPRESS_BUFFER_LENGTH;
+         Bytef * pNewCompressOutput =
+           (Bytef *) realloc (m_CompressOutput, nNewBufferSize);
 
-         if (m_CompressOutput == NULL)
+         if (pNewCompressOutput == NULL)
            {
             OnConnectionDisconnect ();    // close the world
             free (m_CompressInput);       // may as well get rid of compression input as well
@@ -1553,6 +1545,13 @@ int count;
             TMessageBox ("Insufficient memory to decompress MCCP text.", MB_ICONEXCLAMATION);
             return;
            }  // end of cannot get more memory
+
+         const uInt nBytesWritten =
+           m_nCompressionOutputBufferSize - m_zCompress.avail_out;
+         m_CompressOutput = pNewCompressOutput;
+         m_nCompressionOutputBufferSize = nNewBufferSize;
+         m_zCompress.next_out = m_CompressOutput + nBytesWritten;
+         m_zCompress.avail_out += COMPRESS_BUFFER_LENGTH;
          }  // end of Z_BUF_ERROR
 
       } while (iCompressResult == Z_BUF_ERROR);
@@ -1611,38 +1610,668 @@ int count;
 }
 
 
-void CMUSHclientDoc::StartNewLine_KeepPreviousStyle (const int flags)
+bool CMUSHclientDoc::StartNewLine_KeepPreviousStyle (const int flags,
+                                                     bool * pbCreated,
+                                                     const bool bFinishTransition)
   {
-  CStyle * pPreviousStyle,
-         * pThisStyle;
-  CLine * pPreviousLine = m_pCurrentLine; // remember this line
+  if (pbCreated)
+    *pbCreated = false;
+  const __int64 iPreviousLineCreationNumber = m_pCurrentLine->nCreationNumber;
+  CStyle * pPreviousStyle = m_pCurrentLine->styleList.GetTail ();
+  unsigned short iPreviousFlags = pPreviousStyle->iFlags;
+  COLORREF iPreviousForeColour = pPreviousStyle->iForeColour;
+  COLORREF iPreviousBackColour = pPreviousStyle->iBackColour;
+  CAction * pPreviousAction = pPreviousStyle->pAction;
+  if (pPreviousAction)
+    pPreviousAction->AddRef ();
 
   // if saved_count is indeed zero we better start a new line anyway
-   StartNewLine (false, flags);
-   // get old style
-   pPreviousStyle = pPreviousLine->styleList.GetTail ();
-   // get new style
-   pThisStyle = m_pCurrentLine->styleList.GetTail ();
+   bool bStarted = false;
+   bool bCreated = false;
+   try
+     {
+     bStarted = bFinishTransition ?
+       FinishNewLine (flags, false, &bCreated) :
+       StartNewLine (false, flags, false, &bCreated);
+     }
+   catch (...)
+     {
+     if (pPreviousAction)
+       pPreviousAction->Release ();
+     throw;
+     }
+   if (!bStarted)
+     {
+     if (pPreviousAction)
+       pPreviousAction->Release ();
+     return false;
+     }
 
-   if (pThisStyle && pPreviousStyle)    // sanity check
+   if (pbCreated)
+     *pbCreated = bCreated;
+
+   // A line callback can supply the valid continuation line. In that case,
+   // keep its style instead of overwriting it with the previous line style.
+   if (!bCreated)
+     {
+     if (pPreviousAction)
+       pPreviousAction->Release ();
+     return true;
+     }
+
+   // A callback can change the previous line's style without creating a line.
+   // Resolve its identity again; the saved values remain a fallback if pruned.
+   for (POSITION pos = m_LineList.GetTailPosition (); pos; )
+     {
+     CLine * pLine = m_LineList.GetPrev (pos);
+     if (pLine->nCreationNumber == iPreviousLineCreationNumber)
+       {
+       CStyle * pLiveStyle = pLine->styleList.GetTail ();
+       iPreviousFlags = pLiveStyle->iFlags;
+       iPreviousForeColour = pLiveStyle->iForeColour;
+       iPreviousBackColour = pLiveStyle->iBackColour;
+       CAction * pLiveAction = pLiveStyle->pAction;
+       if (pLiveAction)
+         pLiveAction->AddRef ();
+       if (pPreviousAction)
+         pPreviousAction->Release ();
+       pPreviousAction = pLiveAction;
+       break;
+       }
+     if (pLine->nCreationNumber < iPreviousLineCreationNumber)
+       break;
+     }
+
+   // get new style
+   CStyle * pThisStyle = m_pCurrentLine->styleList.GetTail ();
+
+   if (pThisStyle)    // sanity check
      {
      // copy style across so new line has same style as old one
-     pThisStyle->iFlags = pPreviousStyle->iFlags & STYLE_BITS;
-     pThisStyle->iForeColour = pPreviousStyle->iForeColour;
-     pThisStyle->iBackColour = pPreviousStyle->iBackColour;
-     pThisStyle->pAction = pPreviousStyle->pAction;
-     if (pThisStyle->pAction)
-       pThisStyle->pAction->AddRef ();    // we are using it again
+     pThisStyle->iFlags = iPreviousFlags & STYLE_BITS;
+     pThisStyle->iForeColour = iPreviousForeColour;
+     pThisStyle->iBackColour = iPreviousBackColour;
+     pThisStyle->pAction = pPreviousAction;
+     pPreviousAction = NULL;  // transfer the retained reference to the style
      }  // end of valid pointers
+
+   if (pPreviousAction)
+     pPreviousAction->Release ();
+   return true;
   }  // end of CMUSHclientDoc::StartNewLine_KeepPreviousStyle
+
+COutputAppendTransaction::COutputAppendTransaction (
+  CMUSHclientDoc * pDoc,
+  const size_t iLength) :
+  m_pDoc (pDoc),
+  m_iAppendCreationNumber (App.GetUniqueNumber ()),
+  m_iFirstAffectedLineCreationNumber (m_iAppendCreationNumber),
+  m_bCommitted (false)
+  {
+  TrackLine (m_pDoc->m_pCurrentLine);
+  Reserve (iLength);
+  }
+
+COutputAppendTransaction::~COutputAppendTransaction ()
+  {
+  ASSERT (m_bCommitted);
+  }
+
+__int64 COutputAppendTransaction::Identity () const
+  { return m_iAppendCreationNumber; }
+
+void COutputAppendTransaction::Reserve (const size_t iLength)
+  {
+  m_CreatedLines.reserve (m_CreatedLines.size () + iLength + 2);
+  m_Wraps.reserve (m_Wraps.size () + iLength + 2);
+  m_LineBreaks.reserve (m_LineBreaks.size () + iLength + 2);
+  m_LineFlags.reserve (m_LineFlags.size () + iLength + 2);
+  m_ListCounts.reserve (m_ListCounts.size () + iLength + 2);
+  }
+
+// Line identities increase with tail insertion and survive pruning and style moves.
+// Keep an identity boundary, not a list position or a pointer across callbacks.
+void COutputAppendTransaction::TrackLine (const CLine * pLine)
+  {
+  if (pLine && pLine->nCreationNumber < m_iFirstAffectedLineCreationNumber)
+    m_iFirstAffectedLineCreationNumber = pLine->nCreationNumber;
+  }
+
+void COutputAppendTransaction::MarkCurrentLineStyles ()
+  {
+  if (!m_pDoc->m_pCurrentLine)
+    return;
+  TrackLine (m_pDoc->m_pCurrentLine);
+  for (POSITION pos = m_pDoc->m_pCurrentLine->styleList.GetHeadPosition ();
+       pos; )
+    {
+    CStyle * pStyle = m_pDoc->m_pCurrentLine->styleList.GetNext (pos);
+    if (pStyle->nOutputAppendCreationNumber == 0)
+      pStyle->nOutputAppendCreationNumber = -m_iAppendCreationNumber;
+    }
+  }
+
+CStyle * COutputAppendTransaction::PrepareAppendStyle ()
+  {
+  TrackLine (m_pDoc->m_pCurrentLine);
+  CStyle * pStyle = m_pDoc->m_pCurrentLine->styleList.GetTail ();
+  if (pStyle->nOutputAppendCreationNumber == m_iAppendCreationNumber &&
+      pStyle->iLength == 0)
+    return pStyle;
+
+  std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);
+  pNewStyle->iFlags = pStyle->iFlags & STYLE_BITS;
+  pNewStyle->iForeColour = pStyle->iForeColour;
+  pNewStyle->iBackColour = pStyle->iBackColour;
+  pNewStyle->pAction = pStyle->pAction;
+  if (pNewStyle->pAction)
+    pNewStyle->pAction->AddRef ();
+  pNewStyle->nOutputAppendCreationNumber = m_iAppendCreationNumber;
+  m_pDoc->m_pCurrentLine->styleList.AddTail (pNewStyle.get ());
+  return pNewStyle.release ();
+  }
+
+void COutputAppendTransaction::OwnStyle (CStyle * pStyle)
+  {
+  ASSERT (pStyle);
+  // Normal append callers own the current tail style. Retain support for callers
+  // that explicitly supply a style in an earlier line or before publication.
+  if (m_pDoc->m_pCurrentLine &&
+      !m_pDoc->m_pCurrentLine->styleList.IsEmpty () &&
+      m_pDoc->m_pCurrentLine->styleList.GetTail () == pStyle)
+    TrackLine (m_pDoc->m_pCurrentLine);
+  else
+    {
+    bool bFound = false;
+    for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition ();
+         linepos && !bFound; )
+      {
+      CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+      for (POSITION stylepos = pLine->styleList.GetTailPosition (); stylepos; )
+        if (pLine->styleList.GetPrev (stylepos) == pStyle)
+          {
+          TrackLine (pLine);
+          bFound = true;
+          break;
+          }
+      }
+    if (!bFound)
+      m_iFirstAffectedLineCreationNumber = 0; // publication location is unknown
+    }
+  pStyle->nOutputAppendCreationNumber = m_iAppendCreationNumber;
+  }
+
+void COutputAppendTransaction::RecordCreatedLine ()
+  {
+  CStyle * pStyle = m_pDoc->m_pCurrentLine->styleList.GetTail ();
+  CCreatedLine line;
+  line.iLineCreationNumber = m_pDoc->m_pCurrentLine->nCreationNumber;
+  line.iStyleCreationNumber = pStyle->nCreationNumber;
+  line.iStyleRangeCreationNumber = pStyle->nRangeCreationNumber;
+  line.iFlags = pStyle->iFlags;
+  line.iForeColour = pStyle->iForeColour;
+  line.iBackColour = pStyle->iBackColour;
+  line.pAction = pStyle->pAction;
+  m_CreatedLines.push_back (line);
+  OwnStyle (pStyle);
+  }
+
+CLine * COutputAppendTransaction::FindLine (
+  const __int64 iLineCreationNumber,
+  POSITION * pPosition) const
+  {
+  if (pPosition)
+    *pPosition = NULL;
+  for (POSITION pos = m_pDoc->m_LineList.GetTailPosition (); pos; )
+    {
+    POSITION current = pos;
+    CLine * pLine = m_pDoc->m_LineList.GetPrev (pos);
+    if (pLine->nCreationNumber == iLineCreationNumber)
+      {
+      if (pPosition)
+        *pPosition = current;
+      return pLine;
+      }
+    if (pLine->nCreationNumber < iLineCreationNumber)
+      break;
+    }
+  return NULL;
+  }
+
+bool COutputAppendTransaction::StartNewLine (
+  const bool bHardBreak,
+  const int iFlags,
+  const bool bResizePrevious,
+  bool * pbCreated)
+  {
+  Reserve (1);
+  CLineBreakState state;
+  state.iLineCreationNumber = m_pDoc->m_pCurrentLine ?
+    m_pDoc->m_pCurrentLine->nCreationNumber : 0;
+  state.bOldHardReturn = m_pDoc->m_pCurrentLine ?
+    m_pDoc->m_pCurrentLine->hard_return : false;
+  state.bExpectedHardReturn = state.bOldHardReturn;
+  state.bPublished = false;
+  m_LineBreaks.push_back (state);
+  const size_t iState = m_LineBreaks.size () - 1;
+
+  bool bCreated = false;
+  try
+    {
+    const bool bStarted = m_pDoc->StartNewLine (bHardBreak,
+                                                iFlags,
+                                                bResizePrevious,
+                                                &bCreated);
+    CLine * pOldLine = FindLine (state.iLineCreationNumber);
+    if (pOldLine && pOldLine->hard_return != state.bOldHardReturn)
+      {
+      m_LineBreaks [iState].bExpectedHardReturn = pOldLine->hard_return;
+      m_LineBreaks [iState].bPublished = true;
+      }
+    if (bCreated)
+      RecordCreatedLine ();
+    if (pbCreated)
+      *pbCreated = bCreated;
+    return bStarted;
+    }
+  catch (...)
+    {
+    CLine * pOldLine = FindLine (state.iLineCreationNumber);
+    if (pOldLine && pOldLine->hard_return != state.bOldHardReturn)
+      {
+      m_LineBreaks [iState].bExpectedHardReturn = pOldLine->hard_return;
+      m_LineBreaks [iState].bPublished = true;
+      }
+    throw;
+    }
+  }
+
+void COutputAppendTransaction::SetLineFlags (
+  CLine * pLine,
+  const unsigned char iFlags)
+  {
+  Reserve (1);
+  CLineFlagsState state;
+  state.iLineCreationNumber = pLine->nCreationNumber;
+  state.iOldFlags = pLine->flags;
+  state.iExpectedFlags = iFlags;
+  m_LineFlags.push_back (state);
+  pLine->flags = iFlags;
+  }
+
+void COutputAppendTransaction::SetListCount (const int iListCount)
+  {
+  Reserve (1);
+  CListCountState state;
+  state.iListMode = m_pDoc->m_iListMode;
+  state.iOldListCount = m_pDoc->m_iListCount;
+  state.iExpectedListCount = iListCount;
+  state.iListOwner = m_pDoc->m_iMXPListOwner;
+  m_ListCounts.push_back (state);
+  m_pDoc->m_iListCount = iListCount;
+  }
+
+size_t COutputAppendTransaction::PrepareWrap (
+  CLine * pPreviousLine,
+  const int iSplitLength)
+  {
+  TrackLine (pPreviousLine);
+  CWrapMove wrap;
+  wrap.iPreviousLineCreationNumber = pPreviousLine->nCreationNumber;
+  wrap.iNewLineCreationNumber = 0;
+  wrap.iSplitLength = iSplitLength;
+  wrap.bPublished = false;
+
+  const __int64 iPreservedOwner = -m_iAppendCreationNumber;
+  int iStyleStart = 0;
+  size_t iBackupCount = 0;
+  for (POSITION pos = pPreviousLine->styleList.GetHeadPosition (); pos; )
+    {
+    CStyle * pStyle = pPreviousLine->styleList.GetNext (pos);
+    const int iStyleEnd = iStyleStart + pStyle->iLength;
+    if (iStyleEnd > iSplitLength &&
+        pStyle->nOutputAppendCreationNumber == iPreservedOwner)
+      iBackupCount++;
+    iStyleStart = iStyleEnd;
+    }
+
+  wrap.styleBackups.reserve (iBackupCount);
+  iStyleStart = 0;
+  for (POSITION pos = pPreviousLine->styleList.GetHeadPosition (); pos; )
+    {
+    CStyle * pStyle = pPreviousLine->styleList.GetNext (pos);
+    const int iStyleEnd = iStyleStart + pStyle->iLength;
+    if (iStyleEnd > iSplitLength &&
+        pStyle->nOutputAppendCreationNumber == iPreservedOwner)
+      {
+      CWrapStyleBackup backup;
+      backup.iStyleCreationNumber = pStyle->nCreationNumber;
+      backup.iOldLength = pStyle->iLength;
+      backup.iRetainedLength = static_cast<unsigned short> (
+        MAX (MIN (iSplitLength - iStyleStart,
+                  static_cast<int> (pStyle->iLength)),
+             0));
+      wrap.styleBackups.push_back (backup);
+      }
+    iStyleStart = iStyleEnd;
+    }
+
+  m_Wraps.push_back (std::move (wrap));
+  return m_Wraps.size () - 1;
+  }
+
+void COutputAppendTransaction::PublishWrap (
+  const size_t iWrap,
+  const __int64 iNewLineCreationNumber,
+  std::unique_ptr<COutputLineBuffer> pTextBuffer)
+  {
+  ASSERT (iWrap < m_Wraps.size ());
+  m_Wraps [iWrap].pTextBuffer = std::move (pTextBuffer);
+  m_Wraps [iWrap].iNewLineCreationNumber = iNewLineCreationNumber;
+  m_Wraps [iWrap].bPublished = true;
+  }
+
+void COutputAppendTransaction::RestoreWrap (const CWrapMove & wrap)
+  {
+  if (!wrap.bPublished)
+    return;
+
+  CLine * pPreviousLine = FindLine (wrap.iPreviousLineCreationNumber);
+  CLine * pNewLine = FindLine (wrap.iNewLineCreationNumber);
+  if (!pPreviousLine || !pNewLine ||
+      pPreviousLine->len != wrap.iSplitLength)
+    return;
+
+  wrap.pTextBuffer->RestoreCapacity (pPreviousLine);
+
+  const __int64 iPreservedOwner = -m_iAppendCreationNumber;
+  int iSourceOffset = 0;
+  int iRestoreOffset = pPreviousLine->len;
+  for (POSITION pos = pNewLine->styleList.GetHeadPosition (); pos; )
+    {
+    CStyle * pStyle = pNewLine->styleList.GetNext (pos);
+    if (pStyle->nOutputAppendCreationNumber == iPreservedOwner &&
+        pStyle->iLength > 0)
+      {
+      ASSERT (iRestoreOffset + pStyle->iLength <=
+              pPreviousLine->iMemoryAllocated);
+      memcpy (pPreviousLine->text + iRestoreOffset,
+              pNewLine->text + iSourceOffset,
+              pStyle->iLength);
+      iRestoreOffset += pStyle->iLength;
+      }
+    iSourceOffset += pStyle->iLength;
+    }
+
+  for (vector<CWrapStyleBackup>::const_iterator backup =
+         wrap.styleBackups.begin ();
+       backup != wrap.styleBackups.end (); ++backup)
+    for (POSITION pos = pPreviousLine->styleList.GetHeadPosition (); pos; )
+      {
+      CStyle * pStyle = pPreviousLine->styleList.GetNext (pos);
+      if (pStyle->nCreationNumber == backup->iStyleCreationNumber &&
+          pStyle->nOutputAppendCreationNumber == iPreservedOwner)
+        {
+        pStyle->iLength = backup->iOldLength;
+        break;
+        }
+      }
+
+  pPreviousLine->len = iRestoreOffset;
+
+  const int iOldNewLineLength = pNewLine->len;
+  int iReadOffset = 0;
+  int iWriteOffset = 0;
+  for (POSITION pos = pNewLine->styleList.GetHeadPosition (); pos; )
+    {
+    POSITION current = pos;
+    CStyle * pStyle = pNewLine->styleList.GetNext (pos);
+    const int iStyleLength = pStyle->iLength;
+    if (pStyle->nOutputAppendCreationNumber == iPreservedOwner)
+      {
+      if (pStyle->iFlags & START_TAG)
+        for (POSITION tagpos = m_pDoc->m_ActiveTagList.GetHeadPosition ();
+             tagpos; )
+          {
+          CActiveTag * pTag = m_pDoc->m_ActiveTagList.GetNext (tagpos);
+          if (pTag->nOpeningStyleCreationNumber == pStyle->nCreationNumber)
+            {
+            pTag->nOpeningLineCreationNumber =
+              pPreviousLine->nCreationNumber;
+            break;
+            }
+          }
+      iReadOffset += iStyleLength;
+      pNewLine->styleList.RemoveAt (current);
+      DELETESTYLE (pStyle);
+      continue;
+      }
+    if (iStyleLength > 0 && iWriteOffset != iReadOffset)
+      memmove (pNewLine->text + iWriteOffset,
+               pNewLine->text + iReadOffset,
+               iStyleLength);
+    iReadOffset += iStyleLength;
+    iWriteOffset += iStyleLength;
+    }
+  if (iReadOffset < iOldNewLineLength)
+    {
+    const int iUnstyledLength = iOldNewLineLength - iReadOffset;
+    if (iWriteOffset != iReadOffset)
+      memmove (pNewLine->text + iWriteOffset,
+               pNewLine->text + iReadOffset,
+               iUnstyledLength);
+    iWriteOffset += iUnstyledLength;
+    }
+  pNewLine->len = iWriteOffset;
+  }
+
+void COutputAppendTransaction::Commit ()
+  {
+  const __int64 iPreservedOwner = -m_iAppendCreationNumber;
+  for (vector<CWrapMove>::const_iterator wrap = m_Wraps.begin ();
+       wrap != m_Wraps.end (); ++wrap)
+    {
+    if (!wrap->bPublished)
+      continue;
+    CLine * pPreviousLine = FindLine (
+      wrap->iPreviousLineCreationNumber);
+    if (!pPreviousLine)
+      continue;
+    for (vector<CWrapStyleBackup>::const_iterator backup =
+           wrap->styleBackups.begin ();
+         backup != wrap->styleBackups.end (); ++backup)
+      {
+      if (backup->iRetainedLength != 0)
+        continue;
+      for (POSITION pos = pPreviousLine->styleList.GetHeadPosition (); pos; )
+        {
+        POSITION current = pos;
+        CStyle * pStyle = pPreviousLine->styleList.GetNext (pos);
+        if (pStyle->nCreationNumber != backup->iStyleCreationNumber ||
+            pStyle->nOutputAppendCreationNumber != iPreservedOwner ||
+            pStyle->iLength != 0)
+          continue;
+        pPreviousLine->styleList.RemoveAt (current);
+        DELETESTYLE (pStyle);
+        break;
+        }
+      }
+    }
+
+  for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
+    {
+    CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+    if (pLine->nCreationNumber < m_iFirstAffectedLineCreationNumber)
+      break;
+    for (POSITION stylepos = pLine->styleList.GetHeadPosition (); stylepos; )
+      {
+      CStyle * pStyle = pLine->styleList.GetNext (stylepos);
+      if (pStyle->nOutputAppendCreationNumber == m_iAppendCreationNumber ||
+          pStyle->nOutputAppendCreationNumber == -m_iAppendCreationNumber)
+        pStyle->nOutputAppendCreationNumber = 0;
+      }
+    }
+  m_bCommitted = true;
+  }
+
+void COutputAppendTransaction::Rollback ()
+  {
+  if (m_bCommitted)
+    return;
+  m_bCommitted = true;
+
+  for (vector<CWrapMove>::reverse_iterator wrap = m_Wraps.rbegin ();
+       wrap != m_Wraps.rend (); ++wrap)
+    RestoreWrap (*wrap);
+
+  for (vector<CLineFlagsState>::reverse_iterator state =
+         m_LineFlags.rbegin ();
+       state != m_LineFlags.rend (); ++state)
+    {
+    CLine * pLine = FindLine (state->iLineCreationNumber);
+    if (pLine && pLine->flags == state->iExpectedFlags)
+      pLine->flags = state->iOldFlags;
+    }
+
+  for (vector<CLineBreakState>::reverse_iterator state =
+         m_LineBreaks.rbegin ();
+       state != m_LineBreaks.rend (); ++state)
+    {
+    if (!state->bPublished)
+      continue;
+    CLine * pLine = FindLine (state->iLineCreationNumber);
+    if (pLine && pLine->hard_return == state->bExpectedHardReturn)
+      pLine->hard_return = state->bOldHardReturn;
+    }
+
+  for (vector<CListCountState>::reverse_iterator state =
+         m_ListCounts.rbegin ();
+       state != m_ListCounts.rend (); ++state)
+    if (m_pDoc->m_iListMode == state->iListMode &&
+        m_pDoc->m_iListCount == state->iExpectedListCount &&
+        m_pDoc->m_iMXPListOwner == state->iListOwner)
+      m_pDoc->m_iListCount = state->iOldListCount;
+
+  for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
+    {
+    CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
+    if (pLine->nCreationNumber < m_iFirstAffectedLineCreationNumber)
+      break;
+    const int iOldLength = pLine->len;
+    int iReadOffset = 0;
+    int iWriteOffset = 0;
+
+    for (POSITION stylepos = pLine->styleList.GetHeadPosition (); stylepos; )
+      {
+      POSITION current = stylepos;
+      CStyle * pStyle = pLine->styleList.GetNext (stylepos);
+      const int iStyleLength = pStyle->iLength;
+      if (pStyle->nOutputAppendCreationNumber ==
+          m_iAppendCreationNumber)
+        {
+        iReadOffset += iStyleLength;
+        pLine->styleList.RemoveAt (current);
+        DELETESTYLE (pStyle);
+        continue;
+        }
+      if (pStyle->nOutputAppendCreationNumber ==
+          -m_iAppendCreationNumber)
+        pStyle->nOutputAppendCreationNumber = 0;
+
+      if (iStyleLength > 0 && iWriteOffset != iReadOffset)
+        memmove (pLine->text + iWriteOffset,
+                 pLine->text + iReadOffset,
+                 iStyleLength);
+      iReadOffset += iStyleLength;
+      iWriteOffset += iStyleLength;
+      }
+
+    if (iReadOffset < iOldLength)
+      {
+      const int iUnstyledLength = iOldLength - iReadOffset;
+      if (iWriteOffset != iReadOffset)
+        memmove (pLine->text + iWriteOffset,
+                 pLine->text + iReadOffset,
+                 iUnstyledLength);
+      iWriteOffset += iUnstyledLength;
+      }
+    pLine->len = iWriteOffset;
+    }
+
+  bool bDeletedLine = false;
+  bool bDeletedCurrentLine = false;
+  for (vector<CCreatedLine>::reverse_iterator identity =
+         m_CreatedLines.rbegin ();
+       identity != m_CreatedLines.rend (); ++identity)
+    {
+    POSITION current = NULL;
+    CLine * pLine = FindLine (identity->iLineCreationNumber, &current);
+    if (!pLine || pLine->len != 0 || pLine->styleList.GetCount () > 1)
+      continue;
+    if (pLine->styleList.GetCount () == 1)
+      {
+      CStyle * pStyle = pLine->styleList.GetHead ();
+      if (pStyle->nCreationNumber != identity->iStyleCreationNumber ||
+          pStyle->nRangeCreationNumber !=
+            identity->iStyleRangeCreationNumber ||
+          pStyle->iFlags != identity->iFlags ||
+          pStyle->iForeColour != identity->iForeColour ||
+          pStyle->iBackColour != identity->iBackColour ||
+          pStyle->pAction != identity->pAction)
+        continue;
+      }
+    if (pLine == m_pDoc->m_pCurrentLine)
+      bDeletedCurrentLine = true;
+    m_pDoc->m_LineList.RemoveAt (current);
+    delete pLine;
+    m_pDoc->m_total_lines--;
+    if (m_pDoc->m_pActiveCommandView == NULL &&
+        m_pDoc->m_pActiveOutputView == NULL &&
+        m_pDoc->m_new_lines > 0)
+      m_pDoc->m_new_lines--;
+    bDeletedLine = true;
+    }
+
+  if (bDeletedCurrentLine)
+    m_pDoc->m_pCurrentLine = m_pDoc->m_LineList.IsEmpty () ?
+      NULL : m_pDoc->m_LineList.GetTail ();
+
+  if (bDeletedLine)
+    {
+    m_pDoc->m_iOutputGeneration++;
+    if (m_pDoc->m_pLinePositions)
+      {
+      for (int i = 0; i <= m_pDoc->m_maxlines / JUMP_SIZE; i++)
+        m_pDoc->m_pLinePositions [i] = NULL;
+      int iLine = 0;
+      for (POSITION linepos = m_pDoc->m_LineList.GetHeadPosition ();
+           linepos; iLine++)
+        {
+        POSITION current = linepos;
+        m_pDoc->m_LineList.GetNext (linepos);
+        if (iLine % JUMP_SIZE == 0)
+          m_pDoc->m_pLinePositions [iLine / JUMP_SIZE] = current;
+        }
+      }
+    }
+  m_pDoc->RefreshMXPMissingTagAnchors ();
+  }
 
 // called from DisplayMsg to actually add to the current line
 // and also from the MXP routines to put stuff there
-void CMUSHclientDoc::AddToLine (LPCTSTR lpszText, const int flags)
+bool CMUSHclientDoc::AddToLine (LPCTSTR lpszText, const int flags)
+  { return AddToLineInternal (lpszText, flags, NULL); }
+
+bool CMUSHclientDoc::AddToLineInternal (
+  LPCTSTR lpszText,
+  const int flags,
+  COutputAppendTransaction * pTransaction)
   {
 const char * p ;
 unsigned char c;
 int saved_count;
+const __int64 iAppendCreationNumber =
+  pTransaction ? pTransaction->Identity () : 0;
 
   // incoming text from the MUD (only) is remembered also in m_strCurrentLine for triggers
 //  if (flags == 0)
@@ -1651,6 +2280,11 @@ int saved_count;
   for (p = lpszText; *p; p++)
     {
     c = *p;
+    bool bFinishTransition = false;
+
+retry_character:
+    if (!m_pCurrentLine)
+      return false;
     int iLineLength = m_pCurrentLine->len;
 
     // for Unicode the width of the line is characters, not stored bytes
@@ -1718,10 +2352,25 @@ Unicode range              UTF-8 bytes
 
       if (last_space < 0 ||   // if no break point found, break anyway at end of line
         (m_pCurrentLine->len - last_space) >= m_nWrapColumn)
-          StartNewLine_KeepPreviousStyle (flags);
+        {
+        bool bCreatedLine = false;
+        if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine,
+                                             bFinishTransition))
+          return false;
+        // Recheck callback output with the normal word-wrap rules. The active
+        // transition has delivered its callbacks; finish it before this byte.
+        if (!bCreatedLine)
+          {
+          bFinishTransition = true;
+          goto retry_character;
+          }
+        if (iAppendCreationNumber && bCreatedLine)
+          pTransaction->RecordCreatedLine ();
+        }
       else
         {
         saved_count = m_pCurrentLine->len - last_space;
+        const int iOldLineLength = m_pCurrentLine->len;
 
         // note - saved_count should not be zero because length is 1-relative
         // (eg. 1) and last_space is zero-relative (eg. 0)
@@ -1729,7 +2378,6 @@ Unicode range              UTF-8 bytes
           {
           saved_count--;    // one less to copy
           last_space++;  // one more on this line (the space)
-          m_pCurrentLine->len = last_space; // this line is longer
           }   // end of indenting not wanted
 
         // saved_count might be zero now, because of no indenting
@@ -1738,75 +2386,252 @@ Unicode range              UTF-8 bytes
           // save portion of text destined for new line
           CString strText = CString (&m_pCurrentLine->text [last_space],
                                      saved_count); 
+          const __int64 iPreviousLineCreationNumber =
+            m_pCurrentLine->nCreationNumber;
+          const size_t iPreparedWrap = iAppendCreationNumber ?
+            pTransaction->PrepareWrap (m_pCurrentLine, last_space) : 0;
+          std::unique_ptr<COutputLineBuffer> pTextBuffer
+            (new COutputLineBuffer (iOldLineLength));
+          const auto RestoreShortenedLine = [&] ()
+            {
+            for (POSITION linepos = m_LineList.GetTailPosition (); linepos; )
+              {
+              CLine * pLine = m_LineList.GetPrev (linepos);
+              if (pLine->nCreationNumber == iPreviousLineCreationNumber)
+                {
+                if (pLine->len == last_space)
+                  {
+                  pTextBuffer->RestoreCapacity (pLine);
+                  memcpy (pLine->text + last_space, (LPCTSTR) strText, saved_count);
+                  pLine->len = iOldLineLength;
+                  }
+                break;
+                }
+              if (pLine->nCreationNumber < iPreviousLineCreationNumber)
+                break;
+              }
+            };
           m_pCurrentLine->len = last_space;
 
-          CLine * pPreviousLine = m_pCurrentLine; // remember this line
+          bool bStartedNewLine = false;
+          bool bCreatedNewLine = false;
+          try
+            {
+            bStartedNewLine = bFinishTransition ?
+              FinishNewLine (flags, false, &bCreatedNewLine) :
+              StartNewLine (false, flags, false, &bCreatedNewLine);
+            }
+          catch (...)
+            {
+            RestoreShortenedLine ();
+            throw;
+            }
 
-          StartNewLine (false, flags);
+          if (!bStartedNewLine)
+            {
+            RestoreShortenedLine ();
+            return false;
+            }
 
-          CStyle * pStyle;
+          if (!bCreatedNewLine)
+            {
+            // The callback supplied the continuation line. Keep the complete
+            // old line and append the pending character to callback state.
+            RestoreShortenedLine ();
+            bFinishTransition = true;
+            goto retry_character;
+            }
 
-          // delete empty style item new line already has
-          pStyle = m_pCurrentLine->styleList.GetTail ();
-          DELETESTYLE (pStyle);
-          m_pCurrentLine->styleList.RemoveTail ();
-        
-          memcpy (m_pCurrentLine->text, (LPCTSTR) strText, saved_count);
-          m_pCurrentLine->len = saved_count;
+          if (iAppendCreationNumber)
+            {
+            pTransaction->RecordCreatedLine ();
+            }
 
-          // now move the styles over to the new line
+          CLine * pPreviousLine = NULL;
+          for (POSITION linepos = m_LineList.GetHeadPosition (); linepos; )
+            {
+            CLine * pLine = m_LineList.GetNext (linepos);
+            if (pLine->nCreationNumber == iPreviousLineCreationNumber)
+              {
+              pPreviousLine = pLine;
+              break;
+              }
+            }
+          if (!pPreviousLine)
+            return false;
 
+          // Build replacement style runs before changing either published list.
           int iCount = 0,
               iOldLength = 0,
               iLength = 0;
-          POSITION pos;
+          POSITION pos,
+                   firstMovedPosition = NULL;
 
           // find number that have to move
           for (pos = pPreviousLine->styleList.GetHeadPosition(); pos; )
             {
-            pStyle = pPreviousLine->styleList.GetNext (pos);
+            POSITION current = pos;
+            CStyle * pStyle = pPreviousLine->styleList.GetNext (pos);
             iLength += pStyle->iLength;
             if (iLength > pPreviousLine->len)
+              {
+              if (!firstMovedPosition)
+                firstMovedPosition = current;
               iCount++;   // this one has to move
-            else 
+              }
+            else
               iOldLength += pStyle->iLength;
             }   // end of counting number to move
 
-          // move them  - copy from tail of old to head of new (going backwards)
-          for (pos = pPreviousLine->styleList.GetTailPosition(); iCount > 0 && pos; iCount--)
+          const int iSharedLength = pPreviousLine->len - iOldLength;
+          int iPublishedStyles = 0;
+          try
             {
-            pStyle = pPreviousLine->styleList.RemoveTail ();
-            m_pCurrentLine->styleList.AddHead (pStyle);
-            }   // end of moving them
-
-          // if one style is shared we have to make a copy and adjust lengths
-          if (iOldLength < pPreviousLine->len)
+            // A callback can reduce the wrap width before this line exists.
+            if (m_pCurrentLine->iMemoryAllocated <= saved_count)
+              m_pCurrentLine->ResizeText (saved_count + 1);
+            pos = firstMovedPosition;
+            for (int i = 0; i < iCount; i++)
+              {
+              CStyle * pOldStyle = pPreviousLine->styleList.GetNext (pos);
+              std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);
+              pNewStyle->iLength = pOldStyle->iLength;
+              if (i == 0)
+                pNewStyle->iLength -= iSharedLength;
+              pNewStyle->iFlags = pOldStyle->iFlags;
+              pNewStyle->iForeColour = pOldStyle->iForeColour;
+              pNewStyle->iBackColour = pOldStyle->iBackColour;
+              pNewStyle->pAction = pOldStyle->pAction;
+              pNewStyle->nRangeCreationNumber =
+                pOldStyle->nRangeCreationNumber;
+              pNewStyle->nOutputAppendCreationNumber =
+                pOldStyle->nOutputAppendCreationNumber;
+              if (i > 0 || iSharedLength == 0)
+                pNewStyle->nCreationNumber = pOldStyle->nCreationNumber;
+              if (pNewStyle->pAction)
+                pNewStyle->pAction->AddRef ();
+              m_pCurrentLine->styleList.AddTail (pNewStyle.get ());
+              pNewStyle.release ();
+              iPublishedStyles++;
+              }
+            }
+          catch (...)
             {
-            int iDiff = pPreviousLine->len - iOldLength;  // amount we are short
-            // was copied - find out its details
+            while (iPublishedStyles-- > 0)
+              DELETESTYLE (m_pCurrentLine->styleList.RemoveTail ());
 
-            pStyle =  m_pCurrentLine->styleList.GetHead ();
-            pStyle->iLength -= iDiff;  // this line is that much smaller
-            CAction * pAction = pStyle->pAction;
-          
-            AddStyle (pStyle->iFlags & STYLE_BITS, 
-                      pStyle->iForeColour, 
-                      pStyle->iBackColour, 
-                      iDiff,  // old line has this much
-                      pAction,
-                      pPreviousLine);  // add to end of previous line
+            RestoreShortenedLine ();
+            CLine * pFailedLine = m_pCurrentLine;
+            const int iFailedLineCount = m_LineList.GetCount ();
+            if (iFailedLineCount % JUMP_SIZE == 1)
+              m_pLinePositions [iFailedLineCount / JUMP_SIZE] = NULL;
+            m_LineList.RemoveTail ();
+            m_pCurrentLine = pPreviousLine;
+            m_total_lines--;
+            if (m_pActiveCommandView == NULL &&
+                m_pActiveOutputView == NULL && m_new_lines > 0)
+              m_new_lines--;
+            delete pFailedLine;
+            throw;
+            }
 
-            } // end of shared style
+          memcpy (m_pCurrentLine->text, (LPCTSTR) strText, saved_count);
+          m_pCurrentLine->len = saved_count;
+
+          // The staged runs now cover the new line. Remove its default run.
+          DELETESTYLE (m_pCurrentLine->styleList.RemoveHead ());
+
+          int iStylesToRemove = iCount;
+          pos = firstMovedPosition;
+          if (iSharedLength > 0)
+            {
+            CStyle * pSharedStyle = pPreviousLine->styleList.GetNext (pos);
+            pSharedStyle->iLength = iSharedLength;
+            iStylesToRemove--;
+            }
+          while (iStylesToRemove-- > 0)
+            {
+            POSITION current = pos;
+            CStyle * pMovedStyle =
+              pPreviousLine->styleList.GetNext (pos);
+            if (iAppendCreationNumber &&
+                pMovedStyle->nOutputAppendCreationNumber ==
+                  -iAppendCreationNumber)
+              pMovedStyle->iLength = 0;
+            else
+              {
+              pPreviousLine->styleList.RemoveAt (current);
+              DELETESTYLE (pMovedStyle);
+              }
+            }
+
+          // A wrapped opening marker keeps its style identity but changes
+          // lines. Keep the fallback anchor on the marker's current line.
+          for (POSITION markerpos =
+                 m_pCurrentLine->styleList.GetHeadPosition ();
+               markerpos; )
+            {
+            CStyle * pMarkerStyle =
+              m_pCurrentLine->styleList.GetNext (markerpos);
+            if ((pMarkerStyle->iFlags & START_TAG) == 0)
+              continue;
+
+            for (POSITION tagpos = m_ActiveTagList.GetHeadPosition ();
+                 tagpos; )
+              {
+              CActiveTag * pTag = m_ActiveTagList.GetNext (tagpos);
+              if (pTag->nOpeningStyleCreationNumber ==
+                  pMarkerStyle->nCreationNumber)
+                {
+                pTag->nOpeningLineCreationNumber =
+                  m_pCurrentLine->nCreationNumber;
+                break;
+                }
+              }
+            }
+          if (iAppendCreationNumber)
+            pTransaction->PublishWrap (
+              iPreparedWrap, m_pCurrentLine->nCreationNumber,
+              std::move (pTextBuffer));
           }  // end of having something to move to the next line
         else  
           {   // saved_count == 0
-          StartNewLine_KeepPreviousStyle (flags);
+          bool bCreatedLine = false;
+          if (!StartNewLine_KeepPreviousStyle (flags, &bCreatedLine,
+                                             bFinishTransition))
+            return false;
+          if (!bCreatedLine)
+            {
+            bFinishTransition = true;
+            goto retry_character;
+            }
+          if (iAppendCreationNumber && bCreatedLine)
+            pTransaction->RecordCreatedLine ();
           }  // end saved_count == 0
 
         } // end of line wrapping wanted and possible
       }   // end of line being full
 
     ASSERT (m_pCurrentLine->text);
+
+    if (pTransaction)
+      pTransaction->TrackLine (m_pCurrentLine);
+    CStyle * pAppendStyle = m_pCurrentLine->styleList.GetTail ();
+    if (pAppendStyle->nOutputAppendCreationNumber !=
+        iAppendCreationNumber)
+      {
+      std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);
+      pNewStyle->iFlags = pAppendStyle->iFlags & STYLE_BITS;
+      pNewStyle->iForeColour = pAppendStyle->iForeColour;
+      pNewStyle->iBackColour = pAppendStyle->iBackColour;
+      pNewStyle->pAction = pAppendStyle->pAction;
+      if (pNewStyle->pAction)
+        pNewStyle->pAction->AddRef ();
+      pNewStyle->nOutputAppendCreationNumber =
+        iAppendCreationNumber;
+      m_pCurrentLine->styleList.AddTail (pNewStyle.get ());
+      pNewStyle.release ();
+      }
 
     // add character to line
     m_pCurrentLine->text [m_pCurrentLine->len] = c;
@@ -1817,6 +2642,7 @@ Unicode range              UTF-8 bytes
     m_pCurrentLine->styleList.GetTail ()->iLength++; 
 
     } // end of processing each character
+  return true;
   } // end of AddToLine
 
 
@@ -1933,13 +2759,14 @@ CString strLine (lpszText, size);
     if (m_bDebugIncomingPackets && !fake)
       Debug_Packets ("Incoming", lpszText, size, m_iInputPacketCount);
 
-    m_iCurrentActionSource = eInputFromServer;
+    {
+    CValueStateGuard<unsigned short> actionSourceGuard
+      (m_iCurrentActionSource, eInputFromServer);
 
     // let plugin change the input packet unless we have faked an input line from MXP processing or similar
     if (!fake)
       SendToAllPluginCallbacksRtn (ON_PLUGIN_PACKET_RECEIVED, strLine);
-
-    m_iCurrentActionSource = eUnknownActionSource;
+    }
 
     // change line to what the plugin(s) left it at
     lpszText = strLine;
@@ -1961,7 +2788,10 @@ CString strLine (lpszText, size);
     // make sure notes start on a new line
     if ((flags & COMMENT) != (m_pCurrentLine->flags & COMMENT) && 
         m_pCurrentLine->len > 0)
-      StartNewLine (true, flags);
+      {
+      if (!StartNewLine (true, flags))
+        return;
+      }
     else
       {
       if (m_bKeepCommandsOnSameLine)  // for Simen Brekken
@@ -1979,12 +2809,14 @@ CString strLine (lpszText, size);
         {
         if ((flags & NOTE_OR_COMMAND) != (m_pCurrentLine->flags & NOTE_OR_COMMAND) && 
             m_pCurrentLine->len > 0)
-            StartNewLine (true, flags);
+            if (!StartNewLine (true, flags))
+              return;
         } // end of commands going onto a new line
       }   // end of not changing to/from a note
     }
   else
-    StartNewLine (true, 0);
+    if (!StartNewLine (true, 0))
+      return;
 
 // if line length is currently zero (ie. we are starting a new one)
 // then we will set the default style depending on the flags, this will
@@ -2250,9 +3082,11 @@ CString strLine (lpszText, size);
               if (m_cLastChar == c)
                 {  // two newlines in a row - start a real new line
                 // we'll do two because the original text had a blank line.
-                StartNewLine (true, flags);
+                if (!StartNewLine (true, flags))
+                  return;
                 m_pCurrentLine->flags = flags;    // remember flags for this line
-                StartNewLine (true, flags);   // and another
+                if (!StartNewLine (true, flags))   // and another
+                  return;
                 m_pCurrentLine->flags = flags;    // remember flags for this line
                 }  // end of \n\n
               else
@@ -2268,9 +3102,15 @@ CString strLine (lpszText, size);
                 if (last_space != (m_pCurrentLine->len - 1))
                   {
                   if (m_cLastChar == '.' && m_pCurrentLine->len < m_nWrapColumn)
-                    AddToLine ("  ", flags);  // two spaces after period
+                    {
+                    if (!AddToLine ("  ", flags))  // two spaces after period
+                      return;
+                    }
                   else
-                    AddToLine (" ", flags);  // convert newline to space
+                    {
+                    if (!AddToLine (" ", flags))  // convert newline to space
+                      return;
+                    }
                   }   // end of newline which does not follow a space
                 }  // end of not two newlines in a row
               m_cLastChar = c;  // remember it was a newline
@@ -2281,7 +3121,8 @@ CString strLine (lpszText, size);
                   (flags & NOTE_OR_COMMAND)           // input/note mode honours newlines
                   )
                 {
-                StartNewLine (true, flags);
+                if (!StartNewLine (true, flags))
+                  return;
                 SetNewLineColour (flags);
                 }
             break;  // end of newline
@@ -2291,26 +3132,24 @@ CString strLine (lpszText, size);
             if (m_bCarriageReturnClearsLine && !(flags & NOTE_OR_COMMAND) && p [1] != '\n')
               {
 
-              // delete existing styles list
+              // build and publish the replacement before deleting existing styles
+              std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);
+              pNewStyle->iFlags = 0;
+              pNewStyle->iForeColour = WHITE;
+              pNewStyle->iBackColour = BLACK;
 
-              for (POSITION pos = m_pCurrentLine->styleList.GetHeadPosition(); pos; )
-                  DELETESTYLE (m_pCurrentLine->styleList.GetNext (pos));
+              int iOldStyleCount = m_pCurrentLine->styleList.GetCount ();
+              m_pCurrentLine->styleList.AddTail (pNewStyle.get ());
 
-              m_pCurrentLine->styleList.RemoveAll();
+              for (int iStyle = 0; iStyle < iOldStyleCount; iStyle++)
+                DELETESTYLE (m_pCurrentLine->styleList.RemoveHead ());
 
-              // add back one default style
-
-              CStyle * pStyle; 
-
-              // have at least one style item in the list
-              m_pCurrentLine->styleList.AddTail (pStyle = NEWSTYLE);
-
-              pStyle->iFlags = 0;
-              pStyle->iForeColour = WHITE;
-              pStyle->iBackColour = BLACK;
+              pNewStyle.release ();
 
               m_pCurrentLine->hard_return = false;
               m_pCurrentLine->len = 0;
+
+              RefreshMXPMissingTagAnchors ();
 
               }   // end of letting a \r delete line contents
 
@@ -2345,14 +3184,16 @@ CString strLine (lpszText, size);
               if ((m_cLastChar == '.' || m_cLastChar == '!' || m_cLastChar == '?')
                   && m_pCurrentLine->len < m_nWrapColumn)
                 {
-                AddToLine ("  ", flags);
+                if (!AddToLine ("  ", flags))
+                  return;
                 m_cLastChar = c;  // remember it
                 break;
                 }
 
               }   // end of <p> mode            
 
-            AddToLine (" ", flags);
+            if (!AddToLine (" ", flags))
+              return;
 
             // a newline followed by only a space still counts as a newline
             if (m_cLastChar != '\n' && !(flags & NOTE_OR_COMMAND))
@@ -2361,12 +3202,16 @@ CString strLine (lpszText, size);
 
       case '\t':  i = ((m_pCurrentLine->len + 8) & 0xFFF8);
                   if (m_pCurrentLine->len >= m_nWrapColumn)
-                    StartNewLine (false, flags);
+                    {
+                    if (!StartNewLine (false, flags))
+                      return;
+                    }
                   else
                     {
                     spaces = i - m_pCurrentLine->len;  // no. of spaces
                     for (i = 0; i < spaces; i++)
-                        AddToLine (" ", flags);
+                      if (!AddToLine (" ", flags))
+                        return;
 
                     }   // end of being inside wrap column
                   break;    // end of tab
@@ -2381,7 +3226,8 @@ CString strLine (lpszText, size);
                     {
                     if (m_phase == HAVE_IAC)
                       {
-                      AddToLine (cOneCharacterLine, flags);
+                      if (!AddToLine (cOneCharacterLine, flags))
+                        return;
                       m_cLastChar = c;  // remember it
                       m_phase = NONE;
                       }
@@ -2416,7 +3262,8 @@ CString strLine (lpszText, size);
                   // note NO break here, if not in MXP mode we FALL THROUGH
 
       default:
-                  AddToLine (cOneCharacterLine, flags);
+                  if (!AddToLine (cOneCharacterLine, flags))
+                    return;
                   if (!(flags & NOTE_OR_COMMAND))
                     m_cLastChar = c;  // remember it
                   break;
@@ -2460,9 +3307,12 @@ CString strLine (lpszText, size);
 
 
 
-void CMUSHclientDoc::StartNewLine (const bool hard_break, const int flags)
+bool CMUSHclientDoc::StartNewLine (const bool hard_break, const int flags,
+                                  const bool bResizePrevious,
+                                  bool * pbCreated)
   {
-POSITION pos;
+  if (pbCreated)
+    *pbCreated = false;
 
   // we may not have a current line
   if (m_pCurrentLine)
@@ -2474,18 +3324,23 @@ POSITION pos;
     // new - for people on the forum who insist on getting lines without a \n at
     // the end - tell plugins about this line
 
+    __int64 iLineCreationNumber = m_pCurrentLine->nCreationNumber;
     if (!(flags & NOTE_OR_COMMAND))
       SendLineToPlugin ();
+
+    if (!m_pCurrentLine)
+      return false;
+    if (m_pCurrentLine->nCreationNumber != iLineCreationNumber)
+      return true;
 
   //  TRACE1 ("Received line: %s\n", (LPCTSTR) CString (m_pCurrentLine->text, m_pCurrentLine->len));
 
     if (hard_break)
       {
-      CLine * pSavedLine = m_pCurrentLine;
-      LARGE_INTEGER saved_time = m_pCurrentLine->m_lineHighPerformanceTime;
+      __int64 iSavedLineCreationNumber = m_pCurrentLine->nCreationNumber;
       if (ProcessPreviousLine () &&
-          m_pCurrentLine->len == 0)
-        return;   // return if omit from output (no need to add another line)
+          m_pCurrentLine && m_pCurrentLine->len == 0)
+        return true;   // omit already supplied a valid empty current line
 
       // if the line has changed then the trigger or script added a new one,
       // so we don't need to add a second.
@@ -2495,14 +3350,28 @@ POSITION pos;
 
       // added in version 4.41, also check timestamp, due to problem with lines being deleted
       // by DeleteLines in a trigger script.
-      if ((pSavedLine != m_pCurrentLine || 
-          saved_time.QuadPart != m_pCurrentLine->m_lineHighPerformanceTime.QuadPart) &&
+      if (!m_pCurrentLine)
+        return false;
+      if (iSavedLineCreationNumber != m_pCurrentLine->nCreationNumber &&
           m_pCurrentLine->len == 0)
-        return;
+        return true;
 
       }
     }
 
+
+  return FinishNewLine (flags, bResizePrevious, pbCreated);
+  } // end of CMUSHclientDoc::StartNewLine
+
+// Complete a line transition after its callbacks and trigger processing.
+// Append reentry uses this phase after recomputing the callback line's wrap.
+bool CMUSHclientDoc::FinishNewLine (const int flags,
+                                   const bool bResizePrevious,
+                                   bool * pbCreated)
+  {
+POSITION pos;
+  if (pbCreated)
+    *pbCreated = false;
 
   // if our buffer is full, remove the JUMP_SIZE items
 
@@ -2531,59 +3400,6 @@ POSITION pos;
 
   try
     {
-
-  // we may not have a current line
-    if (m_pCurrentLine)
-      {
-
-  // We are about to move onto a new line. For space reasons, reallocate them
-  // memory used by the pointers. However to keep from getting a null pointer,
-  // keep at least a single character
-
-    // save current line text
-     CString strLine = CString (m_pCurrentLine->text, m_pCurrentLine->len);
-
-     m_pCurrentLine->iMemoryAllocated = MAX (m_pCurrentLine->len, 1);
-
-#ifdef USE_REALLOC
-      m_pCurrentLine->text  = (char *) realloc (m_pCurrentLine->text, 
-                                               m_pCurrentLine->iMemoryAllocated);
-
-#else
-
-    delete [] m_pCurrentLine->text;
-    m_pCurrentLine->text = new char [m_pCurrentLine->iMemoryAllocated];
-
-
-#endif
-      
-    ASSERT (m_pCurrentLine->text);
-
-    // put text back
-    memcpy (m_pCurrentLine->text, (LPCTSTR) strLine, m_pCurrentLine->len);
-
-      // if we have more than one style, and the last one is empty, get rid of it
-      // unless it is a start tag marker
-      /*
-
-  // Commented out because of bug #418 - a style change at the very end
-  // of the line was being discarded.    Changed in version 3.18.
-
-      if (m_pCurrentLine->styleList.GetCount () > 1)
-        {
-        // find current style
-        CStyle * pStyle = m_pCurrentLine->styleList.GetTail ();
-
-        if (pStyle->iLength == 0 && (pStyle->iFlags & START_TAG) == 0)
-          {
-          DELETESTYLE (pStyle);
-          m_pCurrentLine->styleList.RemoveTail ();
-          }
-        }   // end of having more than one style
-        */
-
-      } // end of having a current line
-
 // start a new line
 
     int      iFlags = m_iFlags;             
@@ -2622,15 +3438,34 @@ POSITION pos;
           }
         } // end of note 
 
-    m_pCurrentLine = new CLine (++m_total_lines, 
-                                m_nWrapColumn,
-                                iFlags,       // style flags
-                                iForeColour,  
-                                iBackColour,
-                                m_bUTF_8);
+    std::unique_ptr<CLine> pNewLine
+      (new CLine (m_total_lines + 1,
+                  m_nWrapColumn,
+                  iFlags,       // style flags
+                  iForeColour,
+                  iBackColour,
+                  m_bUTF_8));
 
-    m_pCurrentLine->flags = flags;
-    pos = m_LineList.AddTail (m_pCurrentLine);
+    pNewLine->flags = flags;
+    pos = m_LineList.AddTail (pNewLine.get ());
+
+    // Shrink the old line only after the new line and its list node exist.
+    // If shrinking fails, remove the unpublished new line again.
+    try
+      {
+      if (bResizePrevious && m_pCurrentLine)
+        m_pCurrentLine->ResizeText (MAX (m_pCurrentLine->len, 1));
+      }
+    catch (...)
+      {
+      m_LineList.RemoveAt (pos);
+      throw;
+      }
+
+    m_pCurrentLine = pNewLine.release ();
+    if (pbCreated)
+      *pbCreated = true;
+    m_total_lines++;
 
 // add every "JUMP_SIZE" line positions to the positions array
 
@@ -2648,11 +3483,16 @@ POSITION pos;
   catch (CMemoryException * e)
     {
 
-    RemoveChunk ();   // get rid of JUMP_SIZE lines
+    if (m_LineList.GetCount () >= JUMP_SIZE)
+      RemoveChunk ();   // get rid of JUMP_SIZE lines
+    m_pCurrentLine = m_LineList.IsEmpty () ?
+      NULL : m_LineList.GetTail ();
     OnConnectionDisconnect ();    // close the world
     TMessageBox ("Ran out of memory. The world has been closed.");
 
     e->Delete ();
+
+    return false;
 
     } // end of catch block
 
@@ -2679,7 +3519,9 @@ POSITION pos;
 
   App.m_bUpdateActivity = TRUE;
 
-  }   // end of CMUSHclientDoc::StartNewLine
+  return true;
+
+  }   // end of CMUSHclientDoc::FinishNewLine
 
 const bool CMUSHclientDoc::CheckScriptingAvailable (const char * sWhat,
                                                     const DISPID dispid,
@@ -2731,7 +3573,7 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
   // get unlabelled trigger's internal name
   const char * pLabel = trigger_item->strLabel;
   if (pLabel [0] == 0)
-     pLabel = GetTriggerRevMap () [trigger_item].c_str ();
+     pLabel = trigger_item->strInternalName;
 
   if (GetScriptEngine () && GetScriptEngine ()->IsLua ())
     {
@@ -2739,7 +3581,7 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
     list<string> sparams;
     sparams.push_back (pLabel);
     sparams.push_back ((LPCTSTR) strCurrentLine);
-    trigger_item->bExecutingScript = true;     // cannot be deleted now
+    CTriggerExecutionGuard executingGuard (this, trigger_item);
     GetScriptEngine ()->ExecuteLua (trigger_item->dispid, 
                                    trigger_item->strProcedure, 
                                    eTriggerFired,
@@ -2751,7 +3593,6 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
                                    trigger_item->regexp,
                                    NULL,        // no map of strings
                                    &StyledLine);  // but we *do* have a styled line
-    trigger_item->bExecutingScript = false;     // can be deleted now
     return;
     }   // end of Lua
 
@@ -2795,7 +3636,7 @@ long i = 1;
   sa.PutElement (&i, &v);
   args [eWildcards] = sa;
 
-  trigger_item->bExecutingScript = true;     // cannot be deleted now
+  CTriggerExecutionGuard executingGuard (this, trigger_item);
   ExecuteScript (trigger_item->dispid,  
                  trigger_item->strProcedure,
                  eTriggerFired,
@@ -2803,8 +3644,6 @@ long i = 1;
                  strReason,
                  params, 
                  trigger_item->nInvocationCount); 
-  trigger_item->bExecutingScript = false;     // can be deleted now
-
   } // end of CMUSHclientDoc::ExecuteTriggerScript 
 
 void CMUSHclientDoc::ExecuteHotspotScript (DISPID & dispid,  // dispatch ID, will be set to DISPID_UNKNOWN on an error
@@ -2968,15 +3807,15 @@ if (!m_bLogRaw)
 
 
   filedlg.m_ofn.lpstrTitle = "Log file name";
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
   if (App.platform == VER_PLATFORM_WIN32s)
-    strcpy (filedlg.m_ofn.lpstrFile, "");
+    SetFileDialogFileName (filedlg, filename, "");
   else
-    strcpy (filedlg.m_ofn.lpstrFile, suggested_name);
+    SetFileDialogFileName (filedlg, filename, suggested_name);
 
   ChangeToFileBrowsingDirectory ();
 	int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;
@@ -3367,37 +4206,22 @@ void CMUSHclientDoc::ChangeFont (const int nHeight,
 // Load the font we want to use.
 
 int i;
-
-  for (i = 0; i < NUMITEMS (m_font); i++)  
-    {
-    delete m_font [i];         // get rid of old font
-    m_font [i] = NULL;
-    }
+std::unique_ptr<CFont> newFonts [NUMITEMS (m_font)];
 
   CDC dc;
 
-  dc.CreateCompatibleDC (NULL);
+  if (!dc.CreateCompatibleDC (NULL))
+    AfxThrowResourceException ();
 
   for (i = 0; i < NUMITEMS (m_font); i++)  
     {
-     m_font [i] = new CFont;    // create new font
-
-     if (!m_font [i])
-      {
-      for (int j = 0; j < NUMITEMS (m_font); j++)  
-        {
-        delete m_font [j];         // get rid of old font
-        m_font [j] = NULL;
-        }
-      TMessageBox ("Unable to allocate memory for screen font");
-      return;
-      }
+     newFonts [i].reset (new CFont);    // create new font
 
     
      // if height is zero, default to 10 so it doesn't look stupid
      int lfHeight = -MulDiv(nHeight ? nHeight : 10, dc.GetDeviceCaps(LOGPIXELSY), 72);
 
-     m_font [i]->CreateFont(lfHeight, // int nHeight, 
+     if (!newFonts [i]->CreateFont(lfHeight, // int nHeight,
 				    0, // int nWidth, 
 				    0, // int nEscapement, 
 				    0, // int nOrientation, 
@@ -3410,16 +4234,33 @@ int i;
             0, // BYTE nClipPrecision, 
             0, // BYTE nQuality, 
             MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,    // was  FF_DONTCARE
-            lpszFacename);// LPCTSTR lpszFacename );
+            lpszFacename)) // LPCTSTR lpszFacename );
+       {
+       AfxThrowResourceException ();
+       }
 
     }   // end of allocating 16 fonts
 
    // Get the metrics of the font - use the bold one - it will probably be wider
 
-    dc.SelectObject(m_font [HILITE]);
+    CFont * pOldDCFont = dc.SelectObject(newFonts [HILITE].get ());
+    if (!pOldDCFont)
+      AfxThrowResourceException ();
     
     TEXTMETRIC tm;
-    dc.GetTextMetrics(&tm);
+    if (!dc.GetTextMetrics(&tm))
+      {
+      dc.SelectObject (pOldDCFont);
+      AfxThrowResourceException ();
+      }
+
+    dc.SelectObject (pOldDCFont);
+
+    for (i = 0; i < NUMITEMS (m_font); i++)
+      {
+      delete m_font [i];         // get rid of old font
+      m_font [i] = newFonts [i].release ();
+      }
 
     if (iLineSpacing)
       m_FontHeight = iLineSpacing;    // override
@@ -3453,23 +4294,19 @@ void CMUSHclientDoc::ChangeInputFont (const int nHeight,
 {
 // Load the font we want to use.
 
-   delete m_input_font;         // get rid of old font
-
-   m_input_font = new CFont;    // create new font
-
-   if (!m_input_font)
-    {
-    TMessageBox ("Unable to allocate memory for screen font");
-    return;
-    }
+   CFont * pNewInputFont = new CFont;    // create new font
 
 CDC dc;
 
-dc.CreateCompatibleDC (NULL);
+if (!dc.CreateCompatibleDC (NULL))
+  {
+  delete pNewInputFont;
+  AfxThrowResourceException ();
+  }
 
    int lfHeight = -MulDiv(nHeight ? nHeight : 10, dc.GetDeviceCaps(LOGPIXELSY), 72);
 
-   m_input_font->CreateFont(lfHeight, // int nHeight, 
+   if (!pNewInputFont->CreateFont(lfHeight, // int nHeight,
 				  0, // int nWidth, 
 				  0, // int nEscapement, 
 				  0, // int nOrientation, 
@@ -3482,35 +4319,90 @@ dc.CreateCompatibleDC (NULL);
           0, // BYTE nClipPrecision, 
           0, // BYTE nQuality, 
           MUSHCLIENT_FONT_FAMILY, // BYTE nPitchAndFamily,   // was FF_DONTCARE
-          lpszFacename);// LPCTSTR lpszFacename );
+          lpszFacename)) // LPCTSTR lpszFacename );
+     {
+     delete pNewInputFont;
+     AfxThrowResourceException ();
+     }
 
     // Get the metrics of the font.
 
-    dc.SelectObject(m_input_font);
+    CFont * pOldDCFont = dc.SelectObject(pNewInputFont);
+    if (!pOldDCFont)
+      {
+      delete pNewInputFont;
+      AfxThrowResourceException ();
+      }
     
     TEXTMETRIC tm;
-    dc.GetTextMetrics(&tm);
+    if (!dc.GetTextMetrics(&tm))
+      {
+      dc.SelectObject(pOldDCFont);
+      delete pNewInputFont;
+      AfxThrowResourceException ();
+      }
 
+    dc.SelectObject(pOldDCFont);
+
+    CFont * pOldInputFont = m_input_font;
+    m_input_font = pNewInputFont;
+    int iOldInputFontHeight = m_InputFontHeight;
+    int iOldInputFontWidth = m_InputFontWidth;
     m_InputFontHeight = tm.tmHeight; 
     m_InputFontWidth = tm.tmAveCharWidth; 
 
     // fix up all input windows
-    if (m_input_font)
+    try
+      {
+      if (m_input_font)
+        for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
+          {
+          CView* pView = GetNextView(pos);
+
+          if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
+            {
+            CSendView* pmyView = (CSendView*)pView;
+
+            pmyView->SendMessage (WM_SETFONT,
+                                       (WPARAM) m_input_font->m_hObject,
+                                       MAKELPARAM (TRUE, 0));
+
+            pmyView->AdjustCommandWindowSize ();
+            }  // end of being a CSendView
+          }
+      }
+    catch (...)
+      {
+      // A layout callback can replace this font reentrantly.
+      if (m_input_font != pNewInputFont)
+        {
+        delete pOldInputFont;
+        throw;
+        }
+      m_input_font = pOldInputFont;
+      m_InputFontHeight = iOldInputFontHeight;
+      m_InputFontWidth = iOldInputFontWidth;
       for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
         {
         CView* pView = GetNextView(pos);
-
         if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
-          {
-          CSendView* pmyView = (CSendView*)pView;
-
-          pmyView->SendMessage (WM_SETFONT,
-                                     (WPARAM) m_input_font->m_hObject,
-                                     MAKELPARAM (TRUE, 0));
-
-          pmyView->AdjustCommandWindowSize ();
-          }	  // end of being a CSendView
+          pView->SendMessage (WM_SETFONT,
+                              (WPARAM) (m_input_font ? m_input_font->m_hObject : NULL),
+                              MAKELPARAM (TRUE, 0));
         }
+      delete pNewInputFont;
+      if (!m_input_font)
+        throw;
+      for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
+        {
+        CView* pView = GetNextView(pos);
+        if (pView->IsKindOf(RUNTIME_CLASS(CSendView)))
+          ((CSendView*) pView)->AdjustCommandWindowSize ();
+        }
+      throw;
+      }
+
+    delete pOldInputFont;         // get rid of old font
 
 } // end of CMUSHclientDoc::ChangeInputFont
 
@@ -3583,6 +4475,7 @@ bool CMUSHclientDoc::SendToMushHelper (CFile * f,
                                        const BOOL bConfirm,
                                        const BOOL bEcho)
   {
+CWorldDocumentOperationGuard operationGuard (this);
 CString str;
 CString full_line;
 
@@ -3633,10 +4526,13 @@ DWORD nLines = 0,
     if (dlg.DoModal () != IDOK)
       return false;
 
+  if (m_bWorldClosePending)
+    return false;
   CArchive ar (f, CArchive::load);
 
   CProgressDlg ProgressDlg;                   
-  ProgressDlg.Create ();                           
+  if (!ProgressDlg.Create ())
+    AfxThrowResourceException ();
   ProgressDlg.SetStatus (Translate ("Sending to world..."));               
   ProgressDlg.SetRange (0, nLines);
   ProgressDlg.SetWindowText (Translate ("Sending..."));                              
@@ -3648,6 +4544,8 @@ DWORD nLines = 0,
 
     if (!dlg.m_strPreamble.IsEmpty ())
       SendMsg (dlg.m_strPreamble, dlg.m_bEcho, false, LoggingInput ());
+    if (m_bWorldClosePending)
+      return false;
     
     CString strSoftcode;
     bool bHashCommenting = false;
@@ -3660,7 +4558,12 @@ DWORD nLines = 0,
       nCurrentLine++;
       ProgressDlg.SetPos (nCurrentLine); 
 
-      if (ProgressDlg.CheckCancelButton())     // abort if user cancels
+      if (m_bWorldClosePending)
+        return false;
+      const BOOL bCancelled = ProgressDlg.CheckCancelButton ();
+      if (m_bWorldClosePending)
+        return false;
+      if (bCancelled)
         break;
 
       if (dlg.m_bCommentedSoftcode)
@@ -3686,6 +4589,8 @@ DWORD nLines = 0,
           full_line += dlg.m_strLinePostamble;
 
           SendMsg (full_line, dlg.m_bEcho, false, LoggingInput ());   // send the line
+          if (m_bWorldClosePending)
+            return false;
           if (dlg.m_iLineDelay > 0)
             {
             if (++iLineCount >= dlg.m_nLineDelayPerLines)
@@ -3726,6 +4631,8 @@ DWORD nLines = 0,
       full_line += str;
       full_line += dlg.m_strLinePostamble;
       SendMsg (full_line, dlg.m_bEcho, false, LoggingInput ());   // send the line
+      if (m_bWorldClosePending)
+        return false;
       if (dlg.m_iLineDelay > 0)
         {
         if (++iLineCount >= dlg.m_nLineDelayPerLines)
@@ -3742,6 +4649,8 @@ DWORD nLines = 0,
       full_line += strSoftcode;
       full_line += dlg.m_strLinePostamble;
       SendMsg (full_line, dlg.m_bEcho, false, LoggingInput ());   // send the line
+      if (m_bWorldClosePending)
+        return false;
       if (dlg.m_iLineDelay > 0)
         {
         if (++iLineCount >= dlg.m_nLineDelayPerLines)
@@ -3772,7 +4681,7 @@ DWORD nLines = 0,
 void CMUSHclientDoc::OnGamePastefile() 
 {
 
-CStdioFile * f = NULL;
+std::unique_ptr<CStdioFile> f;
 CString str;
 CString filename;
 
@@ -3787,21 +4696,21 @@ CString filename;
   str = "File to paste into ";
   str += m_mush_name;
   filedlg.m_ofn.lpstrTitle = str;
-  filedlg.m_ofn.lpstrFile = filename.GetBuffer (_MAX_PATH); // needed!! (for Win32s)  
-  strcpy (filedlg.m_ofn.lpstrFile, "");
+  SetFileDialogFileName (filedlg, filename, "");
 
   ChangeToFileBrowsingDirectory ();
 	int nResult = filedlg.DoModal();
   ChangeToStartupDirectory ();
+  filename.ReleaseBuffer ();
 
   if (nResult != IDOK)
     return;    // cancelled dialog
 
   try
     {
-    f = new CStdioFile (filedlg.GetPathName (), CFile::modeRead | CFile::shareDenyWrite);
+    f.reset (new CStdioFile (filedlg.GetPathName (), CFile::modeRead | CFile::shareDenyWrite));
 
-    SendToMushHelper (f, 
+    SendToMushHelper (f.get (),
                      m_file_preamble,
                      m_line_preamble,
                      m_line_postamble,
@@ -3820,8 +4729,6 @@ CString filename;
       TMessageBox ("Unable to open or read the requested file", MB_ICONEXCLAMATION);
     e->Delete ();
     } // end of catching a file exception
-
-  delete f;       // delete file
 
 }
 
@@ -4408,13 +5315,12 @@ long i;
 
 // do a new line positions array
 
-  delete [] m_pLinePositions;
-  m_pLinePositions = new POSITION [(nNewBufferSize / JUMP_SIZE) + 1];
+  POSITION * pNewLinePositions = new POSITION [(nNewBufferSize / JUMP_SIZE) + 1];
 
 // clear all elements
 
   for (i = 0; i <= nNewBufferSize / JUMP_SIZE; i++)
-    m_pLinePositions [i] = NULL;
+    pNewLinePositions [i] = NULL;
 
 // re-seed positions array
 
@@ -4423,9 +5329,12 @@ long i;
       i++)
         {
         if (i % JUMP_SIZE == 0)
-          m_pLinePositions [i / JUMP_SIZE] = pos;
+          pNewLinePositions [i / JUMP_SIZE] = pos;
         m_LineList.GetNext (pos);
         } // end of for loop
+
+  delete [] m_pLinePositions;
+  m_pLinePositions = pNewLinePositions;
 
 // refresh view to show different scroll bars
 
@@ -4540,6 +5449,8 @@ long CMUSHclientDoc::GetLastLine (void)
    {
   int i;
 
+  m_iOutputGeneration++;
+
 // remove JUMP_SIZE lines
 
   for (i = 0; i < JUMP_SIZE; i++)
@@ -4587,8 +5498,36 @@ void CMUSHclientDoc::ShowStatusLine (const bool bNow)
 
 
 
+void CMUSHclientDoc::OnCloseDocument()
+{
+  if (m_iActiveProgressOperations != 0 || CProgressDlg::IsPumpingMessages ())
+    {
+    if (!m_bWorldCloseQueued)
+      {
+      App.DeferWorldDocumentClose (m_iUniqueDocumentNumber);
+      m_bWorldCloseQueued = true;
+      }
+    m_bWorldClosePending = true;
+    return;
+    }
+  CDocument::OnCloseDocument ();
+}
+
+void CMUSHclientDoc::BeginProgressOperation ()
+{
+  ++m_iActiveProgressOperations;
+}
+
+void CMUSHclientDoc::EndProgressOperation ()
+{
+  ASSERT (m_iActiveProgressOperations > 0);
+  --m_iActiveProgressOperations;
+}
+
 BOOL CMUSHclientDoc::SaveModified() 
 {
+  if (m_bWorldClosePending)
+    return TRUE; // This accepted close has already run its save and close script.
 CString str;
 
   if (m_pSocket && 
@@ -4928,20 +5867,24 @@ void CMUSHclientDoc::ClearOutput (void)
     return;
 
 POSITION pos;
+  std::unique_ptr<CLine> pNewLine
+    (new CLine (1,
+                m_nWrapColumn,
+                0, WHITE, BLACK,
+                m_bUTF_8));
 
-// delete lines list
+  // Publish the replacement node before deleting the existing output.
+  int iOldLineCount = m_LineList.GetCount ();
+  if (iOldLineCount)
+    m_iOutputGeneration++;
+  POSITION newLinePosition = m_LineList.AddTail (pNewLine.get ());
+  CLine * pPublishedLine = pNewLine.release ();
 
-  DELETE_LIST (m_LineList);
+  for (int iLine = 0; iLine < iOldLineCount; iLine++)
+    delete m_LineList.RemoveHead ();
 
-// put one line in line list
-
-  m_total_lines = 0;
-  m_pCurrentLine = new CLine (++m_total_lines, 
-                              m_nWrapColumn,
-                              0, WHITE, BLACK,
-                              m_bUTF_8);
-
-  m_LineList.AddTail (m_pCurrentLine);
+  m_pCurrentLine = pPublishedLine;
+  m_total_lines = 1;
 //  m_strCurrentLine.Empty ();
 
   // clear all elements in our positions array
@@ -4949,7 +5892,9 @@ POSITION pos;
   for (int i = 0; i <= m_maxlines / JUMP_SIZE; i++)
     m_pLinePositions [i] = NULL;
 
-  m_pLinePositions [0] = m_LineList.GetHeadPosition ();
+  m_pLinePositions [0] = newLinePosition;
+
+  RefreshMXPMissingTagAnchors ();
 
   // previous find won't work now
 
@@ -5006,16 +5951,31 @@ CString CMUSHclientDoc::RecallText (const CString strSearchString,   // what to 
                                     const int  iLines,
                                     const CString strRecallLinePreamble)
     {
+CWorldDocumentOperationGuard operationGuard (this);
 CString strMessage;
-t_regexp * regexp = NULL;          // compiled regular expression
+std::unique_ptr<t_regexp> regexp;   // compiled regular expression
 int iCurrentLine;
 
   // compile regular expression if needed
   if (bRegexp)
-    regexp = regcomp (strSearchString, (bMatchCase ? 0 : PCRE_CASELESS) | (m_bUTF_8 ? PCRE_UTF8 : 0));
+    regexp.reset (regcomp (strSearchString,
+                           (bMatchCase ? 0 : PCRE_CASELESS) |
+                           (m_bUTF_8 ? PCRE_UTF8 : 0)));
 
 CString strFindString = strSearchString;
 CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
+
+  class CRecallStatusGuard
+    {
+    public:
+      // Prepare the translated text before cleanup can run.
+      CRecallStatusGuard () : m_strNormalStatus (Translate ("Ready")) {}
+      ~CRecallStatusGuard () { Restore (); }
+      void Restore () const { Frame.SetStatusMessageNow (m_strNormalStatus); }
+
+    private:
+      const CString m_strNormalStatus;
+    } statusGuard;
 
   Frame.SetStatusMessageNow (strStatus);
 
@@ -5024,17 +5984,6 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
   long nToGo = m_LineList.GetCount ();
   iCurrentLine = 0;
   
-  CProgressDlg * pProgressDlg = NULL;// progress dialog
-
-  if (nToGo > 500)
-    {
-    pProgressDlg = new CProgressDlg;
-    pProgressDlg->Create ();
-    pProgressDlg->SetStatus (strStatus);
-    pProgressDlg->SetRange (0, nToGo);     
-    pProgressDlg->SetWindowText (Translate ("Recalling..."));                              
-    }   // end of having enough lines to warrant a progress bar
-
 // go back requested number of lines
 
   POSITION pos = m_LineList.GetHeadPosition ();
@@ -5066,6 +6015,76 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
   else
     pos = m_LineList.GetHeadPosition ();
 
+  struct CRecallLine
+    {
+    CTime time;
+    const char * text;
+    int length;
+    int flags;
+    bool hardReturn;
+    };
+
+  // Size the selected range before allocating its immutable snapshot.
+  // Neither pass pumps messages while it holds positions in the live list.
+  size_t lineCount = 0;
+  size_t textBytesRemaining = 0;
+  for (POSITION snapshotPos = pos; snapshotPos; )
+    {
+    const CLine * pLine = m_LineList.GetNext (snapshotPos);
+    ++lineCount;
+    textBytesRemaining += pLine->len;
+    }
+
+  vector<CRecallLine> lines;
+  lines.reserve (lineCount);
+  // Keep each line contiguous without requiring one large text allocation
+  // in the 32-bit process. Moving a block owner does not move its text.
+  vector<std::unique_ptr<char []> > textBlocks;
+  char * nextText = NULL;
+  size_t blockBytesRemaining = 0;
+  for (POSITION snapshotPos = pos; snapshotPos; )
+    {
+    const CLine * pLine = m_LineList.GetNext (snapshotPos);
+    CRecallLine line;
+    line.text = "";
+    line.length = pLine->len;
+    if (line.length != 0)
+      {
+      const size_t length = line.length;
+      if (blockBytesRemaining < length)
+        {
+        const size_t blockSize = (std::max) (length,
+          (std::min) (textBytesRemaining, size_t (64 * 1024)));
+        std::unique_ptr<char []> block (new char [blockSize]);
+        textBlocks.push_back (std::move (block));
+        nextText = textBlocks.back ().get ();
+        blockBytesRemaining = blockSize;
+        }
+      memcpy (nextText, pLine->text, length);
+      line.text = nextText;
+      nextText += length;
+      blockBytesRemaining -= length;
+      textBytesRemaining -= length;
+      }
+    line.time = pLine->m_theTime;
+    line.flags = pLine->flags;
+    line.hardReturn = pLine->hard_return;
+    lines.push_back (line);
+    }
+  size_t nextLine = 0;
+
+  std::unique_ptr<CProgressDlg> pProgressDlg; // progress dialog
+
+  if (nToGo > 500)
+    {
+    pProgressDlg.reset (new CProgressDlg);
+    if (!pProgressDlg->Create ())
+      AfxThrowResourceException ();
+    pProgressDlg->SetStatus (strStatus);
+    pProgressDlg->SetRange (0, nToGo);
+    pProgressDlg->SetWindowText (Translate ("Recalling..."));
+    }   // end of having enough lines to warrant a progress bar
+
 // if case-insensitive search wanted, force "text to find" to lower case
 
   if (!bMatchCase)
@@ -5085,15 +6104,15 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
 
       // get lines until a hard return
 
-      while (pos)
+      while (nextLine < lines.size ())
         {
-        CLine * pLine = m_LineList.GetNext (pos);   // get next line
-        strLine += CString (pLine->text, pLine->len);
-        theTime = pLine->m_theTime;
-        iFlags = pLine->flags;
+        const CRecallLine & line = lines [nextLine++];
+        strLine.Append (line.text, line.length);
+        theTime = line.time;
+        iFlags = line.flags;
         iMilestone++;
         iCurrentLine++;
-        if (pLine->hard_return)
+        if (line.hardReturn)
           break;
         }
 
@@ -5123,7 +6142,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
         {
   // if case-insensitive search wanted, force this line to lower case
 
-        if (regexec (regexp, strSearchLine))
+        if (regexec (regexp.get (), strSearchLine))
           {
           if (!strRecallLinePreamble.IsEmpty ())
             {
@@ -5151,7 +6170,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
           } // end of found it
         } // end of not regular expression
 
-      } while (pos);  // end of looping through each line 
+      } while (nextLine < lines.size ());  // end of looping through each line
 
     } // end of try
 
@@ -5163,13 +6182,9 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
     }
 
 
-  Frame.SetStatusNormal (); 
+  statusGuard.Restore ();
 
-  if (pProgressDlg)
-    {
-    delete pProgressDlg;
-    pProgressDlg = NULL;
-    }
+  pProgressDlg.reset ();
 
 
   if (strMessage.IsEmpty ())
@@ -5619,23 +6634,16 @@ CStyle * CMUSHclientDoc::AddStyle (const unsigned short iFlags,
   if (!pLine)
      return NULL;
 
+  CStyle * pOldStyle = NULL;
+  POSITION oldStylePosition = NULL;
   if (!pLine->styleList.IsEmpty ())
     {
-    // find current style
-    CStyle * pOldStyle = pLine->styleList.GetTail ();
-
-    // We want the new style, but did the old one have a text run?
-    // if not, we don't really need that
-
+    pOldStyle = pLine->styleList.GetTail ();
     if (pOldStyle->iLength == 0 && (pOldStyle->iFlags & START_TAG) == 0)
-      {
-      DELETESTYLE (pOldStyle);
-      pLine->styleList.RemoveTail ();
-      }   // end of redundant style
-    } // end of having at least one style
+      oldStylePosition = pLine->styleList.GetTailPosition ();
+    }
 
-// create new style item
-CStyle * pNewStyle = NEWSTYLE;
+std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);
 
 // use new styles
    pNewStyle->iFlags      = iFlags;
@@ -5645,10 +6653,15 @@ CStyle * pNewStyle = NEWSTYLE;
    pNewStyle->pAction = GetAction (strAction, strHint, strVariable);
 
 // add to line style list
-   pLine->styleList.AddTail (pNewStyle); 
+   pLine->styleList.AddTail (pNewStyle.get ());
 
+   if (oldStylePosition)
+     {
+     pLine->styleList.RemoveAt (oldStylePosition);
+     DELETESTYLE (pOldStyle);
+     }
 
-   return pNewStyle;
+   return pNewStyle.release ();
 
   } // end of CMUSHclientDoc::AddStyle 
 
@@ -5668,27 +6681,16 @@ CStyle * CMUSHclientDoc::AddStyle (const unsigned short iFlags,
   if (!pLine)
      return NULL;
 
-  // we are using this action once more
-  if (pAction)
-    pAction->AddRef ();
-
+  CStyle * pOldStyle = NULL;
+  POSITION oldStylePosition = NULL;
   if (!pLine->styleList.IsEmpty ())
     {
-    // find current style
-    CStyle * pOldStyle = pLine->styleList.GetTail ();
-
-    // We want the new style, but did the old one have a text run?
-    // if not, we don't really need that
-
+    pOldStyle = pLine->styleList.GetTail ();
     if (pOldStyle->iLength == 0 && (pOldStyle->iFlags & START_TAG) == 0)
-      {
-      DELETESTYLE (pOldStyle);
-      pLine->styleList.RemoveTail ();
-      }   // end of redundant style
-    } // end of having at least one style
+      oldStylePosition = pLine->styleList.GetTailPosition ();
+    }
 
-// create new style item
-CStyle * pNewStyle = NEWSTYLE;
+std::unique_ptr<CStyle> pNewStyle (NEWSTYLE);
 
 // use new styles
    pNewStyle->iFlags      = iFlags;
@@ -5696,13 +6698,155 @@ CStyle * pNewStyle = NEWSTYLE;
    pNewStyle->iBackColour = iBackColour;
    pNewStyle->iLength     = iLength;
    pNewStyle->pAction = pAction;
+   if (pAction)
+     pAction->AddRef ();
 
 // add to line style list
-   pLine->styleList.AddTail (pNewStyle); 
+   pLine->styleList.AddTail (pNewStyle.get ());
 
-   return pNewStyle;
+   if (oldStylePosition)
+     {
+     pLine->styleList.RemoveAt (oldStylePosition);
+     DELETESTYLE (pOldStyle);
+     }
+
+   return pNewStyle.release ();
 
   } // end of CMUSHclientDoc::AddStyle 
+
+
+void CMUSHclientDoc::RefreshMXPMissingTagAnchors (void)
+  {
+  if (!m_pCurrentLine || m_ActiveTagList.IsEmpty ())
+    return;
+
+  // Lines have increasing identities. New markers and ranges start on the
+  // current tail; wraps and style splits keep those identities. The last
+  // indexed line at or before an identity cannot be after its origin line.
+  // Keep the preceding block, including an older line reused after deletion.
+  // All positions are local: this function allocates nothing and calls no
+  // callbacks, including when an output transaction rolls back in a destructor.
+  const auto FindAnchorStart = [this] (const __int64 iIdentity) -> POSITION
+    {
+    POSITION start = m_LineList.GetHeadPosition ();
+    if (!m_pLinePositions)
+      return start;
+    int low = 0;
+    int high = (m_LineList.GetCount () - 1) / JUMP_SIZE;
+    while (low <= high)
+      {
+      const int middle = low + (high - low) / 2;
+      POSITION candidate = m_pLinePositions [middle];
+      if (!candidate)
+        return m_LineList.GetHeadPosition ();
+      if (m_LineList.GetAt (candidate)->nCreationNumber <= iIdentity)
+        {
+        start = candidate;
+        low = middle + 1;
+        }
+      else
+        high = middle - 1;
+      }
+    return start;
+    };
+
+  const auto HasOpeningMarker = [] (CLine * pLine, const __int64 iIdentity)
+    {
+    for (POSITION pos = pLine->styleList.GetHeadPosition (); pos; )
+      {
+      CStyle * pStyle = pLine->styleList.GetNext (pos);
+      if ((pStyle->iFlags & START_TAG) &&
+          pStyle->nCreationNumber == iIdentity)
+        return true;
+      }
+    return false;
+    };
+
+  for (POSITION tagpos = m_ActiveTagList.GetHeadPosition (); tagpos; )
+    {
+    CActiveTag * pTag = m_ActiveTagList.GetNext (tagpos);
+    bool bOpeningMarkerPresent = false;
+    // Wrapping records the marker's new line. Check that line first, even
+    // when the line where the marker was created has already been pruned.
+    for (POSITION pos = FindAnchorStart (pTag->nOpeningLineCreationNumber);
+         pos; )
+      {
+      CLine * pLine = m_LineList.GetNext (pos);
+      if (pLine->nCreationNumber > pTag->nOpeningLineCreationNumber)
+        break;
+      if (pLine->nCreationNumber == pTag->nOpeningLineCreationNumber)
+        {
+        bOpeningMarkerPresent =
+          HasOpeningMarker (pLine, pTag->nOpeningStyleCreationNumber);
+        break;
+        }
+      }
+
+    // A transaction can retain an earlier copy of a moved marker. If the
+    // new line was deleted, that copy still prevents a fallback update.
+    // RestoreWrap removes the moved copy when it records the earlier line.
+    if (!bOpeningMarkerPresent &&
+        pTag->nOpeningStyleCreationNumber < pTag->nOpeningLineCreationNumber)
+      for (POSITION pos = FindAnchorStart (pTag->nOpeningStyleCreationNumber);
+           pos; )
+        {
+        CLine * pLine = m_LineList.GetNext (pos);
+        if (pLine->nCreationNumber >= pTag->nOpeningLineCreationNumber)
+          break;
+        if (HasOpeningMarker (pLine, pTag->nOpeningStyleCreationNumber))
+          {
+          bOpeningMarkerPresent = true;
+          break;
+          }
+        }
+    if (bOpeningMarkerPresent)
+      continue;
+
+    // A fallback range can predate the opening line, or span several lines.
+    // Its birth identity includes the earliest retained fragment, unlike the
+    // saved fallback line, which can initially name only the current tail.
+    __int64 iBoundaryIdentity = pTag->nOpeningLineCreationNumber;
+    if (pTag->nFallbackStyleRangeNumber &&
+        pTag->nFallbackStyleRangeNumber < iBoundaryIdentity)
+      iBoundaryIdentity = pTag->nFallbackStyleRangeNumber;
+    CLine * pBoundaryLine = NULL;
+    CStyle * pBoundaryStyle = NULL;
+    for (POSITION linepos = FindAnchorStart (iBoundaryIdentity);
+         linepos && !pBoundaryStyle; )
+      {
+      CLine * pLine = m_LineList.GetNext (linepos);
+      for (POSITION stylepos = pLine->styleList.GetHeadPosition ();
+           stylepos; )
+        {
+        CStyle * pStyle = pLine->styleList.GetNext (stylepos);
+        const bool bExistingFallback =
+          pTag->nFallbackStyleRangeNumber &&
+          pStyle->nRangeCreationNumber ==
+            pTag->nFallbackStyleRangeNumber;
+        const bool bPostOpeningStyle =
+          pLine->nCreationNumber > pTag->nOpeningLineCreationNumber ||
+          (pLine->nCreationNumber == pTag->nOpeningLineCreationNumber &&
+           pStyle->nCreationNumber > pTag->nOpeningStyleCreationNumber);
+        if (bExistingFallback || bPostOpeningStyle)
+          {
+          pBoundaryLine = pLine;
+          pBoundaryStyle = pStyle;
+          break;
+          }
+        }
+      }
+
+    if (!pBoundaryStyle)
+      {
+      pBoundaryLine = m_pCurrentLine;
+      pBoundaryStyle = m_pCurrentLine->styleList.GetTail ();
+      }
+
+    pTag->nFallbackLineCreationNumber = pBoundaryLine->nCreationNumber;
+    pTag->nFallbackStyleRangeNumber =
+      pBoundaryStyle->nRangeCreationNumber;
+    }
+  } // end of CMUSHclientDoc::RefreshMXPMissingTagAnchors
 
 
 void CMUSHclientDoc::OnDisplayNocommandecho() 
@@ -5884,10 +7028,11 @@ CTextDocument * pTextDoc = NULL;
   for (POSITION docPos = App.m_pNormalDocTemplate->GetFirstDocPosition();
       docPos != NULL; )
     {
-    pTextDoc = (CTextDocument *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
+    pTextDoc = (CTextDocument *) App.m_pNormalDocTemplate->GetNextDoc(docPos);
 
-    // ignore unrelated worlds
-    if (pTextDoc->m_pRelatedWorld == this &&
+    // ignore unrelated worlds and notepads whose close was accepted
+    if (!pTextDoc->m_bClosePending &&
+        pTextDoc->m_pRelatedWorld == this &&
        pTextDoc->m_iUniqueDocumentNumber == m_iUniqueDocumentNumber)
       break;
 
@@ -6221,32 +7366,44 @@ int CompareTrigger (const void * elem1, const void * elem2)
   }   // end of CompareTrigger
 
 
-void  CMUSHclientDoc::SortTriggers (void)
+void CMUSHclientDoc::BuildTriggerIndexes (
+  vector<CTrigger *> & triggerArray,
+  const set<CTrigger *> * pExclude,
+  CTriggerMap * pObjectMap)
   {
-
-int iCount = GetTriggerMap ().GetCount ();
-int i;
+CTriggerMap & objectMap = pObjectMap ? *pObjectMap : GetTriggerMap ();
 CString strTriggerName;
 CTrigger * pTrigger;
 POSITION pos;
 
-  GetTriggerArray ().SetSize (iCount);
-  GetTriggerRevMap ().clear ();
+  triggerArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (i = 0, pos = GetTriggerMap ().GetStartPosition(); pos; i++)
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetTriggerMap ().GetNextAssoc (pos, strTriggerName, pTrigger);
-     GetTriggerArray ().SetAt (i, pTrigger);
-     GetTriggerRevMap () [pTrigger] = strTriggerName;
+     objectMap.GetNextAssoc (pos, strTriggerName, pTrigger);
+     if (pExclude && pExclude->find (pTrigger) != pExclude->end ())
+       continue;
+     triggerArray.push_back (pTrigger);
     }
 
-
   // sort the array
-  qsort (GetTriggerArray ().GetData (), 
-         iCount,
-         sizeof (CTrigger *),
-         CompareTrigger);
+  if (triggerArray.size () > 1)
+    qsort (&triggerArray [0],
+           triggerArray.size (),
+           sizeof (CTrigger *),
+           CompareTrigger);
+  }
+
+void  CMUSHclientDoc::SortTriggers (const set<CTrigger *> * pExclude)
+  {
+  vector<CTrigger *> newTriggerArray;
+  BuildTriggerIndexes (newTriggerArray, pExclude);
+
+  // Build the sorted replacement before changing the live array.
+  GetTriggerArray ().SetSize (newTriggerArray.size ());
+  for (size_t i = 0; i < newTriggerArray.size (); i++)
+    GetTriggerArray ().SetAt (i, newTriggerArray [i]);
 
   } // end of CMUSHclientDoc::SortTriggers
 
@@ -6273,34 +7430,133 @@ static int CompareAlias (const void * elem1, const void * elem2)
   }   // end of CompareAlias
 
 
-void  CMUSHclientDoc::SortAliases (void)
+void CMUSHclientDoc::BuildAliasIndexes (
+  vector<CAlias *> & aliasArray,
+  const set<CAlias *> * pExclude,
+  CAliasMap * pObjectMap)
   {
-
-int iCount = GetAliasMap ().GetCount ();
-int i;
+CAliasMap & objectMap = pObjectMap ? *pObjectMap : GetAliasMap ();
 CString strAliasName;
 CAlias * pAlias;
 POSITION pos;
 
-  GetAliasArray ().SetSize (iCount);
-  GetAliasRevMap ().clear ();
+  aliasArray.reserve (objectMap.GetCount ());
 
   // extract pointers into a simple array
-  for (i = 0, pos = GetAliasMap ().GetStartPosition(); pos; i++)
+  for (pos = objectMap.GetStartPosition(); pos; )
     {
-     GetAliasMap ().GetNextAssoc (pos, strAliasName, pAlias);
-     GetAliasArray ().SetAt (i, pAlias); 
-     GetAliasRevMap () [pAlias] = strAliasName;
+     objectMap.GetNextAssoc (pos, strAliasName, pAlias);
+     if (pExclude && pExclude->find (pAlias) != pExclude->end ())
+       continue;
+     aliasArray.push_back (pAlias);
     }
 
-
   // sort the array
-  qsort (GetAliasArray ().GetData (), 
-         iCount,
-         sizeof (CAlias *),
-         CompareAlias);
+  if (aliasArray.size () > 1)
+    qsort (&aliasArray [0],
+           aliasArray.size (),
+           sizeof (CAlias *),
+           CompareAlias);
+  }
+
+void  CMUSHclientDoc::SortAliases (const set<CAlias *> * pExclude)
+  {
+  vector<CAlias *> newAliasArray;
+  BuildAliasIndexes (newAliasArray, pExclude);
+
+  // Build the sorted replacement before changing the live array.
+  GetAliasArray ().SetSize (newAliasArray.size ());
+  for (size_t i = 0; i < newAliasArray.size (); i++)
+    GetAliasArray ().SetAt (i, newAliasArray [i]);
 
   } // end of CMUSHclientDoc::SortAliases
+
+void CMUSHclientDoc::RetireAlias (CAlias * pAlias)
+  {
+  if (!pAlias)
+    return;
+  if (!pAlias->bExecutingScript)
+    {
+    delete pAlias;
+    return;
+    }
+  pAlias->pNextRetired = m_pRetiredAliases;
+  m_pRetiredAliases = pAlias;
+  }
+
+void CMUSHclientDoc::RetireTrigger (CTrigger * pTrigger)
+  {
+  if (!pTrigger)
+    return;
+  if (!pTrigger->bExecutingScript)
+    {
+    delete pTrigger;
+    return;
+    }
+  pTrigger->pNextRetired = m_pRetiredTriggers;
+  m_pRetiredTriggers = pTrigger;
+  }
+
+void CMUSHclientDoc::RetireTimer (CTimer * pTimer)
+  {
+  if (!pTimer)
+    return;
+  if (!pTimer->bExecutingScript)
+    {
+    delete pTimer;
+    return;
+    }
+  pTimer->pNextRetired = m_pRetiredTimers;
+  m_pRetiredTimers = pTimer;
+  }
+
+void CMUSHclientDoc::DeleteRetiredAliases ()
+  {
+  CAlias ** ppAlias = &m_pRetiredAliases;
+  while (*ppAlias)
+    {
+    CAlias * pAlias = *ppAlias;
+    if (pAlias->bExecutingScript)
+      ppAlias = &pAlias->pNextRetired;
+    else
+      {
+      *ppAlias = pAlias->pNextRetired;
+      delete pAlias;
+      }
+    }
+  }
+
+void CMUSHclientDoc::DeleteRetiredTriggers ()
+  {
+  CTrigger ** ppTrigger = &m_pRetiredTriggers;
+  while (*ppTrigger)
+    {
+    CTrigger * pTrigger = *ppTrigger;
+    if (pTrigger->bExecutingScript)
+      ppTrigger = &pTrigger->pNextRetired;
+    else
+      {
+      *ppTrigger = pTrigger->pNextRetired;
+      delete pTrigger;
+      }
+    }
+  }
+
+void CMUSHclientDoc::DeleteRetiredTimers ()
+  {
+  CTimer ** ppTimer = &m_pRetiredTimers;
+  while (*ppTimer)
+    {
+    CTimer * pTimer = *ppTimer;
+    if (pTimer->bExecutingScript)
+      ppTimer = &pTimer->pNextRetired;
+    else
+      {
+      *ppTimer = pTimer->pNextRetired;
+      delete pTimer;
+      }
+    }
+  }
 
 
 
@@ -6463,6 +7719,8 @@ void CMUSHclientDoc::SendTo (
     if (strSendText.IsEmpty ())
       return;
 
+  CWorldDocumentOperationGuard operationGuard (this);
+
   switch (iWhere)
     {
     case eSendToCommand:
@@ -6575,14 +7833,10 @@ void CMUSHclientDoc::SendTo (
 
     case eSendToExecute:
         {
-        // save log-my-input flag
-        short bSavedLogFlag = m_log_input;
         // if alias (or whatever) doesn't want to be logged, turn it off
-        if (bOmitFromLog)
-           m_log_input = false;
+        CValueStateGuard<short> logInputGuard
+          (m_log_input, bOmitFromLog ? false : m_log_input);
         Execute (strSendText);    // execute it
-        // put flag back
-        m_log_input = bSavedLogFlag;
         }
         break;
 
@@ -6707,21 +7961,58 @@ void CMUSHclientDoc::SendTo (
 
 bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
   {
-  delete [] m_pGetHostStruct;   // delete buffer just in case
-  m_pGetHostStruct = new char [MAXGETHOSTSTRUCT];
-
-  if (!m_pGetHostStruct)
+  std::unique_ptr<char []> pNewHostStruct;
+  try
     {
+    pNewHostStruct.reset (new char [MAXGETHOSTSTRUCT]);
+    }
+  catch (...)
+    {
+    if (!m_hNameLookup)
+      {
+      m_iConnectPhase = eConnectNotConnected;
+      App.m_bUpdateActivity = TRUE;
+      }
+    throw;
+    }
+
+  if (!pNewHostStruct)
+    {
+    if (!m_hNameLookup)
+      {
+      m_iConnectPhase = eConnectNotConnected;
+      App.m_bUpdateActivity = TRUE;
+      }
     TMessageBox ("Unable to allocate memory for host name lookup");
     return true;
     }
 
+  if (m_hNameLookup && WSACancelAsyncRequest (m_hNameLookup) == SOCKET_ERROR)
+    {
+    const int iError = WSAGetLastError ();
+    // These two errors mean that no operation remains for this handle.
+    if (iError != WSAEINVAL && iError != WSAEALREADY)
+      {
+      UMessageBox (TFormat ("Unable to cancel the previous host name lookup, "
+                           "code = %i (%s). The previous lookup was not replaced.",
+                           iError, GetSocketError (iError)));
+      return true;    // retain its buffer, generation, and completion phase
+      }
+    }
+
+  m_hNameLookup = NULL;
+  delete [] m_pGetHostStruct;
+  m_pGetHostStruct = pNewHostStruct.release ();
+
   if (Frame.GetSafeHwnd ())   // forget it if we don't have a window yet
+    {
+    m_iNameLookupGeneration++;
     m_hNameLookup = WSAAsyncGetHostByName (Frame.GetSafeHwnd (),
                                            WM_USER_HOST_NAME_RESOLVED,
                                            sName,
                                            m_pGetHostStruct,
                                            MAXGETHOSTSTRUCT);
+    }
 
  if (!m_hNameLookup)
    {
@@ -6735,6 +8026,7 @@ bool CMUSHclientDoc::LookupHostName (LPCTSTR sName)
     m_iConnectPhase = eConnectNotConnected;
 
     App.m_bUpdateActivity = TRUE;   // new activity!
+    return true;
 
    }
 
@@ -7413,7 +8705,12 @@ void CMUSHclientDoc::ContinueSSLHandshake (void)
   OnConnectionDisconnect ();
 
   // defer the fallback prompt via PostMessage so we're not inside a socket callback
-  Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT, (WPARAM) this, 0);
+  CTLSFallbackNotification * pNotification = new CTLSFallbackNotification;
+  pNotification->m_iDocumentNumber = m_iUniqueDocumentNumber;
+  pNotification->m_iConnectionAttemptNumber = m_iConnectionAttemptNumber;
+  if (!Frame.PostMessage (WM_USER_SSL_FALLBACK_PROMPT,
+                          (WPARAM) pNotification, 0))
+    delete pNotification;
 
   }   // end of CMUSHclientDoc::ContinueSSLHandshake
 
@@ -7852,21 +9149,18 @@ void CMUSHclientDoc::Screendraw  (const long iType,
                                   const long iLog,
                                   const char * sText)
   {
-static bool bInScreendraw = false;
-
   // don't recurse into infinite loops
-  if (bInScreendraw)
+  if (m_bInScreendraw)
     return;
 
-  bInScreendraw = true;
+  CWorldDocumentOperationGuard operationGuard (this);
+  CBoolStateGuard screendrawGuard (m_bInScreendraw, true);
   SendToAllPluginCallbacks (ON_PLUGIN_SCREENDRAW,
                             iType,
                             iLog,
                             sText,
                             false,
                             false);
-  bInScreendraw = false;
-
   }  // end of CMUSHclientDoc::Screendraw 
 
 
@@ -7876,15 +9170,11 @@ bool CMUSHclientDoc::PlaySoundFile (CString strSound)
   // stop infinite loops
   if (!m_bInPlaySoundFilePlugin)
     {
-    m_bInPlaySoundFilePlugin = true;
+    CWorldDocumentOperationGuard operationGuard (this);
+    CBoolStateGuard playSoundGuard (m_bInPlaySoundFilePlugin, true);
     
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInPlaySoundFilePlugin = false;
-        return true;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInPlaySoundFilePlugin = false;
+      return true;   // handled by plugin? don't do our own sound
     }   // of not in plugin already
 
   // default sound-play mechanism
@@ -7898,16 +9188,12 @@ void CMUSHclientDoc::CancelSound (void)
   // stop infinite loops
   if (!m_bInCancelSoundFilePlugin)
     {
-    m_bInCancelSoundFilePlugin = true;
+    CWorldDocumentOperationGuard operationGuard (this);
+    CBoolStateGuard cancelSoundGuard (m_bInCancelSoundFilePlugin, true);
 
     CString strSound;   // deliberately the empty string
     if (SendToFirstPluginCallbacks (ON_PLUGIN_PLAYSOUND, strSound))
-        {
-        m_bInCancelSoundFilePlugin = false;
-        return;   // handled by plugin? don't do our own sound
-        }
-
-    m_bInCancelSoundFilePlugin = false;
+      return;   // handled by plugin? don't do our own sound
     } // end of not in plugin already
 
   // default sound-cancel mechanism
