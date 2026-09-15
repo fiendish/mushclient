@@ -86,6 +86,12 @@ def main():
                    'it->second->Menu', 'WindowMenu')
 
     stdafx = read('stdafx.h')
+    receive_signature = 'void CChatSocket::ReceiveOneNotification('
+    if receive_signature in chat:
+        chat_receive = block(chat, receive_signature).replace(
+            receive_signature, 'void CChatSocket::OnReceive(', 1)
+    else:
+        chat_receive = block(chat, 'void CChatSocket::OnReceive(')
     functions = '\n\n'.join([
         *(block(doc, signature) for signature in [
             'void CMUSHclientDoc::OnCloseDocument()',
@@ -93,7 +99,7 @@ def main():
             'void CMUSHclientDoc::EndProgressOperation ()']),
         block(doc, 'CChatSocket * CMUSHclientDoc::GetChatSocket ('),
         block(read('childfrm.cpp'), 'void CChildFrame::OnClose()'),
-        block(chat, 'void CChatSocket::OnReceive('),
+        chat_receive,
         block(chat, 'void CChatSocket::OnClose('),
         block(read('scripting/methods/methods_chat.cpp'), 'long CMUSHclientDoc::ChatDisconnect('),
         block(chat, 'void CChatSocket::ProcessChatMessage ('),
