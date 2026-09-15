@@ -190,7 +190,8 @@ CAliasDlg dlg;
 	if (dlg.DoModal () != IDOK)
     return;
 
-  CAlias * alias_item = new CAlias;
+  std::unique_ptr<CAlias> new_alias_item (new CAlias);
+  CAlias * alias_item = new_alias_item.get ();
 
   alias_item->name            = dlg.m_name;
   alias_item->contents        = dlg.m_contents;
@@ -207,9 +208,6 @@ CAliasDlg dlg;
   alias_item->bMenu           = dlg.m_bMenu;
   alias_item->strGroup        = dlg.m_strGroup;
 
-  delete alias_item->regexp;    // get rid of earlier regular expression
-  alias_item->regexp = NULL;
-
 // all aliass are now regular expressions
 
   CString strRegexp; 
@@ -219,12 +217,14 @@ CAliasDlg dlg;
   else
     strRegexp = ConvertToRegularExpression (alias_item->name);
 
-  alias_item->regexp = regcomp (strRegexp,
-                                  (alias_item->bIgnoreCase  ? PCRE_CASELESS : 0)
+  std::unique_ptr<t_regexp> new_regexp
+    (regcomp (strRegexp,
+              (alias_item->bIgnoreCase  ? PCRE_CASELESS : 0)
 #if ALIASES_USE_UTF8
-                                  | (m_pDoc->m_bUTF_8 ? PCRE_UTF8 : 0)
+              | (m_pDoc->m_bUTF_8 ? PCRE_UTF8 : 0)
 #endif // ALIASES_USE_UTF8
-                                  );
+             ));
+  alias_item->regexp = new_regexp.release ();
 
 // add to map - generate a name if it doesn't have one
 
@@ -234,9 +234,30 @@ CAliasDlg dlg;
   else
     strAliasName.MakeLower ();
 
-  m_pDoc->m_AliasMap.SetAt (strAliasName, alias_item);
+  alias_item->strInternalName = strAliasName;
+  alias_item->nUpdateNumber = App.GetUniqueNumber ();
+  alias_item->nCreationNumber = App.GetUniqueNumber ();
 
-  m_pDoc->SortAliases ();
+  CAlias * old_alias_item = NULL;
+  m_pDoc->m_AliasMap.Lookup (strAliasName, old_alias_item);
+  m_pDoc->m_AliasMap.SetAt (strAliasName, alias_item);
+  new_alias_item.release ();
+
+  try
+    {
+    m_pDoc->SortAliases ();
+    }
+  catch (...)
+    {
+    if (old_alias_item)
+      m_pDoc->m_AliasMap.SetAt (strAliasName, old_alias_item);
+    else
+      m_pDoc->m_AliasMap.RemoveKey (strAliasName);
+    delete alias_item;
+    throw;
+    }
+
+  m_pDoc->RetireAlias (old_alias_item);
 
   }
 

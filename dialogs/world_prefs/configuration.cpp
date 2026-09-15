@@ -1591,29 +1591,13 @@ void CMUSHclientDoc:: SavePrefsP14 (CPrefsP14 &page14)
 
   if (m_pCurrentLine)     // a new world might not have a line yet
     {
-    // save current line text
-    CString strLine = CString (m_pCurrentLine->text, m_pCurrentLine->len);
-
+    int iMemoryAllocated;
     if (m_bUTF_8)
-      m_pCurrentLine->iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn) * 4;
+      iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn) * 4;
     else
-      m_pCurrentLine->iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn);
+      iMemoryAllocated = MAX ((UINT) m_pCurrentLine->len, page14.m_nWrapColumn);
 
-#ifdef USE_REALLOC
-
-    m_pCurrentLine->text  = (char *) realloc (m_pCurrentLine->text, 
-                                              m_pCurrentLine->iMemoryAllocated);  
-
-#else
-    delete [] m_pCurrentLine->text;
-    m_pCurrentLine->text = new char [m_pCurrentLine->iMemoryAllocated];
-#endif
-
-    // check we got it
-    ASSERT (m_pCurrentLine->text);
-
-    // put text back
-    memcpy (m_pCurrentLine->text, (LPCTSTR) strLine, m_pCurrentLine->len);
+    m_pCurrentLine->ResizeText (iMemoryAllocated);
     }   // end of having a current line
 
   if (m_nWrapColumn != page14.m_nWrapColumn)
@@ -1627,6 +1611,8 @@ void CMUSHclientDoc:: SavePrefsP14 (CPrefsP14 &page14)
   // need to be compiled so we recompile all of them
   if (utf8Changed)
     {
+    CPluginContextGuard pluginContextGuard (this, NULL);
+
     int counter;
     m_CurrentPlugin = NULL;
     counter = RecompileRegularExpressions ();     // do main world
@@ -2429,32 +2415,34 @@ int CMUSHclientDoc::RecompileRegularExpressions ()
     CTrigger * pTrigger;
     GetTriggerMap ().GetNextAssoc (pos, strName, pTrigger);
 
-    if (pTrigger->regexp)
-      {
-      delete pTrigger->regexp;    // get rid of old one
-      if (pTrigger->bRegexp)
-        strRegexp = pTrigger->trigger;
-      else
-        strRegexp = ConvertToRegularExpression (pTrigger->trigger);
-      }
+    if (pTrigger->bRegexp)
+      strRegexp = pTrigger->trigger;
+    else
+      strRegexp = ConvertToRegularExpression (pTrigger->trigger);
 
       // compile regular expression
+      std::unique_ptr<t_regexp> newRegexp;
       try 
         {
-        pTrigger->regexp = regcomp (strRegexp, (pTrigger->ignore_case ? PCRE_CASELESS : 0) |
-                                               (pTrigger->bMultiLine  ? PCRE_MULTILINE : 0) |
-                                               (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                               );
+        newRegexp.reset (regcomp (strRegexp, (pTrigger->ignore_case ? PCRE_CASELESS : 0) |
+                                             (pTrigger->bMultiLine  ? PCRE_MULTILINE : 0) |
+                                             (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                             ));
         }   // end of try
       catch(CException* e)
         {
+        delete pTrigger->regexp;
         pTrigger->regexp = NULL;
         e->Delete ();
         iTriggerErrors++;
         ColourNote ("red", "", 
                      TFormat ("In %s, could not recompile trigger (%s) matching on: %s.",
                               (LPCTSTR) sPluginName, (LPCTSTR) pTrigger->strInternalName, (LPCTSTR) strRegexp));
+        continue;
         } // end of catch
+
+      delete pTrigger->regexp;
+      pTrigger->regexp = newRegexp.release ();
     }  // end of for each trigger
 
 #if ALIASES_USE_UTF8
@@ -2464,31 +2452,33 @@ int CMUSHclientDoc::RecompileRegularExpressions ()
     CAlias * pAlias;
     GetAliasMap ().GetNextAssoc (pos, strName, pAlias);
 
-    if (pAlias->regexp)
-      {
-      delete pAlias->regexp;    // get rid of old one
-      if (pAlias->bRegexp)
-        strRegexp = pAlias->name;
-      else
-        strRegexp = ConvertToRegularExpression (pAlias->name);
-      }
+    if (pAlias->bRegexp)
+      strRegexp = pAlias->name;
+    else
+      strRegexp = ConvertToRegularExpression (pAlias->name);
 
       // compile regular expression
+      std::unique_ptr<t_regexp> newRegexp;
       try 
         {
-        pAlias->regexp = regcomp (strRegexp, (pAlias->bIgnoreCase ? PCRE_CASELESS : 0) |
-                                               (m_bUTF_8 ? PCRE_UTF8 : 0)
-                                               );
+        newRegexp.reset (regcomp (strRegexp, (pAlias->bIgnoreCase ? PCRE_CASELESS : 0) |
+                                             (m_bUTF_8 ? PCRE_UTF8 : 0)
+                                             ));
         }   // end of try
       catch(CException* e)
         {
+        delete pAlias->regexp;
         pAlias->regexp = NULL;
         e->Delete ();
         iAliasErrors++;
         ColourNote ("red", "", 
                      TFormat ("In %s, could not recompile alias  (%s) matching on: %s.",
                               (LPCTSTR) sPluginName, (LPCTSTR) pAlias->strInternalName, (LPCTSTR) strRegexp));
+        continue;
         } // end of catch
+
+      delete pAlias->regexp;
+      pAlias->regexp = newRegexp.release ();
     }  // end of for each alias
 
 #endif // ALIASES_USE_UTF8
