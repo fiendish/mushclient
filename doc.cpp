@@ -4778,9 +4778,9 @@ UINT iEnum = 0;
   if (!bHaveUnicode)
     if ( (hData = ::GetClipboardData( CF_TEXT )) == NULL )
      {
+        ::CloseClipboard();
         if (bWarning)
           TMessageBox( "Unable to get Clipboard data" );
-        ::CloseClipboard();
         return FALSE;
      }
 
@@ -4790,9 +4790,9 @@ UINT iEnum = 0;
 
    if (!p)
       {
+      ::CloseClipboard();
       if (bWarning)
         TMessageBox( "Unable to lock memory for Clipboard data" );
-      ::CloseClipboard();
       return FALSE;
       }
 
@@ -4801,12 +4801,53 @@ UINT iEnum = 0;
      {
      // count number of bytes needed
      int iLength = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) p, -1, NULL, 0, NULL, NULL);
-     char * buf = strClipboard.GetBuffer (iLength);
-     WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) p, -1, buf, iLength, NULL, NULL);
-     strClipboard.ReleaseBuffer (iLength);
+     if (iLength <= 0)
+       {
+       GlobalUnlock (hData);
+       CloseClipboard ();
+       if (bWarning)
+         TMessageBox ("Unable to convert Unicode Clipboard data");
+       return FALSE;
+       }
+
+     char * buf;
+     try
+       {
+       buf = strClipboard.GetBuffer (iLength);
+       }
+     catch (...)
+       {
+       GlobalUnlock (hData);
+       CloseClipboard ();
+       throw;
+       }
+
+     int iConverted = WideCharToMultiByte (CP_UTF8, 0, (LPCWSTR) p, -1,
+                                           buf, iLength, NULL, NULL);
+     if (iConverted != iLength)
+       {
+       strClipboard.ReleaseBuffer (0);
+       GlobalUnlock (hData);
+       CloseClipboard ();
+       if (bWarning)
+         TMessageBox ("Unable to convert Unicode Clipboard data");
+       return FALSE;
+       }
+     strClipboard.ReleaseBuffer (iLength - 1);
      }
    else
-     strClipboard = CString (p, strlen (p));
+     {
+     try
+       {
+       strClipboard = CString (p, strlen (p));
+       }
+     catch (...)
+       {
+       GlobalUnlock (hData);
+       CloseClipboard ();
+       throw;
+       }
+     }
 
    GlobalUnlock (hData);
 
@@ -4849,8 +4890,8 @@ BOOL putontoclipboard (const CString & data, const bool bUnicode)
 
    if (!hData)
       {
-      TMessageBox( "Unable to allocate memory for Clipboard data" );
       ::CloseClipboard();
+      TMessageBox( "Unable to allocate memory for Clipboard data" );
       return TRUE;
       }
 
@@ -4860,8 +4901,9 @@ BOOL putontoclipboard (const CString & data, const bool bUnicode)
 
    if (!p)
       {
-      TMessageBox( "Unable to lock memory for Clipboard text data" );
+      GlobalFree (hData);
       ::CloseClipboard();
+      TMessageBox( "Unable to lock memory for Clipboard text data" );
       return TRUE;
       }
 
@@ -4875,8 +4917,9 @@ BOOL putontoclipboard (const CString & data, const bool bUnicode)
 
    if ( ::SetClipboardData( CF_TEXT, hData ) == NULL )
      {
-      TMessageBox( "Unable to set Clipboard text data" );
+      GlobalFree (hData);
       ::CloseClipboard();
+      TMessageBox( "Unable to set Clipboard text data" );
       return TRUE;
      }
 
@@ -4887,13 +4930,19 @@ BOOL putontoclipboard (const CString & data, const bool bUnicode)
   // Allocate memory for the clipboard
 
      int iLength = MultiByteToWideChar (CP_UTF8, 0, data, -1, NULL, 0);
+     if (iLength <= 0)
+       {
+       ::CloseClipboard();
+       TMessageBox( "Unable to convert Clipboard Unicode data" );
+       return TRUE;
+       }
 
      HGLOBAL hData = GlobalAlloc (GMEM_MOVEABLE, iLength * sizeof WCHAR);
 
      if (!hData)
         {
-        TMessageBox( "Unable to allocate memory for Clipboard Unicode data" );
         ::CloseClipboard();
+        TMessageBox( "Unable to allocate memory for Clipboard Unicode data" );
         return TRUE;
         }
 
@@ -4903,16 +4952,26 @@ BOOL putontoclipboard (const CString & data, const bool bUnicode)
 
      if (!p)
         {
-        TMessageBox( "Unable to lock memory for Clipboard data" );
+        GlobalFree (hData);
         ::CloseClipboard();
+        TMessageBox( "Unable to lock memory for Clipboard data" );
         return TRUE;
         }
 
   // Copy the field into the allocated memory
 
-     MultiByteToWideChar (CP_UTF8, 0,    
-                            data, -1,  // input
-                            (LPWSTR) p, iLength);         // output
+     int iConverted = MultiByteToWideChar (CP_UTF8, 0,
+                                            data, -1,  // input
+                                            (LPWSTR) p, iLength); // output
+
+     if (iConverted != iLength)
+       {
+       GlobalUnlock (hData);
+       GlobalFree (hData);
+       ::CloseClipboard();
+       TMessageBox( "Unable to convert Clipboard Unicode data" );
+       return TRUE;
+       }
 
      GlobalUnlock (hData);
 
@@ -4920,8 +4979,9 @@ BOOL putontoclipboard (const CString & data, const bool bUnicode)
 
      if ( ::SetClipboardData( CF_UNICODETEXT, hData ) == NULL )
        {
-        TMessageBox( "Unable to set Clipboard Unicode data" );
+        GlobalFree (hData);
         ::CloseClipboard();
+        TMessageBox( "Unable to set Clipboard Unicode data" );
         return TRUE;
        }
 
