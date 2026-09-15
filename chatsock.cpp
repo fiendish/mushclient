@@ -40,6 +40,7 @@ CChatSocket::CChatSocket(CMUSHclientDoc* pDoc)
   m_bCanSendCommands = false;   
   m_bPrivate = false;   
   m_bCanSendFiles = false;
+  m_bStartingFileTransfer = false;
   m_bDoingFileTransfer = false;
   m_bWasConnected = false;
   m_iChatStatus = eChatClosed;

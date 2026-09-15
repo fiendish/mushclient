@@ -151,6 +151,7 @@ public:
 
   // file sending/receiving
 
+  bool m_bStartingFileTransfer; // true while an outgoing transfer is prepared
   bool m_bDoingFileTransfer;      // true = in middle of file transfer
   bool m_bSendFile;               // true = send file, false = receive file
   CString m_strSenderFileName;    // name from sender (or to receiver)
