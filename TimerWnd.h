@@ -23,6 +23,9 @@ public:
 
   CMUSHclientDoc * m_pDoc;
   int m_iTimer;
+  bool m_bProcessingQueue;
+  bool m_bDrainQueue;
+  INT_PTR m_nCommandsToDrain;
 
 // Operations
 public:
@@ -37,6 +40,7 @@ public:
 	virtual ~CTimerWnd();
 
   void ChangeTimerRate (const int iRate);
+  void DrainQueue (const bool bStopAfterDelayedCommand);
 
 	// Generated message map functions
 protected:

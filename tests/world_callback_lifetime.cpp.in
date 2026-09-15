@@ -207,6 +207,7 @@ struct CChatSocket {
     int m_iChatStatus=eChatConnected,m_iChatConnectionType=eChatMudMaster;
     int m_tLastIncoming=0,m_iChatID=3,m_iFileBlockSize=500,m_iAllegedPort=0,m_zChatStamp=0;
     bool m_bDeleteMe=false,m_bWasConnected=false,m_bCanSendCommands=true,m_bIgnore=false;
+    bool m_bInReceive=false;
     int m_iCountMessages=0;
     Address m_ServerAddr;
     CString m_strRemoteUserName="remote",m_strAllegedAddress;
