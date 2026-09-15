@@ -1939,6 +1939,8 @@ typedef struct tagGLYPHSET
 */
 
 // sees if a glyph is available in the current font
+// Keep NaN validation effective in Release builds that use /fp:fast.
+#pragma float_control (precise, on, push)
 static int glyph_available (lua_State *L) 
   {
   // which glyph?
@@ -2065,6 +2067,7 @@ static int glyph_available (lua_State *L)
 
 
   } // end of glyph_available
+#pragma float_control (pop)
 
 extern  COLORREF xterm_256_colours [256];
   

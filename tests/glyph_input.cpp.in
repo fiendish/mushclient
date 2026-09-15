@@ -20,6 +20,7 @@ static int reachedGdi = 0;
   lua_pushnumber (L, glyph);
   return 1;
   }
+@GLYPH_PRECISION_END@
 
 static void require(bool condition, const char *message) {
   if (!condition) {

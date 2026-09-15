@@ -3,7 +3,8 @@
 
 Requires clang and clang++. Pass --lua-source with a Lua 5.1.4 source directory.
 No download is made. --revision selects a baseline from Git.
-The exact production prefix before LoadLibrary runs with ASan and UBSan.
+The exact production prefix before LoadLibrary runs with ASan and UBSan, under
+normal and fast floating-point modes. Production precision pragmas are included.
 The fixture replaces all GDI work with a counter and the converted WORD value.
 It tests input validation and conversion, not Windows font lookup or cleanup.
 """
@@ -38,15 +39,26 @@ def main():
                                       f'{args.revision}:{path}'])
               if args.revision else (ROOT / path).read_bytes()).decode('latin-1')
     function = block(source, 'static int glyph_available (lua_State *L)')
+    start = source.index(function)
+    precision_start = re.search(
+        r'(#pragma float_control\s*\(precise, on, push\)\s*)$', source[:start])
+    precision_end = re.match(
+        r'\s*(?://[^\r\n]*\r?\n\s*)?(#pragma float_control\s*\(pop\))',
+        source[start + len(function):])
+    if bool(precision_start) != bool(precision_end):
+        raise ValueError('The glyph precision pragmas must be paired')
     boundary = 'HMODULE hDLL = LoadLibrary ("gdi32");'
     if function.count(boundary) != 1:
         raise ValueError('Expected exactly one GDI acquisition boundary')
-    prefix = function[:function.index(boundary)]
+    prefix = ((precision_start.group(1) if precision_start else '') +
+              function[:function.index(boundary)])
+    suffix = precision_end.group(1) if precision_end else ''
     template = Path(__file__).with_name('glyph_input.cpp.in').read_text()
-    if template.count('@GLYPH_INPUT@') != 1:
-        raise ValueError('Expected exactly one input fixture marker')
+    if (template.count('@GLYPH_INPUT@'), template.count('@GLYPH_PRECISION_END@')) != (1, 1):
+        raise ValueError('Expected exactly one of each fixture marker')
     cpp = out / 'glyph_input.cpp'
-    cpp.write_text(template.replace('@GLYPH_INPUT@', prefix))
+    cpp.write_text(template.replace('@GLYPH_INPUT@', prefix)
+                  .replace('@GLYPH_PRECISION_END@', suffix))
     flags = ['-O1', '-g', '-DNDEBUG', '-fno-omit-frame-pointer',
              '-fsanitize=address,undefined,float-cast-overflow',
              '-fno-sanitize-recover=all', '-I', str(lua)]
@@ -57,13 +69,14 @@ def main():
         subprocess.run(['clang', '-x', 'c', '-std=c99', *flags, '-c',
                         str(lua / (unit + '.c')), '-o', str(obj)], check=True)
         objects.append(str(obj))
-    exe = out / 'glyph_input'
-    subprocess.run(['clang++', '-std=c++17', *flags, '-Wall', '-Wextra',
-                    str(cpp), *objects, '-lm', '-o', str(exe)], check=True)
-    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
-    (out / 'result.log').write_text(result.stdout + result.stderr)
-    print(result.stdout + result.stderr, end='', flush=True)
-    result.check_returncode()
+    for mode, extra in [('normal', []), ('fast', ['-ffp-model=fast'])]:
+        exe = out / ('glyph_input_' + mode)
+        subprocess.run(['clang++', '-std=c++17', *flags, *extra, '-Wall', '-Wextra',
+                        str(cpp), *objects, '-lm', '-o', str(exe)], check=True)
+        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+        (out / (mode + '.log')).write_text(result.stdout + result.stderr)
+        print(f'{mode}: {result.stdout}{result.stderr}', end='', flush=True)
+        result.check_returncode()
 
 
 if __name__ == '__main__':
