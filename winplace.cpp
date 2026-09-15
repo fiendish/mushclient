@@ -123,20 +123,32 @@ void CWindowPlacement::WriteProfileWP(LPCSTR lpKeyName)
    if (rc == SQLITE_OK || rc == SQLITE_DONE)
     {
 
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.showCmd"), showCmd);
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.flags"), flags);
+    rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.showCmd"), showCmd);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.flags"), flags);
 
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMinPosition.x"), ptMinPosition.x);
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMinPosition.y"), ptMinPosition.y);
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMaxPosition.x"), ptMaxPosition.x);
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMaxPosition.y"), ptMaxPosition.y);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMinPosition.x"), ptMinPosition.x);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMinPosition.y"), ptMinPosition.y);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMaxPosition.x"), ptMaxPosition.x);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.ptMaxPosition.y"), ptMaxPosition.y);
 
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.left"),   rcNormalPosition.left);
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.right"),  rcNormalPosition.right);
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.top"),    rcNormalPosition.top);
-    App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.bottom"), rcNormalPosition.bottom);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.left"), rcNormalPosition.left);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.right"), rcNormalPosition.right);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.top"), rcNormalPosition.top);
+    if (rc == SQLITE_OK)
+      rc = App.db_write_int ("worlds", (LPCTSTR) CFormat ("%s:%s", lpKeyName, "wp.bottom"), rcNormalPosition.bottom);
 
-    App.db_execute ("COMMIT", true);
+    if (rc == SQLITE_OK)
+      rc = App.db_execute ("COMMIT", true);
+    if (rc != SQLITE_OK)
+      App.db_execute ("ROLLBACK", true);
 
     }
 
