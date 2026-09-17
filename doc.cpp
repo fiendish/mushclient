@@ -2735,7 +2735,9 @@ int spaces,
     i;
 char cOneCharacterLine [2] = {0, 0};
 
-CLine * pOriginalLine = m_pCurrentLine;
+const __int64 iOriginalLineCreationNumber =
+  m_pCurrentLine ? m_pCurrentLine->nCreationNumber : 0;
+const long iOriginalTotalLines = m_total_lines;
 CString strOriginalText;
 CString strLine (lpszText, size);
 
@@ -3272,16 +3274,15 @@ CString strLine (lpszText, size);
   } // end of processing input
       
 
-  // to avoid flicker, only update the line if:
-  //   a) It is MUD output (eg. a prompt line); or
-  //   b) The line has changed
+  // Refresh after new lines even if callbacks leave the tail address and text unchanged.
+  const bool bCurrentLineChanged =
+    iOriginalLineCreationNumber != m_pCurrentLine->nCreationNumber ||
+    (!(flags & NOTE_OR_COMMAND) &&
+     strOriginalText != CString (m_pCurrentLine->text, m_pCurrentLine->len));
+  const bool bLineCountChanged = iOriginalTotalLines != m_total_lines;
 
-  if (!(flags & NOTE_OR_COMMAND) || pOriginalLine != m_pCurrentLine)
-
-    // don't update views if no change to current line (some nulls maybe?)
-    if (pOriginalLine != m_pCurrentLine ||
-        strOriginalText != CString (m_pCurrentLine->text, m_pCurrentLine->len))
-      {
+  if (bCurrentLineChanged || bLineCountChanged)
+    {
       // get the view to refresh
 
       for(POSITION pos=GetFirstViewPosition();pos!=NULL;)
@@ -3299,9 +3300,10 @@ CString strLine (lpszText, size);
       // new - for people on the forum who insist on getting lines without a \n at
       // the end - tell plugins about this line
 
-      SendLineToPlugin ();
+      if (bCurrentLineChanged)
+        SendLineToPlugin ();
 
-      }   // end of this line changing
+    }   // end of output changing
 
 }
 
