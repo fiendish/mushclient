@@ -79,21 +79,22 @@ struct CString {
   }
   // Typed adapters avoid passing LP64 longs to Windows %i varargs formats.
   // Unsupported formats fail instead of approximating native CString behavior.
-  void Format(const char* format, long count) {
-    const bool supported = std::strcmp(format, "%ld Kb") == 0;
-    CHECK(supported, "supported integer format");
-    value = std::to_string(count) + " Kb";
+  void Format(const char* format, unsigned long long count) {
+    CHECK(std::strcmp(format, "%I64u bytes") == 0, "supported byte format");
+    value = std::to_string(count) + " bytes";
   }
   void Format(const char* format, double count) {
-    const bool supported = std::strcmp(format, "%5.1f Mb") == 0;
+    const bool supported = std::strcmp(format, "%.1f KiB") == 0 ||
+                           std::strcmp(format, "%.1f MiB") == 0;
     CHECK(supported, "supported floating point format");
     char buffer[80];
-    const int length = std::snprintf(buffer, sizeof buffer, "%5.1f Mb", count);
+    const int length = std::snprintf(buffer, sizeof buffer, "%.1f %s", count,
+                                     std::strcmp(format, "%.1f KiB") == 0 ? "KiB" : "MiB");
     CHECK(length > 0 && length < static_cast<int>(sizeof buffer), "formatted memory fits");
     value = buffer;
   }
-  void Format(const char* format, const char* text, long count) {
-    const bool supported = std::strcmp(format, "%s (%i bytes/line)") == 0;
+  void Format(const char* format, const char* text, unsigned long long count) {
+    const bool supported = std::strcmp(format, "%s (%I64u bytes/line)") == 0;
     CHECK(supported, "supported memory average format");
     value = std::string(text) + " (" + std::to_string(count) + " bytes/line)";
   }
@@ -346,7 +347,7 @@ struct Scenario {
 };
 Scenario Parse(const std::string& name) {
   const auto suffix = name.substr(name.find('_') + 1);
-  if (suffix == "control") return {};
+  if (suffix == "control" || suffix == "large") return {};
   if (suffix == "empty") return {"", "", false, true, false};
   if (suffix == "cancel") return {"", "", true, false, false};
   if (suffix == "mapper") return {"", "", false, false, true};
@@ -474,28 +475,32 @@ void RecallCase(const Scenario& scenario) {
   }
 }
 
-struct MemoryExpected { long lines = 0, allocations = 0, styles = 0; };
-MemoryExpected FillMemory(CMUSHclientDoc& doc, bool empty) {
+struct MemoryExpected {
+  long lines = 0, styles = 0;
+  unsigned long long allocations = 0, styleBlocks = 0;
+};
+MemoryExpected FillMemory(CMUSHclientDoc& doc, bool empty, bool large) {
   MemoryExpected expected;
   if (empty) return expected;
   expected.lines = 1104;
   for (int i = 0; i < expected.lines; ++i) {
     auto* line = new CLine("memory line");
-    line->iMemoryAllocated = 64 + (i % 7) * 31;
-    const int styles = 1 + i % 4;
+    line->iMemoryAllocated = (large ? 3000000 : 64) + (i % 7) * 31;
+    const int styles = i == 0 ? 11 : (i == 1 ? 10 : (i == 2 ? 0 : 1 + i % 4));
     for (int j = 0; j < styles; ++j) line->styleList.AddTail(new CStyle);
     expected.allocations += line->iMemoryAllocated;
     expected.styles += styles;
+    expected.styleBlocks += (styles + 9) / 10;
     doc.m_LineList.AddTail(line);
   }
   return expected;
 }
 
-void MemoryCase(const Scenario& scenario) {
+void MemoryCase(const Scenario& scenario, bool large = false) {
   harness = Harness{};
   CMUSHclientDoc doc;
   doc.m_bShowingMapperStatus = scenario.mapper;
-  const auto expected = FillMemory(doc, scenario.empty);
+  const auto expected = FillMemory(doc, scenario.empty, large);
   CPrefsP15 page(&doc);
   int mutations = 0;
   Arm(doc, scenario, mutations, &page);
@@ -522,12 +527,16 @@ void MemoryCase(const Scenario& scenario) {
     CHECK(harness.positions == positions, "cancellation result: one progress update before stop");
   } else {
     // Aggregate oracle uses the fixture's original input counts, not live lines.
-    const long bytes = expected.allocations + expected.lines * (sizeof(CLine) + 3 * sizeof(void*))
-                       + expected.styles * (sizeof(CStyle) + 3 * sizeof(void*));
+    const unsigned long long blockBytes = (10 * 3 + 1) * sizeof(void*);
+    const unsigned long long bytes = expected.allocations +
+        expected.lines * sizeof(CLine) + expected.styles * sizeof(CStyle) +
+        expected.styleBlocks * blockBytes + ((expected.lines + 9) / 10) * blockBytes;
     char units[80];
     int length;
-    if (bytes < 1024 * 1024) length = std::snprintf(units, sizeof units, "%ld Kb", bytes / 1024);
-    else length = std::snprintf(units, sizeof units, "%5.1f Mb", bytes / (1024.0 * 1024.0));
+    if (bytes < 1024) length = std::snprintf(units, sizeof units, "%llu bytes", bytes);
+    else if (bytes < 1024 * 1024)
+      length = std::snprintf(units, sizeof units, "%.1f KiB", bytes / 1024.0);
+    else length = std::snprintf(units, sizeof units, "%.1f MiB", bytes / (1024.0 * 1024.0));
     CHECK(length > 0 && length < static_cast<int>(sizeof units), "expected memory units fit");
     std::string memory = units;
     if (expected.lines) memory += " (" + std::to_string(bytes / expected.lines) + " bytes/line)";
@@ -632,7 +641,7 @@ int main(int argc, char** argv) {
   }
   const Scenario scenario = Parse(name);
   if (name.rfind("recall_", 0) == 0) RecallCase(scenario);
-  else if (name.rfind("memory_", 0) == 0) MemoryCase(scenario);
+  else if (name.rfind("memory_", 0) == 0) MemoryCase(scenario, name == "memory_large");
   else throw std::runtime_error("Unknown case: " + name);
   harness.callback = nullptr;
   std::cout << "PASS: " << name << '\n';

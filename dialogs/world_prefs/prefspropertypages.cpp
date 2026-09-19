@@ -9129,17 +9129,27 @@ void CPrefsP15::CalculateMemoryUsage ()
     } statusLineGuard (m_doc);
   struct CLineMemory
     {
-    long bytes;
+    unsigned long long bytes;
     int styles;
     };
+  // CTypedPtrList<CPtrList, ...> reserves ten three-pointer nodes per block.
+  // Header padding, retained high-water blocks, and heap overhead remain uncounted.
+  const unsigned long long listBlockSize = 10;
+  const unsigned long long listBlockBytes =
+    (listBlockSize * 3 + 1) * sizeof (void *);  // nodes plus the CPlex link
   vector<CLineMemory> lines;
   for (POSITION pos = m_doc->m_LineList.GetHeadPosition (); pos; )
     {
     const CLine * pLine = m_doc->m_LineList.GetNext (pos);
     CLineMemory line;
     line.styles = (int) pLine->styleList.GetCount ();
-    line.bytes = sizeof (CLine) + pLine->iMemoryAllocated + sizeof (void *) * 3 +
-      line.styles * (sizeof (CStyle) + sizeof (void *) * 3);
+    const unsigned long long styleBlocks =
+      (static_cast<unsigned long long> (line.styles) + listBlockSize - 1) /
+        listBlockSize;
+    line.bytes = static_cast<unsigned long long> (sizeof (CLine)) +
+      pLine->iMemoryAllocated +
+      static_cast<unsigned long long> (line.styles) * sizeof (CStyle) +
+      styleBlocks * listBlockBytes;
     lines.push_back (line);
     }
   const long nLines = (long) lines.size ();
@@ -9157,7 +9167,7 @@ void CPrefsP15::CalculateMemoryUsage ()
 
 // work out how much memory each line takes
 
-  long nMemory = 0;
+  unsigned long long nMemory = 0;
   int iStyles = 0;
   long iCount = 0;
 
@@ -9178,24 +9188,30 @@ void CPrefsP15::CalculateMemoryUsage ()
     iStyles += lines [i].styles;
     }
 
+  // The document line list uses the same ten-node allocation blocks.
+  nMemory += ((static_cast<unsigned long long> (nLines) + listBlockSize - 1) /
+              listBlockSize) * listBlockBytes;
+
   if (!::IsWindow (m_hWnd) || CWnd::FromHandlePermanent (m_hWnd) != this)
     return;
   m_strBufferLines += TFormat (" (%i styles)", iStyles);
 	SetDlgItemText(IDC_BUFFER_LINES, m_strBufferLines);
 
-  CString strMemory, strKb;
+  CString strMemory, strSize;
 
-  if (nMemory < (1024 * 1024))
-    strKb.Format ("%ld Kb", nMemory / 1024);
+  if (nMemory < 1024)
+    strSize.Format ("%I64u bytes", nMemory);
+  else if (nMemory < (1024 * 1024))
+    strSize.Format ("%.1f KiB", nMemory / 1024.0);
   else
-    strKb.Format ("%5.1f Mb", nMemory / (1024.0 * 1024.0));    // show as Mb
+    strSize.Format ("%.1f MiB", nMemory / (1024.0 * 1024.0));
 
   // at new document time we won't have a line yet
   if (nLines)
-    strMemory.Format ("%s (%i bytes/line)", (LPCTSTR) strKb,
+    strMemory.Format ("%s (%I64u bytes/line)", (LPCTSTR) strSize,
                       nMemory / nLines);
   else
-    strMemory.Format ("%s", (LPCTSTR) strKb);
+    strMemory.Format ("%s", (LPCTSTR) strSize);
 
 	SetDlgItemText(IDC_OUTPUT_MEMORY, strMemory);
   GetDlgItem (IDC_CALCULATE_MEMORY)->EnableWindow (FALSE);  // only do it once
