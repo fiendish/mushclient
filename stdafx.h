@@ -38,12 +38,7 @@
   #define _INC_MALLOC	     // exclude standard memory alloc procedures
 #endif
 
-// disable memory checking for speed
-//  comment out (middle 2 lines) to re-enable
-#ifdef _DEBUG
-  #undef DEBUG_NEW
-  #define DEBUG_NEW new
-#endif
+// Keep MFC DEBUG_NEW active in Debug builds to record allocation sites.
 
 #define USE_PYTHON    // Nick's "use Python" extension ;)
 #define USE_TCL       // Nick's "use TCL" extension ;)

@@ -184,7 +184,7 @@ VARIANT CMUSHclientDoc::Debug(LPCTSTR Command)
       {
       TRACE("Memory leaked.\n");
       diffMemState.DumpStatistics();
-//      oldMemState.DumpAllObjectsSince ();
+      oldMemState.DumpAllObjectsSince ();
       }
     else
       TRACE("No memory leak.\n");
@@ -192,7 +192,7 @@ VARIANT CMUSHclientDoc::Debug(LPCTSTR Command)
 //-----------------------------------------------------------------------
 //          memchk
 //-----------------------------------------------------------------------
-   if (strcmp (Command, "memchk") == 0)
+   else if (strcmp (Command, "memchk") == 0)
     {
     TRACE("Memory checkpoint taken.\n");
     oldMemState.Checkpoint();
