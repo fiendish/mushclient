@@ -6,6 +6,7 @@
 
 #include "stdafx.h"
 #include "MUSHclient.h"
+#include "CrashDump.h"
 #include "doc.h"
 #include "ActivityDoc.h"
 #include "TextDocument.h"
@@ -229,6 +230,15 @@ CString MUSHCLIENT_VERSION;
 
 BOOL CMUSHclientApp::InitInstance()
 {
+
+  const DWORD crashDumpError = InstallCrashDumpHandler();
+  if (crashDumpError != ERROR_SUCCESS)
+    {
+    CString message;
+    message.Format("MUSHclient could not enable crash dumps (error %lu).",
+                   crashDumpError);
+    ::MessageBoxA(NULL, message, "MUSHclient", MB_OK | MB_ICONWARNING);
+    }
 
   m_whenClientStarted = CTime::GetCurrentTime();
 
