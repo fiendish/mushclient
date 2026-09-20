@@ -6020,12 +6020,12 @@ void CPrefsP14::OnAdjustWidth()
 // this is for the guy that wants to fit the max text he can in his window,
 // after resizing it
 
+  CFont font;
   CDC dc;
 
   dc.CreateCompatibleDC (NULL);
 
   int lfHeight = -MulDiv(m_font_height, dc.GetDeviceCaps(LOGPIXELSY), 72);
-  CFont font;
 
    font.CreateFont(lfHeight, // int nHeight, 
 				  0, // int nWidth, 
@@ -6044,10 +6044,12 @@ void CPrefsP14::OnAdjustWidth()
 
   // Get the metrics of the font.
 
-  dc.SelectObject(font);
+  CFont * pOldFont = dc.SelectObject (&font);
 
   TEXTMETRIC tm;
   dc.GetTextMetrics(&tm);
+  if (pOldFont)
+    dc.SelectObject (pOldFont);
 
   // find the first output window, work out the correct width
   for(POSITION pos = m_doc->GetFirstViewPosition(); pos != NULL; )
