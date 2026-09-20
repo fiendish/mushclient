@@ -3262,12 +3262,12 @@ void CMUSHView::AutoWrapWindowWidth (CMUSHclientDoc* pDoc)
       pDoc->m_font_height > 0)
     {
 
+    CFont font;
     CDC dc;
 
     dc.CreateCompatibleDC (NULL);
 
     int lfHeight = -MulDiv(pDoc->m_font_height, dc.GetDeviceCaps(LOGPIXELSY), 72);
-    CFont font;
 
      font.CreateFont(lfHeight, // int nHeight, 
             0, // int nWidth, 
@@ -3286,10 +3286,12 @@ void CMUSHView::AutoWrapWindowWidth (CMUSHclientDoc* pDoc)
 
       // Get the metrics of the font.
 
-      dc.SelectObject(font);
+      CFont * pOldFont = dc.SelectObject (&font);
 
       TEXTMETRIC tm;
       dc.GetTextMetrics(&tm);
+      if (pOldFont)
+        dc.SelectObject (pOldFont);
 
 
     int iWidth = (GetOutputWindowWidth () - pDoc->m_iPixelOffset) / tm.tmAveCharWidth;
