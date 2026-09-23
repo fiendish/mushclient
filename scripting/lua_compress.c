@@ -161,7 +161,10 @@ static int mydecompress (lua_State *L)
 
     err = inflate (&d_stream, Z_NO_FLUSH);
     if (err != Z_OK && err != Z_STREAM_END)
-      luaL_error (L, "error on decompression");
+      {
+      inflateEnd (&d_stream);
+      return luaL_error (L, "error on decompression");
+      }
 
     luaL_addlstring(&buffer, buf, d_stream.next_out - buf);
     
