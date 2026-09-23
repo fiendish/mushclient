@@ -652,13 +652,20 @@ BOOL CMUSHclientApp::InitInstance()
     if (pDirectSoundCreate)
       {
       // try to set up for DirectSound
-      if (FAILED (DirectSoundCreate (NULL, &m_pDirectSoundObject, NULL))) 
+      if (FAILED (DirectSoundCreate (NULL, &m_pDirectSoundObject, NULL)))
+        {
+        if (m_pDirectSoundObject)
+          m_pDirectSoundObject->Release ();
         m_pDirectSoundObject = NULL;
+        }
 
       // set sound cooperation level
       if (m_pDirectSoundObject)
         if (FAILED (m_pDirectSoundObject->SetCooperativeLevel (pMainFrame->m_hWnd, DSSCL_NORMAL)))
+          {
+          m_pDirectSoundObject->Release ();
           m_pDirectSoundObject = NULL;    // no DirectSound
+          }
       }
     }   // if DirectSound wanted
 
@@ -674,7 +681,15 @@ BOOL CMUSHclientApp::InitInstance()
 
 
     if (FAILED (m_pDirectSoundObject->CreateSoundBuffer (&bd, &m_pDirectSoundPrimaryBuffer, NULL)))
+      {
+      if (m_pDirectSoundPrimaryBuffer)
+        {
+        m_pDirectSoundPrimaryBuffer->Release ();
+        m_pDirectSoundPrimaryBuffer = NULL;
+        }
+      m_pDirectSoundObject->Release ();
       m_pDirectSoundObject = NULL;  // no DirectSound
+      }
     }
 
 
@@ -1432,7 +1447,15 @@ int CMUSHclientApp::ExitInstance()
 
   // release sound buffer if allocated
   if (m_pDirectSoundPrimaryBuffer)
+    {
     m_pDirectSoundPrimaryBuffer->Release ();
+    m_pDirectSoundPrimaryBuffer = NULL;
+    }
+  if (m_pDirectSoundObject)
+    {
+    m_pDirectSoundObject->Release ();
+    m_pDirectSoundObject = NULL;
+    }
 
   // close SQLite database
   if (db)

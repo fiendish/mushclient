@@ -1587,7 +1587,6 @@ bool CTextView::ReplaceBlock (const char * source,
   if (lua_pcall (L, 3, 2, 0))   // call with 3 args and 2 results
     {
     LuaError (L);
-    lua_close (L);
     return true; // bad result
     }
 
@@ -1599,7 +1598,6 @@ bool CTextView::ReplaceBlock (const char * source,
 
   if (p == NULL)
     {
-    lua_close (L);
     return true;    // no string result? bad! very bad.
     }
 
@@ -1619,6 +1617,17 @@ CLuaGsubDlg dlg;
 
   if (!L)
     return;   // doh!
+
+  struct LuaStateGuard
+    {
+    explicit LuaStateGuard (lua_State *& state) : state (state) { }
+    ~LuaStateGuard ()
+      {
+      lua_close (state);
+      state = NULL;
+      }
+    lua_State *& state;
+    } luaStateGuard (L);
 
   lua_settop(L, 0);   // clear stack, just in case
 
@@ -1738,8 +1747,6 @@ bool bAll;
 
   // put selection back
   ReplaceAndReselect (bAll, result);
-
-  lua_close (L);      // done with Lua script space
 
   // show count of replacements in status bar
   Frame.SetStatusMessageNow (TFormat ("%i replaced.", count));
