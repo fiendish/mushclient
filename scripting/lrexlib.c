@@ -402,18 +402,18 @@ static int Lpcre_comp(lua_State *L)
   size_t clen;  /* clen isn't used in PCRE */
   const char *pattern = luaL_checklstring(L, 1, &clen);
   int cflags = luaL_optint(L, 2, 0);
-  const unsigned char *tables = NULL;
-
-  if(lua_gettop(L) > 2 && !lua_isnil(L, 3))
-    tables = Lpcre_maketables(L, 3);
+  int has_locale = lua_gettop(L) > 2 && !lua_isnil(L, 3);
 
   ud = (pcre2*)lua_newuserdata(L, sizeof(pcre2));
+  memset(ud, 0, sizeof(pcre2));
   luaL_getmetatable(L, pcre_handle);
   lua_setmetatable(L, -2);
-  ud->match = NULL;
-  ud->extra = NULL;
-  ud->tables = tables; /* keep this for eventual freeing */
-  ud->pr = pcre_compile(pattern, cflags, &error, &erroffset, tables);
+
+  /* Establish GC ownership before allocating locale tables. */
+  if(has_locale)
+    ud->tables = Lpcre_maketables(L, 3);
+
+  ud->pr = pcre_compile(pattern, cflags, &error, &erroffset, ud->tables);
   if(!ud->pr) 
     {
     sprintf(buf, "%s (pattern offset: %d)", error, erroffset+1);
@@ -530,112 +530,121 @@ static void Lpcre_push_offsets
   }
 }
 
-// handle match callout - function might be in position 5 or 6
-static int callout_function_x (pcre_callout_block * cb, const int f_loc)
-  {
-  // warning - the function called may change pcre_callout to NULL
-  //   because a line written may trigger "process previous line" which
-  //   will probably call regexp to match triggers
-  // OR, it may simply call other regexps
-  int (*f)(pcre_callout_block *) = pcre_callout;
+typedef struct {
+  lua_State *L;
+  int callback;
+  int failed;
+} pcre_callout_context;
 
-  // for substrings
+// The whole argument-building and callback operation is protected by lua_pcall.
+static int callout_lua (lua_State *L)
+  {
+  pcre_callout_block * cb = (pcre_callout_block *) lua_touserdata(L, 1);
   int i, j, k;
 
-  int result;
-  lua_State *L = cb->callout_data;
-  if (!L)
-    return 0;   // bad data
-
-  lua_pushvalue(L, f_loc);    // get function
-  lua_pushnumber (L, cb->callout_number); // arg 1: which callout
-
-  // arg 2: offset vectors
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_pushnumber(L, cb->callout_number);
   lua_newtable(L);
-  for (i = 1, j = 1; i < cb->capture_top; i++) 
+  for (i = 1, j = 1; i < cb->capture_top; i++)
     {
     k = i * 2;
-    if (cb->offset_vector[k] >= 0) 
+    if (cb->offset_vector[k] >= 0)
       {
       lua_pushnumber(L, cb->offset_vector[k] + 1);
       lua_rawseti(L, -2, j++);
       lua_pushnumber(L, cb->offset_vector[k+1]);
       lua_rawseti(L, -2, j++);
       }
-    else 
+    else
       {
       lua_pushboolean(L, 0);
       lua_rawseti(L, -2, j++);
       lua_pushboolean(L, 0);
       lua_rawseti(L, -2, j++);
       }
-    } // end of doing each capture
-
-  lua_pushlstring(L, cb->subject, cb->subject_length);  // arg 3: subject
-  lua_pushnumber (L, cb->start_match + 1); // arg 4: start match position (1 relative)
-  lua_pushnumber (L, cb->current_position + 1); // arg 5: current position (1 relative)
-  lua_pushnumber (L, cb->capture_top - 1); // arg 6: highest captured substring
-  lua_pushnumber (L, cb->capture_last); // arg 7: last captured substring
-
-
-  // args: 1 - callback number
-  //       2 - match vectors
-  //       3 - subject string
-  //       4 - start match position
-  //       5 - current position
-  //       6 - highest captured substring
-  //       7 - last captured substring
-
-  lua_call(L, 7, 1);      // call function 
-  result = (int) lua_tonumber (L, -1);
-  lua_pop(L, 1);          // result not wanted now
-
-  // put it back
-  pcre_callout = f;
-
-  if (result < 0)
-    result = PCRE_ERROR_NOMATCH;
-  return result;
+    }
+  lua_pushlstring(L, cb->subject, cb->subject_length);
+  lua_pushnumber(L, cb->start_match + 1);
+  lua_pushnumber(L, cb->current_position + 1);
+  lua_pushnumber(L, cb->capture_top - 1);
+  lua_pushnumber(L, cb->capture_last);
+  lua_call(L, 7, 1);
+  return 1;
   }
 
-// callout function - function is argument 5
-static int callout_function5 (pcre_callout_block * cb)
+static int callout_function (pcre_callout_block * cb)
   {
-  return callout_function_x (cb, 5);   // function is argument 5
-  }
+  pcre_callout_context * context = (pcre_callout_context *) cb->callout_data;
+  lua_State *L;
+  int (*saved_callout)(pcre_callout_block *) = pcre_callout;
+  int status, result;
 
-// callout function - function is argument 6
-static int callout_function6 (pcre_callout_block * cb)
-  {
-  return callout_function_x (cb, 6);   // function is argument 6
-  }
-             
-// check to see if they supplied a callout function
-static void check_for_callout (lua_State *L, 
-                              pcre2 *ud, 
-                              const int which,   // arg 5 or 6
-                              int   (*f)(pcre_callout_block *))
-  {
-  pcre_callout = NULL;     // not yet they didn't
-
-  // if callout function wanted, set up for it
-  if (lua_isfunction (L, which))
+  if (!context || !context->L)
+    return 0;
+  L = context->L;
+  lua_pushvalue(L, context->callback);
+  lua_pushlightuserdata(L, cb);
+  status = lua_pcall(L, 1, 1, 0);
+  // Nested regex calls and trigger processing may change the global callback.
+  pcre_callout = saved_callout;
+  if (status != 0)
     {
-    if (!ud->extra)      // need to put state in extra field, so it must exist
+    context->failed = 1;
+    // Let PCRE unwind its recursion buffers before raising the Lua error.
+    return PCRE_ERROR_CALLOUT;
+    }
+  result = (int) lua_tonumber(L, -1);
+  lua_pop(L, 1);
+  return result < 0 ? PCRE_ERROR_NOMATCH : result;
+  }
+
+static int execute_regex (lua_State *L, pcre2 *ud, const char *text,
+                          int length, int startoffset, int eflags, int which)
+  {
+  int (*saved_callout)(pcre_callout_block *) = pcre_callout;
+  pcre_callout_context context;
+  unsigned long saved_flags = 0;
+  void *saved_data = NULL;
+  int with_callout = lua_isfunction(L, which);
+  int result;
+
+  context.L = L;
+  context.failed = 0;
+  context.callback = 0;
+  if (with_callout)
+    {
+    // Prepare the protected callout closure before entering the native engine.
+    if (!lua_checkstack(L, 3))
+      return luaL_error(L, "not enough stack space for PCRE callback");
+    lua_pushvalue(L, which);
+    lua_pushcclosure(L, callout_lua, 1);
+    context.callback = lua_gettop(L);
+    if (!ud->extra)
       {
-      ud->extra = (pcre_extra *)(pcre_malloc) (sizeof(pcre_extra));
-
-      if (ud->extra == NULL)
-        L_lua_error (L, "failed to get memory for PCRE callback");
-
-      memset (ud->extra, 0, sizeof(pcre_extra));
-      }  // end of no extra yet
-
-    ud->extra->callout_data = L;  // need to know Lua state in callout
-    ud->extra->flags |= PCRE_EXTRA_CALLOUT_DATA;  // indicate we have it
-    pcre_callout = f;  // callout wanted
-    }    // function supplied
-  
+      ud->extra = (pcre_extra *)(pcre_malloc)(sizeof(pcre_extra));
+      if (!ud->extra)
+        return luaL_error(L, "failed to get memory for PCRE callback");
+      memset(ud->extra, 0, sizeof(pcre_extra));
+      }
+    saved_flags = ud->extra->flags;
+    if (saved_flags & PCRE_EXTRA_CALLOUT_DATA)
+      saved_data = ud->extra->callout_data;
+    ud->extra->flags |= PCRE_EXTRA_CALLOUT_DATA;
+    ud->extra->callout_data = &context;
+    }
+  pcre_callout = with_callout ? callout_function : NULL;
+  result = pcre_exec(ud->pr, ud->extra, text, length, startoffset, eflags,
+                    ud->match, (ud->ncapt + 1) * 3);
+  pcre_callout = saved_callout;
+  if (with_callout)
+    {
+    ud->extra->flags = saved_flags;
+    ud->extra->callout_data = saved_data;
+    lua_remove(L, context.callback);
+    }
+  if (context.failed)
+    return lua_error(L); // keep the original error object, including non-strings
+  return result;
   }
 
 static int Lpcre_match_generic(lua_State *L, Lpcre_push_matches push_matches)
@@ -650,10 +659,7 @@ static int Lpcre_match_generic(lua_State *L, Lpcre_push_matches push_matches)
   Lpcre_getargs(L, &ud, &text, &elen);
   startoffset = get_startoffset(L, 3, elen);
 
-  check_for_callout (L, ud, 5, callout_function5);
-
-  res = pcre_exec(ud->pr, ud->extra, text, (int)elen, startoffset, eflags,
-                  ud->match, (ud->ncapt + 1) * 3);
+  res = execute_regex(L, ud, text, (int)elen, startoffset, eflags, 5);
   if (res >= 0) {
     lua_pushnumber(L, ud->match[0] + 1);
     lua_pushnumber(L, ud->match[1]);
@@ -689,13 +695,10 @@ static int Lpcre_gmatch(lua_State *L)
   if(maxmatch > 0) /* this must be stated in the docs */
     limit = 1;
 
-  check_for_callout (L, ud, 6, callout_function6);
-
   while (!limit || nmatch < maxmatch) 
     {
 
-    res = pcre_exec(ud->pr, ud->extra, text, (int)len, startoffset, eflags,
-                    ud->match, (ud->ncapt + 1) * 3);
+    res = execute_regex(L, ud, text, (int)len, startoffset, eflags, 6);
     if (res >= 0) 
       {
       // warning - the function called may change pcre_callout to NULL

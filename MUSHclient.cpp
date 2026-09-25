@@ -593,16 +593,10 @@ BOOL CMUSHclientApp::InitInstance()
   // if *only* tray wanted, hide icon from task bar
   if (m_iIconPlacement == ICON_PLACEMENT_TRAY)
     {
-    extraWnd = new CWnd;
+    extraWnd = &m_TrayOwnerWindow;
 
     // MUSHclient icon for hidden window, so Alt+Tab will look OK
-    HICON hIcon =
-        (HICON)LoadImage( AfxGetResourceHandle(),
-            MAKEINTRESOURCE(IDR_MUSHCLTYPE),
-            IMAGE_ICON,
-            GetSystemMetrics(SM_CXICON),
-            GetSystemMetrics(SM_CYICON),
-            LR_DEFAULTCOLOR);
+    HICON hIcon = AfxGetApp()->LoadIcon (IDR_MUSHCLTYPE);
 
     // for hiding main window from taskbar
     VERIFY(extraWnd->CreateEx 
@@ -667,6 +661,8 @@ BOOL CMUSHclientApp::InitInstance()
           m_pDirectSoundObject = NULL;    // no DirectSound
           }
       }
+    if (hDLL)
+      FreeLibrary (hDLL);
     }   // if DirectSound wanted
 
   if (m_pDirectSoundObject)
@@ -1421,6 +1417,15 @@ void CMUSHclientApp::RestoreColumnConfiguration (LPCTSTR strName,
 
 int CMUSHclientApp::ExitInstance() 
 {
+  if (m_TrayOwnerWindow.GetSafeHwnd ())
+    m_TrayOwnerWindow.DestroyWindow ();
+
+  if (g_hCursorIbeam)
+    {
+    DestroyCursor (g_hCursorIbeam);
+    g_hCursorIbeam = NULL;
+    }
+
   if (!bWine)
     CoUninitialize ();
 	

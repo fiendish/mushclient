@@ -577,17 +577,21 @@ long CMUSHclientDoc::ChatAcceptCalls(short Port)
 
 void CMUSHclientDoc::ChatStopAcceptingCalls() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 if (m_pChatListenSocket)
   {
-  ShutDownSocket (*m_pChatListenSocket);
-
-  ChatNote (eChatConnection, "Stopped accepting chat connections.");
-  delete m_pChatListenSocket;
+  CChatListenSocket * pSocket = m_pChatListenSocket;
   m_pChatListenSocket = NULL;
+  ShutDownSocket (*pSocket);
+  delete pSocket;
 
   // remember they don't want them
   SetModifiedFlag (TRUE);   // document has changed
   m_bAcceptIncomingChatConnections = false;
+
+  // A callback may stop again or start a new listener. It must see the
+  // completed stop, and we must not delete or overwrite its replacement.
+  ChatNote (eChatConnection, "Stopped accepting chat connections.");
   }
 
 }   // end of CMUSHclientDoc::ChatStopAcceptingCalls
@@ -1183,6 +1187,8 @@ long CMUSHclientDoc::ChatSendFile(long ID, LPCTSTR FileName)
     return eAlreadyTransferringFile;
     }
 
+  // The file picker pumps messages too; reserve the transfer before opening it.
+  CBoolStateGuard startingGuard (pSocket->m_bStartingFileTransfer, true);
   CString strName = FileName;
 
   // if no file name, put up standard file dialog
@@ -1208,7 +1214,6 @@ long CMUSHclientDoc::ChatSendFile(long ID, LPCTSTR FileName)
 
     }   // end of no file name supplied
 
-  CBoolStateGuard startingGuard (pSocket->m_bStartingFileTransfer, true);
   std::unique_ptr<CFile> pNewFile;
   std::unique_ptr<unsigned char []> pNewFileBuffer;
   long iNewFileSize = 0;

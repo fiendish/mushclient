@@ -260,6 +260,10 @@ int count;
 void CWorldSocket::OnClose(int nErrorCode)
   {
 
+  // Disconnect scripts and plugin callbacks may close the world. Keep the
+  // document alive until this notification has completely unwound.
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
+
 bool bWasClosed = m_pDoc->m_iConnectPhase == eConnectNotConnected;
 
   TRACE1 ("CWorldSocket::OnClose, error code %i\n", nErrorCode);

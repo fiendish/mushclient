@@ -75,7 +75,7 @@ class CMiniWindow
   private:
 
     CDC * pdc;                // our offscreen device context
-  	CBitmap *   m_oldBitmap;  // bitmap originally found in CMyMemDC
+    HBITMAP     m_hOldBitmap; // borrowed original bitmap handle, not an MFC temporary wrapper
     CBitmap *   m_Bitmap;     // where it all happens
     FontMap     m_Fonts;      // all the fonts they want
     ImageMap    m_Images;     // other images they may want to blt onto the window

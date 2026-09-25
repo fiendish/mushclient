@@ -41,7 +41,8 @@ class CTreePropertySheet : public CPropertySheet
 // Inner class CMemDC because having it outside conflicts with MSVC2008 Feature Pack and above
 class	CMemDC	: public CDC {
 public:
-	CBitmap m_MemBmp,*m_pOldBmp;
+	CBitmap m_MemBmp;
+	HBITMAP m_hOldBmp; // borrowed native handle; MFC temporary wrappers expire on idle
 	int		nWidth,nHeight;
 	int		nCurWidth, nCurHeight;
 public:
@@ -51,7 +52,7 @@ public:
 
 		CreateCompatibleDC(tempDC);
 		m_MemBmp.CreateCompatibleBitmap(tempDC,nWidth,nHeight);
-		m_pOldBmp=SelectObject(&m_MemBmp);
+		m_hOldBmp=(HBITMAP)SelectObject((HGDIOBJ)m_MemBmp.GetSafeHandle());
 		this->nWidth	=nWidth;
 		this->nHeight	=nHeight;
 		nCurWidth		=nWidth;
@@ -65,13 +66,13 @@ public:
 		CDC		*tempDC=CWnd::GetDesktopWindow()->GetDC();
 
 		CreateCompatibleDC(tempDC);
-		m_pOldBmp	=SelectObject(bmp);
+		m_hOldBmp=(HBITMAP)SelectObject((HGDIOBJ)bmp->GetSafeHandle());
 
 		CWnd::GetDesktopWindow()->ReleaseDC(tempDC);
 	}
 	~CMemDC()
 	{
-		SelectObject(m_pOldBmp);
+		SelectObject((HGDIOBJ)m_hOldBmp);
 	}
     static  CBitmap *CreateBitmap(int nWidth,int nHeight)
     {
@@ -86,7 +87,7 @@ public:
     void    FitInto(int nWidth,int nHeight)
     {
         if(this->nWidth<nWidth || this->nHeight<nHeight) {
-            SelectObject(m_pOldBmp);
+            SelectObject((HGDIOBJ)m_hOldBmp);
             m_MemBmp.DeleteObject();
 
             CDC		*tempDC=CWnd::GetDesktopWindow()->GetDC();

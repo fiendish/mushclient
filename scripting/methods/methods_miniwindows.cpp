@@ -551,7 +551,7 @@ long CMUSHclientDoc::WindowPosition(LPCTSTR Name,
 
 
 // add a hotspot for handling mouse-over, mouse up/down events
-long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name, 
+long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
                                      LPCTSTR HotspotId, 
                                      long Left, long Top, long Right, long Bottom, 
                                      LPCTSTR MouseOver, 
@@ -561,8 +561,9 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
                                      LPCTSTR MouseUp, 
                                      LPCTSTR TooltipText, 
                                      long Cursor, 
-                                     long Flags) 
+                                     long Flags)
 {
+  CWorldDocumentOperationGuard operationGuard (this);
   MiniWindowMapIterator it = m_MiniWindows.find (Name);
     
   if (it == m_MiniWindows.end ())
@@ -1451,8 +1452,9 @@ long CMUSHclientDoc::WindowTransformImage(LPCTSTR Name, LPCTSTR ImageId, float L
 
 
 
-long CMUSHclientDoc::WindowDragHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR MoveCallback, LPCTSTR ReleaseCallback, long Flags) 
+long CMUSHclientDoc::WindowDragHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR MoveCallback, LPCTSTR ReleaseCallback, long Flags)
 {
+  CWorldDocumentOperationGuard operationGuard (this);
   MiniWindowMapIterator it = m_MiniWindows.find (Name);
     
   if (it == m_MiniWindows.end ())
@@ -1470,8 +1472,9 @@ long CMUSHclientDoc::WindowDragHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR 
 }   // end of CMUSHclientDoc::WindowDragHandler
 
 
-long CMUSHclientDoc::WindowScrollwheelHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR MoveCallback) 
+long CMUSHclientDoc::WindowScrollwheelHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR MoveCallback)
 {
+  CWorldDocumentOperationGuard operationGuard (this);
   MiniWindowMapIterator it = m_MiniWindows.find (Name);
     
   if (it == m_MiniWindows.end ())

@@ -1778,8 +1778,11 @@ bool GetNestedFunction (lua_State * L, const char * sName, const bool bRaiseErro
 bool FindLuaFunction (lua_State * L, const char * sName)
 
   {
+  // Lookup can run inside an active Lua-to-native call. Its arguments still
+  // own strings that native callers may be using, so only remove our result.
+  const int top = lua_gettop (L);
   bool bResult = GetNestedFunction (L, sName, false);
-  lua_settop(L, 0); // pop function and possible error message from stack
+  lua_settop (L, top);
   return bResult;
   } // end of FindLuaFunction
 

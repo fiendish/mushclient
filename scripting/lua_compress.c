@@ -64,9 +64,18 @@ static int optboolean (lua_State *L, const int narg, const int def)
 //  Best compression       9  
 //  Default compression   -1
 
+static int push_buffer_result (lua_State *L)
+  {
+  const char * data = (const char *) lua_touserdata (L, 1);
+  size_t length = (size_t) lua_tonumber (L, 2);
+  lua_pushlstring (L, data, length);
+  return 1;
+  }
+
 static int mycompress (lua_State *L)
   {
   z_stream c_stream;
+  int status;
 
   // get text to compress
   size_t textLength;
@@ -79,10 +88,13 @@ static int mycompress (lua_State *L)
   size_t comprLen = textLength + ((textLength + 999) / 1000) + 12
         + 50; // plus 50 for luck ;)
 
-  char * compr = malloc (comprLen);
+  char * compr;
 
+  // Allocate the protected result callback before acquiring native buffers.
+  lua_pushcfunction (L, push_buffer_result);
+  compr = malloc (comprLen);
   if (!compr)
-    luaL_error (L, "not enough memory for compression");
+    return luaL_error (L, "not enough memory for compression");
 
   c_stream.zalloc = Z_NULL; 
   c_stream.zfree = Z_NULL; 
@@ -116,17 +128,22 @@ static int mycompress (lua_State *L)
     return luaL_error (L, "error on compression wrapup");
     }
 
-  lua_pushlstring (L, compr, c_stream.total_out);
+  lua_pushlightuserdata (L, compr);
+  lua_pushnumber (L, c_stream.total_out);
+  status = lua_pcall (L, 2, 1, 0);
+  free (compr);
+  if (status != 0)
+    return lua_error (L);
 
-  free (compr); // done with our compressed buffer
   return 1;  // number of result fields
   } // end of mycompress
 
 
-// decompress a string, returns uncompressed string
-static int mydecompress (lua_State *L)
+// Run buffer construction under lua_pcall so Lua allocation errors cannot
+// bypass inflateEnd in the caller.
+static int decompress_buffer (lua_State *L)
   {
-  z_stream d_stream;
+  z_stream * d_stream = (z_stream *) lua_touserdata (L, 1);
   int err;
 
   // we'll push data into a Lua string buffer
@@ -134,48 +151,61 @@ static int mydecompress (lua_State *L)
   // however we'll use buf to do each chunk into
   char buf [1024];
 
-  // get text to decompress
-  size_t textLength;
-  const char * text = luaL_checklstring (L, 1, &textLength);
-
-
-  d_stream.zalloc = Z_NULL; 
-  d_stream.zfree = Z_NULL; 
-  d_stream.opaque = Z_NULL; 
-
-  d_stream.next_in  = (char *) text;
-  d_stream.avail_in = textLength;
-  d_stream.total_in = 0;
-
-  if (inflateInit (&d_stream) != Z_OK)
-      luaL_error (L, "could not initialize decompression engine");
-
   luaL_buffinit(L, &buffer);
 
-  d_stream.total_out = 0;
+  d_stream->total_out = 0;
 
   do
     {
-    d_stream.next_out = buf;
-    d_stream.avail_out = sizeof (buf);
+    d_stream->next_out = buf;
+    d_stream->avail_out = sizeof (buf);
 
-    err = inflate (&d_stream, Z_NO_FLUSH);
+    err = inflate (d_stream, Z_NO_FLUSH);
     if (err != Z_OK && err != Z_STREAM_END)
       {
-      inflateEnd (&d_stream);
       return luaL_error (L, "error on decompression");
       }
 
-    luaL_addlstring(&buffer, buf, d_stream.next_out - buf);
+    luaL_addlstring(&buffer, buf, d_stream->next_out - buf);
     
     } while (err != Z_STREAM_END);
-
-  if (inflateEnd (&d_stream) != Z_OK)
-    luaL_error (L, "error on decompression wrapup");
 
   luaL_pushresult(&buffer);
 
   return 1;  // number of result fields
+  } // end of decompress_buffer
+
+
+// decompress a string, returns uncompressed string
+static int mydecompress (lua_State *L)
+  {
+  z_stream d_stream;
+  int status, cleanup_status;
+  size_t textLength;
+  const char * text = luaL_checklstring (L, 1, &textLength);
+
+  // Create the Lua call frame before acquiring any native zlib allocations.
+  lua_pushcfunction (L, decompress_buffer);
+  lua_pushlightuserdata (L, &d_stream);
+
+  d_stream.zalloc = Z_NULL;
+  d_stream.zfree = Z_NULL;
+  d_stream.opaque = Z_NULL;
+  d_stream.next_in = (char *) text;
+  d_stream.avail_in = textLength;
+  d_stream.total_in = 0;
+
+  if (inflateInit (&d_stream) != Z_OK)
+    return luaL_error (L, "could not initialize decompression engine");
+
+  status = lua_pcall (L, 1, 1, 0);
+  cleanup_status = inflateEnd (&d_stream);
+  if (status != 0)
+    return lua_error (L); // preserve the original Lua error after cleanup
+  if (cleanup_status != Z_OK)
+    return luaL_error (L, "error on decompression wrapup");
+
+  return 1;
   } // end of mydecompress
 
 static int myhash (lua_State *L)
@@ -336,6 +366,7 @@ static int myencodebase64 (lua_State *L)
 	size_t j=0;
 	int bytes;
   int bufsize;
+  int status;
   char * result = NULL;
 
   // result will be 4/3 size of original  
@@ -346,10 +377,12 @@ static int myencodebase64 (lua_State *L)
   if (bMultiLine)
      bufsize += (((textLength / WRAP_POINT) + 1) * 2);  // (allow 2 bytes for cr/lfs)
 
+  // Protect result-string allocation while keeping native buffer cleanup here.
+  lua_pushcfunction (L, push_buffer_result);
   result = malloc (bufsize);
 
   if (!result)
-    luaL_error (L, "not enough memory for encoding");
+    return luaL_error (L, "not enough memory for encoding");
 
 	// go thru converting each 3 bytes into 4 base64 bytes
   if (textLength >= 3)
@@ -397,9 +430,12 @@ static int myencodebase64 (lua_State *L)
 
 	}
 
-  lua_pushlstring (L, result, j);
-
-  free (result); // done with our buffer
+  lua_pushlightuserdata (L, result);
+  lua_pushnumber (L, j);
+  status = lua_pcall (L, 2, 1, 0);
+  free (result);
+  if (status != 0)
+    return lua_error (L);
   return 1;  // number of result fields
 
   } // end of myencodebase64
@@ -488,58 +524,70 @@ static void MakeBoolTableItem (lua_State *L, const char * name, const int b)
     }
   }
 
-static int getdirectory (lua_State *L)
+typedef struct {
+  intptr_t handle;
+  struct _finddatai64_t data;
+} directory_context;
+
+static int read_directory (lua_State *L)
   {
-  // get directory name (eg. C:\mushclient\*.doc)
-  size_t dirLength;
-  const char * dirname = luaL_checklstring (L, 1, &dirLength);
-
-  struct _finddatai64_t fdata;
-
-  int h = _findfirsti64 (dirname, &fdata); // get handle
-
-  if (h == -1L)    // no good?
-    {
-    lua_pushnil (L);
-
-    switch (errno)
-      {
-      case EINVAL: lua_pushliteral (L, "Invalid filename specification"); break;
-      default:     lua_pushliteral (L, "File specification could not be matched"); break;
-      }
-    return 2;   // return nil, error message
-    }
-
+  directory_context * context = (directory_context *) lua_touserdata (L, 1);
   lua_newtable(L);    // table of entries
   
   do
     {
 
-    lua_pushstring (L, fdata.name); // file name (will be key)
+    lua_pushstring (L, context->data.name); // file name (will be key)
     lua_newtable(L);                // table of attributes
 
     // inside this new table put the file attributes
 
-    MakeNumberTableItem (L, "size", (double) fdata.size);
-    if (fdata.time_create != -1)    // except FAT
-     MakeNumberTableItem (L, "create_time", fdata.time_create);
-    if (fdata.time_access != -1)    // except FAT
-      MakeNumberTableItem (L, "access_time", fdata.time_access);
-    MakeNumberTableItem (L, "write_time",  fdata.time_write);
-    MakeBoolTableItem   (L, "archive", fdata.attrib & _A_ARCH);
-    MakeBoolTableItem   (L, "hidden", fdata.attrib & _A_HIDDEN);
-    MakeBoolTableItem   (L, "normal", fdata.attrib & _A_NORMAL);
-    MakeBoolTableItem   (L, "readonly", fdata.attrib & _A_RDONLY);
-    MakeBoolTableItem   (L, "directory", fdata.attrib & _A_SUBDIR);
-    MakeBoolTableItem   (L, "system", fdata.attrib & _A_SYSTEM);
+    MakeNumberTableItem (L, "size", (double) context->data.size);
+    if (context->data.time_create != -1)    // except FAT
+     MakeNumberTableItem (L, "create_time", context->data.time_create);
+    if (context->data.time_access != -1)    // except FAT
+      MakeNumberTableItem (L, "access_time", context->data.time_access);
+    MakeNumberTableItem (L, "write_time",  context->data.time_write);
+    MakeBoolTableItem   (L, "archive", context->data.attrib & _A_ARCH);
+    MakeBoolTableItem   (L, "hidden", context->data.attrib & _A_HIDDEN);
+    MakeBoolTableItem   (L, "normal", context->data.attrib & _A_NORMAL);
+    MakeBoolTableItem   (L, "readonly", context->data.attrib & _A_RDONLY);
+    MakeBoolTableItem   (L, "directory", context->data.attrib & _A_SUBDIR);
+    MakeBoolTableItem   (L, "system", context->data.attrib & _A_SYSTEM);
 
     lua_rawset(L, -3);              // set key of table item (ie. file name)
 
-    } while (_findnexti64 ( h, &fdata ) == 0);
+    } while (_findnexti64 ( context->handle, &context->data ) == 0);
+  return 1;
+  }
 
-  _findclose  (h);
+static int getdirectory (lua_State *L)
+  {
+  size_t dirLength;
+  const char * dirname = luaL_checklstring (L, 1, &dirLength);
+  directory_context context;
+  int status;
 
-  return 1;  // one table of entries
+  // Create the protected worker before acquiring the Windows search handle.
+  lua_pushcfunction (L, read_directory);
+  context.handle = _findfirsti64 (dirname, &context.data);
+  if (context.handle == -1)
+    {
+    lua_pushnil (L);
+    switch (errno)
+      {
+      case EINVAL: lua_pushliteral (L, "Invalid filename specification"); break;
+      default:     lua_pushliteral (L, "File specification could not be matched"); break;
+      }
+    return 2;
+    }
+
+  lua_pushlightuserdata (L, &context);
+  status = lua_pcall (L, 1, 1, 0);
+  _findclose (context.handle);
+  if (status != 0)
+    return lua_error (L);
+  return 1;
   } // end of getdirectory
 
 // split routine suggested by Ked from the forum

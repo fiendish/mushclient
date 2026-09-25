@@ -4,6 +4,25 @@
 #include "..\doc.h"
 #include "..\dialogs\ScriptErrorDlg.h"
 
+// Invoke and ParseScriptText transfer ownership of their error strings to us.
+// The script site's OnScriptError receives separate copies, so its cleanup
+// does not release these results.
+class CScriptExceptionInfo : public EXCEPINFO
+  {
+  public:
+  CScriptExceptionInfo () : EXCEPINFO () {}
+  ~CScriptExceptionInfo ()
+    {
+    ::SysFreeString (bstrSource);
+    ::SysFreeString (bstrDescription);
+    ::SysFreeString (bstrHelpFile);
+    }
+
+  private:
+  CScriptExceptionInfo (const CScriptExceptionInfo &);
+  CScriptExceptionInfo & operator= (const CScriptExceptionInfo &);
+  };
+
 static CString strProcedure;
 static CString strType;
 static CString strReason;
@@ -62,7 +81,7 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
 
   HRESULT hr;
 
-  EXCEPINFO ExcepInfo;
+  CScriptExceptionInfo ExcepInfo;
   unsigned int ArgErr;
   LARGE_INTEGER start, 
                 finish;
@@ -431,10 +450,9 @@ SCRIPTSTATE ss;
     }
 
   BSTR bstrCode;
-  EXCEPINFO ei; 
+  CScriptExceptionInfo ei;
 
   bstrCode = strCode.AllocSysString ();
-  ZeroMemory(&ei, sizeof(ei));
 
   if (!bstrCode)
     return true;  // error
@@ -588,6 +606,15 @@ void CScriptEngine::DisableScripting (void)
     {
     CloseLua ();
     return;
+    }
+
+  // GetScriptDispatch gives us an owned reference, separate from the engine
+  // and parser interfaces. Clear it before Release in case COM calls back.
+  if (m_pDispatch)
+    {
+    IDispatch * pDispatch = m_pDispatch;
+    m_pDispatch = NULL;
+    pDispatch->Release ();
     }
 
   // release engine
