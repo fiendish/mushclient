@@ -1874,7 +1874,7 @@ struct CLuaDatabaseValue
       default:
         const char * value = (const char *) sqlite3_column_text (statement, column);
         if (value)
-          text = value;
+          text.assign (value, sqlite3_column_bytes (statement, column));
         else
           type = SQLITE_NULL;
         break;
@@ -1900,7 +1900,7 @@ static void PushDatabaseValue (lua_State * L, const CLuaDatabaseValue & value)
     case SQLITE_INTEGER: lua_pushinteger (L, value.integer); break;
     case SQLITE_FLOAT: lua_pushnumber (L, value.real); break;
     case SQLITE_NULL: lua_pushnil (L); break;
-    default: lua_pushstring (L, value.text.c_str ()); break;
+    default: lua_pushlstring (L, value.text.data (), value.text.size ()); break;
     }
   }
 
