@@ -48,6 +48,8 @@ void UDPsocket::OnReceive(int nErrorCode)
     return;
     }
 
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
+
   m_bInReceive = true;
   try
     {

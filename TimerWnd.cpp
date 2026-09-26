@@ -41,6 +41,7 @@ END_MESSAGE_MAP()
 
 void CTimerWnd::OnTimer(UINT nIDEvent) 
 {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   DrainQueue (true);
 
   if (m_iTimer && m_pDoc->m_iSpeedWalkDelay == 0)
@@ -52,6 +53,8 @@ void CTimerWnd::OnTimer(UINT nIDEvent)
 
 void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
 {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
+
   if (!bStopAfterDelayedCommand)
     {
     m_bDrainQueue = true;
@@ -109,12 +112,16 @@ void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
       else
         m_pDoc->DoSendMsg (strCommand.Mid (1), bEcho, bLog);
 
+      if (m_pDoc->m_bWorldClosePending)
+        break;
+
       }
     }
   catch (...)
     {
     m_bProcessingQueue = false;
-    if ((m_bDrainQueue || m_nCommandsToDrain > 0) &&
+    if (!m_pDoc->m_bWorldClosePending &&
+        (m_bDrainQueue || m_nCommandsToDrain > 0) &&
         !m_pDoc->m_QueuedCommandsList.IsEmpty () && !m_iTimer)
       m_iTimer = SetTimer (COMMAND_QUEUE_TIMER_ID,
                            MAX ((int) m_pDoc->m_iSpeedWalkDelay, 1), NULL);
@@ -124,7 +131,8 @@ void CTimerWnd::DrainQueue (const bool bStopAfterDelayedCommand)
   m_bProcessingQueue = false;
   m_bDrainQueue = false;
   m_nCommandsToDrain = 0;
-  m_pDoc->ShowQueuedCommands ();    // update status line
+  if (!m_pDoc->m_bWorldClosePending)
+    m_pDoc->ShowQueuedCommands ();    // update status line
 }
 
 void CTimerWnd::OnDestroy() 

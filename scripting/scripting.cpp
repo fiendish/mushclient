@@ -253,6 +253,7 @@ bool CMUSHclientDoc::FindAllEntryPoints (void)
 
 void CMUSHclientDoc::OnGameImmediate() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 CImmediateDlg dlg;
 
 dlg.m_pDoc = this;

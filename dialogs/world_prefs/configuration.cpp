@@ -1974,7 +1974,8 @@ GamePreferences (ePageMXP);
 
 bool CMUSHclientDoc::GamePreferences (const int iPage) 
 {
-Frame.DelayDebugStatus ("Starting world config");
+  CWorldDocumentOperationGuard operationGuard (this);
+  Frame.DelayDebugStatus ("Starting world config");
 
 int iWantedPage = iPage;
 

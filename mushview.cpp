@@ -82,6 +82,29 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 // for conversion to Unicode
 static WCHAR sUnicodeText [MAX_LINE_WIDTH];
 
+class COptionalBoolStateGuard
+  {
+  public:
+    COptionalBoolStateGuard (bool * pValue, const bool bNewValue)
+      : m_pValue (pValue), m_bSavedValue (pValue ? *pValue : false)
+      {
+      if (m_pValue)
+        *m_pValue = bNewValue;
+      }
+
+    ~COptionalBoolStateGuard ()
+      {
+      if (m_pValue)
+        *m_pValue = m_bSavedValue;
+      }
+
+  private:
+    bool * m_pValue;
+    bool m_bSavedValue;
+    COptionalBoolStateGuard (const COptionalBoolStateGuard &);
+    COptionalBoolStateGuard & operator= (const COptionalBoolStateGuard &);
+  };
+
 /////////////////////////////////////////////////////////////////////////////
 // CMUSHView
 
@@ -4190,6 +4213,10 @@ void CMUSHView::OnVScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
 
 void CMUSHView::OnFileSaveselection() 
 {
+    CMUSHclientDoc* pDoc = GetDocument();
+    ASSERT_VALID(pDoc);
+    CWorldDocumentOperationGuard operationGuard (pDoc);
+
     CFileDialog dlg(FALSE,            // FALSE for FileSave
             "txt",            // default extension
             "selection.txt",
@@ -5368,6 +5395,7 @@ void CMUSHView::OnDisplayTextattributes()
 {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
 CString str;
 
@@ -5994,6 +6022,7 @@ void CMUSHView::OnDisplayGotoline()
 {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
 CGoToLineDlg dlg;
 
@@ -6351,6 +6380,7 @@ void CMUSHView::OnDisplayHighlightphrase()
 {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
 CHighlightPhraseDlg dlg;
 
@@ -6497,6 +6527,7 @@ void CMUSHView::OnDisplayMultilinetrigger()
 {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
 CMultiLineTriggerDlg dlg;
 
@@ -6768,6 +6799,8 @@ CMiniWindow * CMUSHView::Mouse_Over_Miniwindow (CMUSHclientDoc* pDoc,
 
 bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
   {
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+
   // see if we moused over one of our miniwindows
 
   CMiniWindow * mw = NULL;
@@ -6777,6 +6810,8 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
 
   // find which miniwindow we are over, if any (and hotspot, if any)
   mw = Mouse_Over_Miniwindow (pDoc, point, sHotspotId, pHotspot, sMiniWindowId);
+  COptionalBoolStateGuard windowGuard
+    (mw ? &mw->m_bExecutingScript : NULL, true);
 
   // the original hotspot that we moused over, in this window (if any)
   string sOldMouseOverHotspotInThisWindow;
@@ -6804,6 +6839,13 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
                                   sMiniWindowId.c_str (),
                                   false,
                                   false);
+
+  // The global callback may replace or delete the hotspot.
+  if (mw && pHotspot)
+    {
+    HotspotMapIterator it = mw->m_Hotspots.find (sHotspotId);
+    pHotspot = it == mw->m_Hotspots.end () ? NULL : it->second;
+    }
 
   // drag-and-drop stuff
 
@@ -7013,6 +7055,8 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
 
 bool CMUSHView::Mouse_Down_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long flags)
   {
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+
   // see if we clicked over one of our miniwindows
 
   CMiniWindow * mw = NULL;
@@ -7021,6 +7065,8 @@ bool CMUSHView::Mouse_Down_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long 
   string sMiniWindowId;
 
   mw = Mouse_Over_Miniwindow (pDoc, point, sHotspotId, pHotspot, sMiniWindowId);
+  COptionalBoolStateGuard windowGuard
+    (mw ? &mw->m_bExecutingScript : NULL, true);
 
   // the original hotspot that we moused over, in this window (if any)
   string sOldMouseOverHotspotInThisWindow;
@@ -7115,6 +7161,8 @@ bool CMUSHView::Mouse_Down_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long 
 
 bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long flags)
   {
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+
   // see if we clicked over one of our miniwindows
 
   CMiniWindow * mw = NULL;
@@ -7124,6 +7172,8 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
   bool bPreviouslyInMiniwindow = false;
 
   mw = Mouse_Over_Miniwindow (pDoc, point, sHotspotId, pHotspot, sMiniWindowId);
+  COptionalBoolStateGuard windowGuard
+    (mw ? &mw->m_bExecutingScript : NULL, true);
 
   // the original hotspot that we moused over, in this window (if any)
   string sOldMouseDownHotspotInThisWindow;
@@ -7774,6 +7824,8 @@ LRESULT CMUSHView::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
 
 bool CMUSHView::Mouse_Wheel_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long delta)
   {
+  CWorldDocumentOperationGuard operationGuard (pDoc);
+
   // see if we moused over one of our miniwindows
 
   CMiniWindow * mw = NULL;
@@ -7787,6 +7839,8 @@ bool CMUSHView::Mouse_Wheel_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long
 
   if (!mw)
     return false;
+
+  COptionalBoolStateGuard windowGuard (&mw->m_bExecutingScript, true);
 
   // now, are we now over a hotspot?
   if (pHotspot)

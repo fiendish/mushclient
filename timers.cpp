@@ -85,6 +85,11 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
       }
     }
 
+  if (m_bWorldClosePending)
+    return;
+
+  CWorldDocumentOperationGuard operationGuard (this);
+
   map <string, __int64> firedTimersList;
   POSITION pos;
 
@@ -202,6 +207,9 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
             strExtraOutput
             );
 
+    if (m_bWorldClosePending)
+      return;
+
     // display any stuff sent to output window
 
     if (!strExtraOutput.IsEmpty ())
@@ -269,6 +277,9 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     }
 
 
+    if (m_bWorldClosePending)
+      return;
+
     // If they passed the wrong arguments to the timer routine, the dialog box
     // might appear, and the timer be deleted, before we get a chance to
     // do this code, in which case the timer has gone.
@@ -332,6 +343,9 @@ void CMUSHclientDoc::CheckTimers ()
     ConnectSocket();      // reconnect
     }
 
+  if (m_bWorldClosePending)
+    return;
+
   if (m_bEnableTimers)
     {
 
@@ -343,9 +357,11 @@ void CMUSHclientDoc::CheckTimers ()
 
    // Do only the plugin instances that existed at the start of this tick.
    CPluginInstanceSnapshot plugins;
-   GetPluginInstanceSnapshot (m_PluginList, plugins);
+    GetPluginInstanceSnapshot (m_PluginList, plugins);
     CheckTimerList (GetTimerMap ());
-   for (size_t iPlugin = 0; iPlugin < plugins.size (); iPlugin++)
+    if (m_bWorldClosePending)
+      return;
+    for (size_t iPlugin = 0; iPlugin < plugins.size (); iPlugin++)
       {
       m_CurrentPlugin = GetPluginInstance (
         plugins [iPlugin].m_strID,
@@ -354,6 +370,8 @@ void CMUSHclientDoc::CheckTimers ()
         continue;
       if (m_CurrentPlugin->m_bEnabled)
         CheckTimerList (GetTimerMap ());
+      if (m_bWorldClosePending)
+        return;
       } // end of doing each plugin
     m_CurrentPlugin = NULL;
     }
@@ -365,6 +383,8 @@ void CMUSHclientDoc::CheckTickTimers ()
   // timer has kicked in unexpectedly - ignore it
   if (m_CurrentPlugin)
     return;
+
+  CWorldDocumentOperationGuard operationGuard (this);
 
   // check for selection change in command window
   // I know, this is a crappy way of doing it, but the CEditView does 
@@ -382,7 +402,13 @@ void CMUSHclientDoc::CheckTickTimers ()
       }	  // end of being a CSendView
     }
 
+  if (m_bWorldClosePending)
+    return;
+
   SendToAllPluginCallbacks (ON_PLUGIN_TICK);
+
+  if (m_bWorldClosePending)
+    return;
 
   // for output window fading
   if (m_iFadeOutputBufferAfterSeconds > 0 &&

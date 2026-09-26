@@ -106,8 +106,15 @@ CChatSocket::CChatSocket(CMUSHclientDoc* pDoc)
 
 CChatSocket::~CChatSocket()
 {
+  const bool bCanNotify = m_pDoc && !m_pDoc->m_bWorldClosing;
+  CWorldDocumentOperationGuard operationGuard (bCanNotify ? m_pDoc : NULL);
+  const bool bRemovePartialFile =
+    !bCanNotify && m_bDoingFileTransfer && !m_bSendFile;
+  const CString strPartialFile = bRemovePartialFile ? m_strOurFileName : "";
 
-  StopFileTransfer (true);
+  StopFileTransfer (bCanNotify);
+  if (bRemovePartialFile)
+    CFile::Remove (strPartialFile);
 
   // cancel pending host name lookup
   if (m_hNameLookup)
@@ -119,7 +126,7 @@ CChatSocket::~CChatSocket()
 
   // if he was ever connected, we will tell our plugins he has gone
 
-  if (m_bWasConnected)
+  if (m_bWasConnected && bCanNotify)
     {
 
     // tell each plugin about the departing user
@@ -568,6 +575,7 @@ int count = Receive (buff, sizeof (buff) - 1);
 
 void CChatSocket::OnSend(int nErrorCode)
 {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
 int count; 
 
   // receive nothing if shutting down
@@ -609,19 +617,24 @@ int count;
 
 void CChatSocket::OnClose(int nErrorCode)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
+  const bool bWasConnected = m_iChatStatus == eChatConnected;
+  const CString strRemoteUserName = m_strRemoteUserName;
 
-  if (m_iChatStatus == eChatConnected)
-    m_pDoc->ChatNote (eChatSession,
-              CFormat ("Chat session to %s closed.",
-                        (LPCTSTR) m_strRemoteUserName));
-
+  // Mark closed before callbacks can reenter.
   m_iChatStatus = eChatClosed;
   m_bDeleteMe = true;
+
+  if (bWasConnected)
+    m_pDoc->ChatNote (eChatSession,
+              CFormat ("Chat session to %s closed.",
+                        (LPCTSTR) strRemoteUserName));
 
   } // end of OnClose
 
 void CChatSocket::OnConnect(int nErrorCode)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
 
   if (nErrorCode != 0)
     {
@@ -637,6 +650,9 @@ void CChatSocket::OnConnect(int nErrorCode)
   m_pDoc->ChatNote (eChatSession,
               TFormat ("Session established to %s.", 
                     (LPCTSTR) m_strServerName));
+
+  if (m_bDeleteMe || m_pDoc->m_bWorldClosePending)
+    return;
 
 CString strHostName;
 CString strAddresses;
@@ -662,15 +678,16 @@ CString strAddresses;
 
 void CChatSocket::HostNameResolved (WPARAM wParam, LPARAM lParam)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   m_hNameLookup = NULL;   // handle not needed now
 
   if (WSAGETASYNCERROR (lParam))
     {
+    m_bDeleteMe = true;
+    m_iChatStatus = eChatClosed;
     m_pDoc->ChatNote (eChatConnection,
                 TFormat ("Chat session cannot resolve host name: %s.",
                 (LPCTSTR) m_strServerName));
-    m_bDeleteMe = true;
-    m_iChatStatus = eChatClosed;
     return;
     }   // end of error in host name lookup
 
@@ -689,6 +706,7 @@ struct hostent * pHostent = (struct hostent * ) m_pGetHostStruct;
 
 void CChatSocket::MakeCall (void)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
 
   // the alleged address and port are what we actually used :)
   m_strAllegedAddress = inet_ntoa (m_ServerAddr.sin_addr);
@@ -719,6 +737,9 @@ void CChatSocket::MakeCall (void)
               TFormat ("Calling chat server at %s port %d",
                     (LPCTSTR) m_strAllegedAddress,
                     m_iAllegedPort));
+
+  if (m_bDeleteMe || m_pDoc->m_bWorldClosePending)
+    return;
 
   m_iChatStatus = eChatConnecting;
 
@@ -762,6 +783,8 @@ void CChatSocket::SendData (const CString & strText)
 
 void CChatSocket::ProcessChatMessage (const int iMessage, const CString strMessage)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
+
   if (m_bDeleteMe || m_iChatStatus != eChatConnected)
     return;
 
@@ -778,7 +801,11 @@ void CChatSocket::ProcessChatMessage (const int iMessage, const CString strMessa
                                         string (strMessage),    // message text
                                         false,
                                         true))  // stop on false response
-    return;   // false means plugin handled it                       
+    return;   // false means plugin handled it
+
+  if (m_bDeleteMe || m_iChatStatus != eChatConnected ||
+      m_pDoc->m_bWorldClosePending)
+    return;
 
 
   switch (iMessage)
@@ -835,6 +862,8 @@ void CChatSocket::SendChatMessage (const int iMessage,
                                    const CString strMessage,
                                    const long iStamp)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
+
   if (m_bDeleteMe || m_iChatStatus != eChatConnected)
     return;
 
@@ -852,6 +881,10 @@ void CChatSocket::SendChatMessage (const int iMessage,
                                         false,
                                         true)) // stop on false response
       return;   // false means plugin discarded it 
+
+  if (m_bDeleteMe || m_iChatStatus != eChatConnected ||
+      m_pDoc->m_bWorldClosePending)
+    return;
 
   if (iMessage == CHAT_SNOOP && m_bYouAreSnooping)
     m_bYouAreSnooping = false;

@@ -40,7 +40,7 @@ BOOL MakeWindowTransparent(HWND hWnd, long key, const unsigned char factor)
 	 * once, we don't need to try again. */
 	if (!initialized)
 	{
-		HMODULE hDLL = LoadLibrary ("user32");
+		HMODULE hDLL = GetModuleHandle ("user32.dll");
 
     if (hDLL)
 		  pSetLayeredWindowAttributes = 
