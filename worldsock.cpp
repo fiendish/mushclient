@@ -207,8 +207,15 @@ void CWorldSocket::OnSend(int nErrorCode)
 
 int count;
 
-   if (nErrorCode)    // had an error, give up!
+   if (m_bInClose)
       return;
+   if (nErrorCode)
+     {
+     string ().swap (m_outstanding_data);
+     ShutDownSocket (*this);
+     OnClose (nErrorCode);
+     return;
+     }
 
   // if we are in the middle of a TLS handshake, continue it
   if (pDoc->m_iConnectPhase == eConnectAwaitingSSLHandshake)
@@ -243,26 +250,34 @@ int count;
     }
   else
     {
-    count = Send (m_outstanding_data.data (), m_outstanding_data.length ());
-
-    if (count != SOCKET_ERROR)
-      pDoc->m_nBytesOut += count; // count bytes out
-
-    if (count > 0)    // good send - do rest later
-      m_outstanding_data.erase (0, count);
-    else
+    while (!m_outstanding_data.empty ())
       {
-      int nError = GetLastError ();
-      if (count == SOCKET_ERROR && nError != WSAEWOULDBLOCK)
+      const int nLength = (int) min (m_outstanding_data.length (), (size_t) INT_MAX);
+      count = Send (m_outstanding_data.data (), nLength);
+      if (count > 0)
         {
-        ShutDownSocket (*this);
-  //       m_pSocket->OnClose (nError);      // ????
-        m_outstanding_data.erase ();
-
-        }   // end of an error other than "would block"
-      } // end of an error
+        pDoc->m_nBytesOut += count;
+        m_outstanding_data.erase (0, count);
+        continue;
+        }
+      if (count == SOCKET_ERROR)
+        {
+        const int nError = GetLastError ();
+        if (nError != WSAEWOULDBLOCK)
+          {
+          string ().swap (m_outstanding_data);
+          ShutDownSocket (*this);
+          OnClose (nError);
+          return;
+          }
+        }
+      break;
+      }
     }
 
+  // Keep ordinary command capacity, but release large bursts once drained.
+  if (m_outstanding_data.empty () && m_outstanding_data.capacity () > 64 * 1024)
+    string ().swap (m_outstanding_data);
 }
 
 void CWorldSocket::OnClose(int nErrorCode)

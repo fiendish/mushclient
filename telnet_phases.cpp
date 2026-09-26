@@ -844,13 +844,9 @@ void CMUSHclientDoc::Phase_COMPRESS (const unsigned char c)
 
 // COMPRESSION - we have IAC SB COMPRESS IAC/WILL x   (MCCP v1)
 
-// we will return one of:
-//  0 - error in starting compression - close world and display strMessage
-//  1 - got IAC or unexpected input, do nothing
-//  2 - compression OK - prepare for it
-
 void CMUSHclientDoc::Phase_COMPRESS_WILL (const unsigned char c)
   {
+  m_phase = NONE;
   if (c == SE)        // end of subnegotiation
     {        
     TRACE ("<SE>");
@@ -892,31 +888,32 @@ void CMUSHclientDoc::Phase_COMPRESS_WILL (const unsigned char c)
   
   // not SE? error
   TRACE1 ("<%d>", c);
-  m_phase = NONE;
   } // end of Phase_COMPRESS_WILL
 
 // in UTF-8 mode, if we get a "bad" UTF-8 character we assume it is standard ANSI
 // and convert it from ANSI into Unicode, and then into UTF-8 and output that instead
 void CMUSHclientDoc::OutputBadUTF8characters (void)
   {
-  for (int i = 0; m_UTF8Sequence [i]; i++)
+  // AddToLine can run callbacks that overwrite the parser's shared buffer.
+  unsigned char sequence [sizeof m_UTF8Sequence];
+  memcpy (sequence, m_UTF8Sequence, sizeof sequence);
+  m_phase = NONE;
+  m_iUTF8BytesLeft = 0;
+  m_UTF8Sequence [0] = 0;
+  for (int i = 0; sequence [i]; i++)
     {
     // convert ANSI to Unicode:
     WCHAR sUnicode [1];
-    MultiByteToWideChar (CP_THREAD_ACP, MB_PRECOMPOSED, (const char *) &m_UTF8Sequence [i], 1, sUnicode, 1); 
+    MultiByteToWideChar (CP_THREAD_ACP, MB_PRECOMPOSED, (const char *) &sequence [i], 1, sUnicode, 1);
     // now convert Unicode to UTF8
     char sOutput [5];
     memset (sOutput, 0, sizeof sOutput);  // ensure trailing null
     WideCharToMultiByte (CP_UTF8, 0, sUnicode, 1, sOutput, sizeof sOutput, NULL, NULL);
     if (!AddToLine (sOutput, 0))
-      {
-      m_phase = NONE;
       return;
-      }
-    m_cLastChar = m_UTF8Sequence [i];
+    m_cLastChar = sequence [i];
     }
 
-  m_phase = NONE;
   }  // end of CMUSHclientDoc::OutputBadUTF8characters
 
 // test data: testing \C5\87\C4\A8\C4\86\C4\B6 Gammon and now: \C6 <---
@@ -955,12 +952,12 @@ void CMUSHclientDoc::Phase_UTF8 (const unsigned char c)
     return;
     }
 
-  // valid UTF8 sequence, add to line
-  if (!AddToLine ((const char *) m_UTF8Sequence, 0))
-    {
-    m_phase = NONE;
-    return;
-    }
+  // AddToLine can run callbacks that overwrite the parser's shared buffer.
+  unsigned char sequence [sizeof m_UTF8Sequence];
+  memcpy (sequence, m_UTF8Sequence, sizeof sequence);
   m_phase = NONE;
+  m_iUTF8BytesLeft = 0;
+  m_UTF8Sequence [0] = 0;
+  AddToLine ((const char *) sequence, 0);
 
   }  // end of CMUSHclientDoc::Phase_UTF8

@@ -700,19 +700,28 @@ void CMUSHclientDoc::OutputOutstandingLines (void)
 
   m_bNotesInRGB = true;
 
-  // output saved lines
-
-  list<CPaneStyle>::iterator it;
-  
-  for (it = m_OutstandingLines.begin (); it != m_OutstandingLines.end (); it++)
+  // Tell can drain the shared queue recursively; detach this batch to keep
+  // its text and iterators valid across callbacks.
+  list<CPaneStyle> outstandingLines;
+  outstandingLines.swap (m_OutstandingLines);
+  try
     {
-    m_iNoteColourFore = it->m_cText;
-    m_iNoteColourBack = it->m_cBack;
-    m_iNoteStyle = it->m_iStyle;
-    Tell (it->m_sText.c_str ());
+    while (!outstandingLines.empty ())
+      {
+      const CPaneStyle & style = outstandingLines.front ();
+      m_iNoteColourFore = style.m_cText;
+      m_iNoteColourBack = style.m_cBack;
+      m_iNoteStyle = style.m_iStyle;
+      Tell (style.m_sText.c_str ());
+      outstandingLines.pop_front ();
+      }
     }
-
-  m_OutstandingLines.clear ();
+  catch (...)
+    {
+    // Retry unfinished output before anything queued by callbacks.
+    m_OutstandingLines.splice (m_OutstandingLines.begin (), outstandingLines);
+    throw;
+    }
 
   } // end of CMUSHclientDoc::OutputOutstandingLines
 
@@ -1390,7 +1399,19 @@ CString str = strText;
 
 void CMUSHclientDoc::ReceiveMsg()
 {
-char buff [9000];   // must be less than COMPRESS_BUFFER_LENGTH or it won't fit
+// Also holds the uncompressed tail of a completed stream, which can include
+// bytes retained from an earlier socket read.
+char buff [COMPRESS_BUFFER_LENGTH];
+const int iReceiveSize = 8999;
+CWorldSocket * const pReceivingSocket = m_pSocket;
+if (!pReceivingSocket)
+  return;
+const __int64 iSocketNumber = pReceivingSocket->m_iSocketNumber;
+const auto IsCurrentConnection = [&] () -> bool
+  {
+  return !m_bWorldClosePending && m_pSocket == pReceivingSocket &&
+         m_pSocket && m_pSocket->m_iSocketNumber == iSocketNumber;
+  };
 
   // if we are in the middle of a TLS handshake, continue it
   if (m_iConnectPhase == eConnectAwaitingSSLHandshake)
@@ -1404,7 +1425,7 @@ int count;
   // SSL-aware receive
   if (m_pSSL && m_bSSL_Connected)
     {
-    count = SSL_read (m_pSSL, buff, sizeof (buff) - 1);
+    count = SSL_read (m_pSSL, buff, iReceiveSize);
     if (count <= 0)
       {
       int ssl_err = SSL_get_error (m_pSSL, count);
@@ -1435,10 +1456,14 @@ int count;
     }
   else
     {
-    count = m_pSocket->Receive (buff, sizeof (buff) - 1);
+    count = m_pSocket->Receive (buff, iReceiveSize);
 
     if (count == SOCKET_ERROR)
       {
+      const int nError = CAsyncSocket::GetLastError ();
+      if (nError == WSAEWOULDBLOCK)
+        return;
+
       // don't delete the socket if we are already closing it
       if (m_iConnectPhase == eConnectDisconnecting)
          return;
@@ -1446,7 +1471,7 @@ int count;
       if (m_pSocket)
         {
         CWorldSocket * pClosingSocket = m_pSocket;
-        pClosingSocket->OnClose (GetLastError ());
+        pClosingSocket->OnClose (nError);
         if (m_pSocket == pClosingSocket)
           {
           m_pSocket = NULL;
@@ -1461,6 +1486,8 @@ int count;
     }
 
   Frame.CheckTimerFallback ();   // see if time is up for timers to fire
+  if (!IsCurrentConnection ())
+    return;
 
 //  TRACE1 ("Phase now = %i\n", m_iConnectPhase);
 //  TRACE2 ("Buff [0] = %i, Buff [1] = %i\n",
@@ -1543,6 +1570,8 @@ int count;
       if (m_logfile && m_bLogRaw)  // raw log if wanted
         WriteToLog (buff, count);  
       DisplayMsg (buff, count, 0);
+      if (!IsCurrentConnection () || m_iConnectPhase != eConnectConnectedToMud)
+        return;
       }
 
     // if that didn't throw us into compressed, mode, just exit
@@ -1550,10 +1579,6 @@ int count;
       break;    // still not compressed - exit
 
     // is compressed now
-
-    // give up if nothing to display
-    if (m_zCompress.avail_in <= 0)
-       break;    // no data to process
 
     LARGE_INTEGER start, 
                   finish;
@@ -1566,39 +1591,11 @@ int count;
       finish.QuadPart = 0;
       }
 
-    // decompress it
-    int iCompressResult;
-    do {
-       iCompressResult = inflate (&m_zCompress, Z_SYNC_FLUSH);
-
-       // buffer too small? (highly compressed text, huh?)
-       // make larger, try again - version 4.74
-       // See: http://www.gammon.com.au/forum/?id=11160 
-       if (iCompressResult == Z_BUF_ERROR)
-         {
-         const int nNewBufferSize =
-           m_nCompressionOutputBufferSize + COMPRESS_BUFFER_LENGTH;
-         Bytef * pNewCompressOutput =
-           (Bytef *) realloc (m_CompressOutput, nNewBufferSize);
-
-         if (pNewCompressOutput == NULL)
-           {
-            OnConnectionDisconnect ();    // close the world
-            free (m_CompressInput);       // may as well get rid of compression input as well
-            m_CompressInput = NULL;
-            TMessageBox ("Insufficient memory to decompress MCCP text.", MB_ICONEXCLAMATION);
-            return;
-           }  // end of cannot get more memory
-
-         const uInt nBytesWritten =
-           m_nCompressionOutputBufferSize - m_zCompress.avail_out;
-         m_CompressOutput = pNewCompressOutput;
-         m_nCompressionOutputBufferSize = nNewBufferSize;
-         m_zCompress.next_out = m_CompressOutput + nBytesWritten;
-         m_zCompress.avail_out += COMPRESS_BUFFER_LENGTH;
-         }  // end of Z_BUF_ERROR
-
-      } while (iCompressResult == Z_BUF_ERROR);
+    // zlib can have pending output even after consuming all input.
+    const uInt nInputBefore = m_zCompress.avail_in;
+    m_zCompress.next_out = m_CompressOutput;
+    m_zCompress.avail_out = m_nCompressionOutputBufferSize;
+    const int iCompressResult = inflate (&m_zCompress, Z_SYNC_FLUSH);
 
     if (App.m_iCounterFrequency)
       {
@@ -1607,14 +1604,15 @@ int count;
       }
 
     // error?
-    if (iCompressResult < 0)
+    if (iCompressResult != Z_OK && iCompressResult != Z_STREAM_END &&
+        iCompressResult != Z_BUF_ERROR)
       {
-      char * pMsg = m_zCompress.msg;    // closing may clear the message
+      CString strError = m_zCompress.msg ? m_zCompress.msg : "";
 
       OnConnectionDisconnect ();    // close the world
-      if (pMsg)
+      if (!strError.IsEmpty ())
         UMessageBox (TFormat ("Could not decompress text from MUD: %s",
-                          (LPCTSTR) pMsg), MB_ICONEXCLAMATION);
+                          (LPCTSTR) strError), MB_ICONEXCLAMATION);
       else
         UMessageBox (TFormat ("Could not decompress text from MUD: %i",
                           iCompressResult), MB_ICONEXCLAMATION);
@@ -1627,6 +1625,9 @@ int count;
     // stats - count uncompressed bytes
     m_nTotalUncompressed += iLength;
 
+    m_zCompress.next_out = m_CompressOutput;
+    m_zCompress.avail_out = m_nCompressionOutputBufferSize;
+
     if (iLength > 0)
       {
       // display it - hopefully we won't get a compression code in the middle of our
@@ -1636,8 +1637,8 @@ int count;
         WriteToLog ((LPCTSTR) m_CompressOutput, iLength);  
 
       DisplayMsg ((LPCTSTR) m_CompressOutput, iLength, 0);    // send uncompressed data to screen
-      m_zCompress.next_out = m_CompressOutput;      // reset for more output
-      m_zCompress.avail_out = m_nCompressionOutputBufferSize;
+      if (!IsCurrentConnection () || m_iConnectPhase != eConnectConnectedToMud)
+        return;
       }
 
     // if end of stream, turn decompression off
@@ -1647,7 +1648,12 @@ int count;
       // put remaining stuff back into buff
       memcpy (buff, m_zCompress.next_in, m_zCompress.avail_in);
       count = m_zCompress.avail_in;
+      m_zCompress.avail_in = 0;
+      if (count == 0)
+        break;
       }   // end of Z_STREAM_END
+    else if (iLength == 0 && m_zCompress.avail_in == nInputBefore)
+      break;  // Z_BUF_ERROR can mean that more input is needed.
 
     }   // end of decompression loop
 
@@ -2977,6 +2983,12 @@ CString strLine (lpszText, size);
               {
               p++;    // skip SE  (normally done at end of loop)
               size--; // one less of these
+              if (size > COMPRESS_BUFFER_LENGTH)
+                {
+                OnConnectionDisconnect ();
+                TMessageBox ("Compressed input packet exceeds buffer capacity.", MB_ICONEXCLAMATION);
+                return;
+                }
               if (size)  // copy compressed data to compression buffer
                 memmove (m_CompressInput, p, size);
               m_zCompress.next_in = m_CompressInput;
@@ -2999,6 +3011,12 @@ CString strLine (lpszText, size);
               {
               p++;    // skip SE  (normally done at end of loop)
               size--; // one less of these
+              if (size > COMPRESS_BUFFER_LENGTH)
+                {
+                OnConnectionDisconnect ();
+                TMessageBox ("Compressed input packet exceeds buffer capacity.", MB_ICONEXCLAMATION);
+                return;
+                }
               if (size)  // copy compressed data to compression buffer
                 memmove (m_CompressInput, p, size);
               m_zCompress.next_in = m_CompressInput;

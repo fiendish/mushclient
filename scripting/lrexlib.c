@@ -374,7 +374,6 @@ const char pcre_typename[] = "pcre_regex";
 typedef struct {
   pcre *pr;
   pcre_extra *extra;
-  int *match;
   int ncapt;
   const unsigned char *tables;
 } pcre2;      /* a better name is needed */
@@ -425,8 +424,6 @@ static int Lpcre_comp(lua_State *L)
   if(error) L_lua_error(L, error);
 
   pcre_fullinfo(ud->pr, ud->extra, PCRE_INFO_CAPTURECOUNT, &ud->ncapt);
-  /* need (2 ints per capture, plus one for substring match) * 3/2 */
-  ud->match = (int *) Lmalloc(L, (ud->ncapt + 1) * 3 * sizeof(int));
 
   return 1;
 }
@@ -440,17 +437,16 @@ static void Lpcre_getargs(lua_State *L, pcre2 **pud, const char **text,
 }
 
 typedef void (*Lpcre_push_matches)
-  (lua_State *L, const char *text, pcre2 * ud);
+  (lua_State *L, const char *text, pcre2 * ud, const int *match);
 
 static void Lpcre_push_substrings
-  (lua_State *L, const char *text, pcre2 * ud)
+  (lua_State *L, const char *text, pcre2 * ud, const int *match)
 {
   int i;
   int namecount;
   unsigned char *name_table;
   int name_entry_size;
   unsigned char *tabptr;
-  const int *match = ud->match;
 
   lua_newtable(L);
   for (i = 1; i <= ud->ncapt; i++) {
@@ -506,7 +502,7 @@ static void Lpcre_push_substrings
 }
 
 static void Lpcre_push_offsets
-  (lua_State *L, const char *text, pcre2 * ud)
+  (lua_State *L, const char *text, pcre2 * ud, const int *match)
 {
   int i, j, k;
   if(text) {
@@ -515,10 +511,10 @@ static void Lpcre_push_offsets
   lua_newtable(L);
   for (i=1, j=1; i <= ud->ncapt; i++) {
     k = i * 2;
-    if (ud->match[k] >= 0) {
-      lua_pushnumber(L, ud->match[k] + 1);
+    if (match[k] >= 0) {
+      lua_pushnumber(L, match[k] + 1);
       lua_rawseti(L, -2, j++);
-      lua_pushnumber(L, ud->match[k+1]);
+      lua_pushnumber(L, match[k+1]);
       lua_rawseti(L, -2, j++);
     }
     else {
@@ -599,7 +595,7 @@ static int callout_function (pcre_callout_block * cb)
   }
 
 static int execute_regex (lua_State *L, pcre2 *ud, const char *text,
-                          int length, int startoffset, int eflags, int which)
+                          int length, int startoffset, int eflags, int which, int *match)
   {
   int (*saved_callout)(pcre_callout_block *) = pcre_callout;
   pcre_callout_context context;
@@ -634,7 +630,7 @@ static int execute_regex (lua_State *L, pcre2 *ud, const char *text,
     }
   pcre_callout = with_callout ? callout_function : NULL;
   result = pcre_exec(ud->pr, ud->extra, text, length, startoffset, eflags,
-                    ud->match, (ud->ncapt + 1) * 3);
+                    match, (ud->ncapt + 1) * 3);
   pcre_callout = saved_callout;
   if (with_callout)
     {
@@ -655,15 +651,19 @@ static int Lpcre_match_generic(lua_State *L, Lpcre_push_matches push_matches)
   size_t elen;
   int startoffset;
   int eflags = luaL_optint(L, 4, 0);
+  int *match;
 
   Lpcre_getargs(L, &ud, &text, &elen);
   startoffset = get_startoffset(L, 3, elen);
 
-  res = execute_regex(L, ud, text, (int)elen, startoffset, eflags, 5);
+  lua_settop(L, 5);
+  /* Lua owns each call's offsets; callbacks and finalizers can reuse ud. */
+  match = (int *)lua_newuserdata(L, (ud->ncapt + 1) * 3 * sizeof(int));
+  res = execute_regex(L, ud, text, (int)elen, startoffset, eflags, 5, match);
   if (res >= 0) {
-    lua_pushnumber(L, ud->match[0] + 1);
-    lua_pushnumber(L, ud->match[1]);
-    (*push_matches)(L, text, ud);
+    lua_pushnumber(L, match[0] + 1);
+    lua_pushnumber(L, match[1]);
+    (*push_matches)(L, text, ud, match);
     return 3;
   }
   return 0;
@@ -683,41 +683,69 @@ static int Lpcre_gmatch(lua_State *L)
 {
   int res;
   size_t len;
-  int nmatch = 0, limit = 0;
+  int nmatch = 0;
   const char *text;
   pcre2 *ud;
   int maxmatch = luaL_optint(L, 4, 0);
   int eflags = luaL_optint(L, 5, 0);
-  int startoffset = 0;
+  int startoffset = 0, retry_empty = 0;
+  int *match;
+  unsigned long options;
+  int newline;
+  const int newline_flags = PCRE_NEWLINE_CR | PCRE_NEWLINE_LF | PCRE_NEWLINE_ANY;
   Lpcre_getargs(L, &ud, &text, &len);
   luaL_checktype(L, 3, LUA_TFUNCTION);
+  lua_settop(L, 6);
+  match = (int *)lua_newuserdata(L, (ud->ncapt + 1) * 3 * sizeof(int));
+  pcre_fullinfo(ud->pr, ud->extra, PCRE_INFO_OPTIONS, &options);
+  newline = (eflags & newline_flags) ? (eflags & newline_flags) :
+            (int)(options & newline_flags);
+  if (!newline) {
+    int configured;
+    pcre_config(PCRE_CONFIG_NEWLINE, &configured);
+    newline = configured == 3338 ? PCRE_NEWLINE_CRLF :
+              configured == -1 ? PCRE_NEWLINE_ANY :
+              configured == -2 ? PCRE_NEWLINE_ANYCRLF : 0;
+  }
 
-  if(maxmatch > 0) /* this must be stated in the docs */
-    limit = 1;
+  while (maxmatch <= 0 || nmatch < maxmatch) {
+    const int flags = eflags | (retry_empty ? PCRE_NOTEMPTY_ATSTART | PCRE_ANCHORED : 0);
+    res = execute_regex(L, ud, text, (int)len, startoffset, flags, 6, match);
+    if (res < 0) {
+      if (res != PCRE_ERROR_NOMATCH || !retry_empty) break;
+      /* Try a nonempty alternative first, then advance one complete character. */
+      if ((size_t)startoffset >= len) break;
+      if (text[startoffset] == '\r' && (size_t)startoffset + 1 < len &&
+          text[startoffset + 1] == '\n' &&
+          (newline == PCRE_NEWLINE_CRLF || newline == PCRE_NEWLINE_ANY ||
+           newline == PCRE_NEWLINE_ANYCRLF))
+        startoffset += 2;
+      else {
+        ++startoffset;
+        if (options & PCRE_UTF8)
+          while ((size_t)startoffset < len && (text[startoffset] & 0xc0) == 0x80)
+            ++startoffset;
+      }
+      retry_empty = 0;
+      continue;
+    }
 
-  while (!limit || nmatch < maxmatch) 
     {
-
-    res = execute_regex(L, ud, text, (int)len, startoffset, eflags, 6);
-    if (res >= 0) 
-      {
-      // warning - the function called may change pcre_callout to NULL
-      //   because a line written may trigger "process previous line" which
-      //   will probably call regexp to match triggers
-      int (*f)(pcre_callout_block *) = pcre_callout;
-
-      nmatch++;
-      lua_pushvalue(L, 3);
-      lua_pushlstring(L, text + ud->match[0], ud->match[1] - ud->match[0]);
-      Lpcre_push_substrings(L, text, ud);
-      lua_call(L, 2, 1);
-      if(lua_toboolean(L, -1))
-        break;
-      lua_pop(L, 1);
-      startoffset = ud->match[1];
-      pcre_callout = f;
-    } else
-      break;
+    int status;
+    int (*saved_callout)(pcre_callout_block *) = pcre_callout;
+    ++nmatch;
+    startoffset = match[1];
+    retry_empty = match[0] == match[1];
+    lua_pushvalue(L, 3);
+    lua_pushlstring(L, text + match[0], match[1] - match[0]);
+    Lpcre_push_substrings(L, text, ud, match);
+    status = lua_pcall(L, 2, 1, 0);
+    pcre_callout = saved_callout;
+    if (status) return lua_error(L);
+    if (lua_toboolean(L, -1)) break;
+    lua_pop(L, 1);
+    if (retry_empty && (size_t)startoffset >= len) break;
+    }
   }
   lua_pushnumber(L, nmatch);
   return 1;
@@ -730,7 +758,6 @@ static int Lpcre_gc (lua_State *L)
     if(ud->pr)      pcre_free(ud->pr);
     if(ud->extra)   pcre_free(ud->extra);
     if(ud->tables)  pcre_free((void *)ud->tables);
-    if(ud->match)   free(ud->match);
   }
   return 0;
 }
