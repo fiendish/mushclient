@@ -47,6 +47,7 @@ void LoadMapDirections (void)
 
 void CMUSHclientDoc::OnGameMapper() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 CMapDlg dlg;
 
 
@@ -214,6 +215,7 @@ void CMUSHclientDoc::AddToMap (CString str)
 
 void CMUSHclientDoc::OnGameDomapperspecial() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 CMapMoveDlg dlg;
 
   dlg.m_bSendToMUD = true;
@@ -257,6 +259,7 @@ void CMUSHclientDoc::OnUpdateGameDomapperspecial(CCmdUI* pCmdUI)
 
 void CMUSHclientDoc::OnGameDomappercomment() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 CMapCommentDlg dlg;
   
   if (dlg.DoModal () != IDOK)

@@ -1,0 +1,250 @@
+// Exact production methods with native CString and modeled callback ownership.
+#include <afxwin.h>
+#include <afxdisp.h>
+#include <cassert>
+#include <cstdarg>
+#include <cstring>
+#include <functional>
+#include <iostream>
+#include <list>
+#include <map>
+#include <new>
+#include <stdexcept>
+#include <string>
+using std::map;
+using std::string;
+constexpr int MAX_SOUND_BUFFERS = 10;
+constexpr DWORD DSBSTATUS_PLAYING = 1, DSBSTATUS_LOOPING = 4;
+constexpr long eOK = 0, eBadParameter = 1;
+constexpr int eNotepadPacketDebug = 0;
+constexpr int NOTE_OR_COMMAND = 3, eInputFromServer = 1, NORMAL = 0;
+const string ON_PLUGIN_PACKET_DEBUG = "OnPluginPacketDebug";
+const string ON_PLUGIN_PACKET_RECEIVED = "OnPluginPacketReceived";
+#define ENDLINE "\r\n"
+#define NUMITEMS(a) (sizeof(a) / sizeof((a)[0]))
+#define DELETE_LIST(a) do { for (auto* value : (a)) delete value; (a).clear(); } while (0)
+
+CString TFormat(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  CString result;
+  result.FormatV(format, args);
+  va_end(args);
+  return result;
+}
+CString CFormat(const char* format, int width, const char* a, const char* b, const char* end) {
+  CString result;
+  result.Format(format, width, a, b, end);
+  return result;
+}
+const char* TranslateTime(const char* text) { return text; }
+
+struct Resource {
+  static int live;
+  int value = 123;
+  Resource() { ++live; }
+  ~Resource() { assert(value == 123); --live; }
+};
+int Resource::live = 0;
+template<class T> class CValueStateGuard {
+  T& value;
+  T saved;
+public:
+  CValueStateGuard(T& slot, T replacement) : value(slot), saved(slot) { value = replacement; }
+  ~CValueStateGuard() { value = saved; }
+};
+struct SoundBuffer : Resource {
+  DWORD status = DSBSTATUS_PLAYING;
+  HRESULT GetStatus(DWORD* result) { assert(value == 123); *result = status; return S_OK; }
+  void Stop() { assert(value == 123); status = 0; }
+  void Release() { assert(value == 123); delete this; }
+};
+struct { void* m_pDirectSoundObject = reinterpret_cast<void*>(1);
+         void* m_pDirectSoundPrimaryBuffer = reinterpret_cast<void*>(1); } App;
+struct TimerWindow { void DestroyWindow() {} };
+struct UDPsocket {};
+struct CPlugin {
+  std::function<void()> close;
+  explicit CPlugin(std::function<void()> f) : close(f) {}
+  ~CPlugin() { close(); }
+};
+using PluginListIterator = std::list<CPlugin*>::iterator;
+static __int64 nextSocket = 0;
+struct CWorldSocket {
+  __int64 m_iSocketNumber = ++nextSocket;
+  SOCKET m_hSocket = 42;
+  bool m_bInClose = false;
+  string m_outstanding_data;
+  int sends = 0;
+  void OnSend(int) { ++sends; }
+};
+void ShutDownSocket(CWorldSocket& socket) { socket.m_hSocket = INVALID_SOCKET; }
+
+class CMUSHclientDoc {
+public:
+  CWorldSocket* m_pSocket = nullptr;
+  CWorldSocket* m_pChatListenSocket = nullptr;
+  TimerWindow* m_pTimerWnd = nullptr;
+  void* m_hNameLookup = nullptr;
+  char* m_pGetHostStruct = nullptr;
+  map<int, UDPsocket*> m_UDPsocketMap;
+  std::list<CWorldSocket*> m_ChatList;
+  std::list<CPlugin*> m_PluginList;
+  SoundBuffer* m_pDirectSoundSecondaryBuffer[MAX_SOUND_BUFFERS] = {};
+  Resource* m_font[4] = {};
+  Resource* m_input_font = nullptr;
+  Resource* m_MapFailureRegexp = nullptr;
+  bool m_bDebugIncomingPackets = false, m_bWorldClosePending = false;
+  int activeOperations = 0;
+  __int64 m_iOutputPacketCount = 0, m_nBytesOut = 0;
+  CString m_mush_name = "fixture";
+  struct Line { __int64 nCreationNumber = 1; };
+  Line* m_pCurrentLine = nullptr;
+  long m_total_lines = 0;
+  int* m_pLinePositions = reinterpret_cast<int*>(1);
+  __int64 m_iInputPacketCount = 0;
+  unsigned short m_iCurrentActionSource = 0;
+  int m_iNoteStyle = 0;
+  string parsed;
+  std::function<void()> debug, finalizer;
+  int debugLines = 0, logCloses = 0, scriptCloses = 0;
+  ~CMUSHclientDoc();
+  void BeginProgressOperation() { ++activeOperations; }
+  void EndProgressOperation() { assert(activeOperations > 0); --activeOperations; }
+  void CloseLog() { ++logCloses; }
+  void DisableScripting() { ++scriptCloses; if (finalizer) finalizer(); }
+  bool SendToFirstPluginCallbacks(const string&, const CString&) {
+    ++debugLines;
+    if (debug) debug();
+    return true;
+  }
+  void AppendToTheNotepad(const CString&, const CString&, bool, int) {}
+  void Debug_Packets(LPCTSTR, LPCTSTR, int, __int64);
+  void SendPacket(const char*, int);
+  void ReleaseLookupForDisconnect();
+  void DisplayMsg(LPCTSTR, int, int, bool = false);
+  void SendToAllPluginCallbacksRtn(const string&, CString&) {}
+  long StopSound(short);
+  long GetSoundStatus(short);
+};
+@GUARD@
+@METHODS@
+
+static void packetCase(const string& name) {
+  CMUSHclientDoc doc;
+  doc.m_pSocket = new CWorldSocket;
+  doc.m_bDebugIncomingPackets = name != "packet-normal";
+  const string payload("command\0with-binary\r\n", 21);
+  const string nested = "nested\r\n";
+  char* borrowed = nullptr;
+  const char* data = payload.data();
+  bool once = false;
+  if (name == "packet-buffer") {
+    borrowed = new char[payload.size()];
+    memcpy(borrowed, payload.data(), payload.size());
+    data = borrowed;
+  }
+  if (name == "packet-closing")
+    doc.m_pSocket->m_bInClose = true;
+  doc.debug = [&] {
+    if (once) return;
+    once = true;
+    if (name == "packet-disconnect") {
+      delete doc.m_pSocket;
+      doc.m_pSocket = nullptr;
+    } else if (name == "packet-reconnect") {
+      auto* replacement = new CWorldSocket;
+      delete doc.m_pSocket;
+      doc.m_pSocket = replacement;
+    } else if (name == "packet-reuse") {
+      auto* socket = doc.m_pSocket;
+      socket->~CWorldSocket();
+      new (socket) CWorldSocket;
+    } else if (name == "packet-buffer") {
+      delete[] borrowed;
+      borrowed = nullptr;
+    } else if (name == "packet-close-world") {
+      assert(doc.activeOperations > 0);
+      doc.m_bWorldClosePending = true;
+    } else if (name == "packet-close-handle") {
+      doc.m_pSocket->m_hSocket = INVALID_SOCKET;
+    } else if (name == "packet-nested") {
+      doc.SendPacket(nested.data(), static_cast<int>(nested.size()));
+    } else if (name == "packet-throw") {
+      throw std::runtime_error("test callback");
+    }
+  };
+  bool caught = false;
+  try { doc.SendPacket(data, static_cast<int>(payload.size())); }
+  catch (const std::runtime_error&) { caught = true; }
+  assert(caught == (name == "packet-throw"));
+  assert(doc.activeOperations == 0);
+  delete[] borrowed;
+  const bool sent = name == "packet-normal" || name == "packet-buffer" || name == "packet-nested";
+  if (doc.m_pSocket) {
+    assert(doc.m_pSocket->m_outstanding_data == (sent ? (name == "packet-nested" ? nested + payload : payload) : ""));
+    assert(doc.m_pSocket->sends == (sent ? (name == "packet-nested" ? 2 : 1) : 0));
+  } else assert(name == "packet-disconnect");
+  assert(doc.m_nBytesOut == (sent ? payload.size() + (name == "packet-nested" ? nested.size() : 0) : 0));
+  if (name == "packet-normal" || name == "packet-closing") assert(doc.debugLines == 0);
+}
+
+static void incomingCase() {
+  CMUSHclientDoc doc;
+  doc.m_bDebugIncomingPackets = true;
+  const string payload(128, 'a');
+  char* borrowed = new char[payload.size()];
+  memcpy(borrowed, payload.data(), payload.size());
+  doc.debug = [&] { delete[] borrowed; borrowed = nullptr; };
+  doc.DisplayMsg(borrowed, static_cast<int>(payload.size()), 0);
+  assert(doc.parsed == payload && borrowed == nullptr);
+}
+
+static void shutdownCase(const string& name) {
+  auto* doc = new CMUSHclientDoc;
+  doc->m_pDirectSoundSecondaryBuffer[0] = new SoundBuffer;
+  for (auto& font : doc->m_font) font = new Resource;
+  doc->m_input_font = new Resource;
+  doc->m_MapFailureRegexp = new Resource;
+  if (name == "shutdown-lookup") doc->m_pGetHostStruct = new char[1024];
+  int callbacks = 0;
+  auto cleanup = [&, doc] {
+    ++callbacks;
+    if (name == "shutdown-lookup") {
+      doc->ReleaseLookupForDisconnect();
+      assert(doc->m_pGetHostStruct == nullptr && doc->m_hNameLookup == nullptr);
+    }
+    if (name == "shutdown-sound" || name == "shutdown-replace" || name == "shutdown-finalizer") {
+      assert(doc->GetSoundStatus(1) == 1);
+      assert(doc->StopSound(0) == eOK);
+      assert(doc->GetSoundStatus(1) == -2);
+      if (name != "shutdown-sound")
+        doc->m_pDirectSoundSecondaryBuffer[0] = new SoundBuffer;
+    }
+    if (name == "shutdown-font" || name == "shutdown-finalizer") {
+      for (auto& font : doc->m_font) { delete font; font = new Resource; }
+      delete doc->m_input_font;
+      doc->m_input_font = new Resource;
+    }
+    if (name == "shutdown-mapper" || name == "shutdown-finalizer")
+      assert(doc->m_MapFailureRegexp->value == 123);
+  };
+  doc->m_PluginList.push_back(new CPlugin(cleanup));
+  if (name == "shutdown-finalizer") doc->finalizer = cleanup;
+  delete doc;
+  assert(callbacks == (name == "shutdown-finalizer" ? 2 : 1));
+  assert(Resource::live == 0);
+}
+
+int main(int argc, char** argv) {
+  assert(argc == 2);
+  if (!AfxWinInit(GetModuleHandle(nullptr), nullptr, GetCommandLine(), 0)) return 2;
+  const string name = argv[1];
+  for (int cycle = 0; cycle < 1000; ++cycle) {
+    if (name == "incoming-buffer") incomingCase();
+    else if (name.find("packet-") == 0) packetCase(name);
+    else shutdownCase(name);
+    assert(Resource::live == 0);
+  }
+  std::cout << "PASS: " << name << " (1000 cycles)\n";
+}

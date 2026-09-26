@@ -2382,6 +2382,9 @@ void CSendView::OnDisplayBookmarkselection()
 
 void CSendView::OnInputGlobalchange() 
 {
+CMUSHclientDoc* pDoc = GetDocument();
+ASSERT_VALID(pDoc);
+CWorldDocumentOperationGuard operationGuard (pDoc);
 int nStartChar;
 int nEndChar;
 CString strCurrent;
@@ -2486,6 +2489,7 @@ void CSendView::OnEditGeneratecharactername()
 {
 	CMUSHclientDoc* pDoc = GetDocument();
 	ASSERT_VALID(pDoc);
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
   CString strName = GenerateName ();
 

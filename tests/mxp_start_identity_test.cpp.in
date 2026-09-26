@@ -9,7 +9,11 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#ifndef _MSC_VER
 using __int64 = long long;
+#endif
+using SOCKET = int;
+using std::string;
 using COLORREF = unsigned;
 using POSITION = void*;
 using std::vector;
@@ -108,7 +112,15 @@ struct CElement {
 struct CMUSHclientDoc;
 static bool BuildCustomAtomicArguments(CMUSHclientDoc*,CString,CElement*,CElementItem*,CArgumentList&,CArgumentList&);
 static CString BuildAtomicCallbackArguments(CArgumentList&) { return "arguments"; }
-struct Socket { std::string m_outstanding_data; int sends=0; void OnSend(int) { ++sends; } };
+struct Socket {
+  std::string m_outstanding_data;
+  int sends=0;
+  __int64 m_iSocketNumber=++serial;
+  SOCKET m_hSocket=1;
+  bool m_bInClose=false;
+  void OnSend(int) { ++sends; }
+};
+using CWorldSocket = Socket;
 struct CMUSHclientDoc;
 struct COutputAppendTransaction {
   CMUSHclientDoc* m_pDoc;
@@ -138,6 +150,10 @@ struct CMUSHclientDoc {
   unsigned short m_iFlags=0;
   unsigned m_iForeColour=7, m_iBackColour=0;
   bool m_bDebugIncomingPackets=true;
+  bool m_bWorldClosePending=false;
+  int activeOperations=0;
+  void BeginProgressOperation() { ++activeOperations; }
+  void EndProgressOperation() { --activeOperations; }
   int m_iOutputPacketCount=0, m_nBytesOut=0, diagnostics=0, argumentChecks=0;
   Socket socket;
   Socket* m_pSocket=&socket;
@@ -185,6 +201,7 @@ static bool BuildCustomAtomicArguments(CMUSHclientDoc* d,CString,CElement*,CElem
   d->events.push_back("build:"+item->pAtomicElement->strName); return true;
 }
 @PREPARE_STYLE@
+@WORLD_GUARD@
 @SEND_PACKET@
 @REMEMBER_STYLE@
 @NOTE_ADD_STYLE@

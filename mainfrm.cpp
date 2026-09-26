@@ -49,7 +49,53 @@ CTime         timeLastTimerFired;       // otherwise
 
 // for OnPluginTick
 LARGE_INTEGER hp_timeLastTickFired;     // if we have high-resolution timer
-CTime         timeLastTickFired;        // otherwise                       
+CTime         timeLastTickFired;        // otherwise
+
+// Timer callbacks can close other worlds, invalidating document-list iterators.
+class CWorldTimerDocumentSnapshot
+  {
+  public:
+    CWorldTimerDocumentSnapshot ()
+      {
+      for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+        {
+        CMUSHclientDoc * pDoc =
+          (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+        m_documents.push_back
+          (CWorldDocumentIdentity (pDoc, pDoc->m_iUniqueDocumentNumber));
+        }
+      }
+
+    size_t GetCount () const { return m_documents.size (); }
+
+    CMUSHclientDoc * GetLiveAt (const size_t i) const
+      {
+      const CWorldDocumentIdentity & identity = m_documents [i];
+      for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+        {
+        CMUSHclientDoc * pDoc =
+          (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
+        if (pDoc == identity.m_pDocument &&
+            pDoc->m_iUniqueDocumentNumber == identity.m_iDocumentNumber)
+          return pDoc;
+        }
+      return NULL;
+      }
+
+  private:
+    struct CWorldDocumentIdentity
+      {
+      CWorldDocumentIdentity (CMUSHclientDoc * pDocument,
+                              const __int64 iDocumentNumber)
+        : m_pDocument (pDocument), m_iDocumentNumber (iDocumentNumber) { }
+      CMUSHclientDoc * m_pDocument;
+      __int64 m_iDocumentNumber;
+      };
+
+    vector<CWorldDocumentIdentity> m_documents;
+    CWorldTimerDocumentSnapshot (const CWorldTimerDocumentSnapshot &);
+    CWorldTimerDocumentSnapshot & operator= (const CWorldTimerDocumentSnapshot &);
+  };
 
 int ActivityToolBarResourceNames [6] = {
   IDB_ACTIVITY_TOOLBAR_0,
@@ -767,9 +813,12 @@ void CMainFrame::ProcessTimers (void)
   bool bNewActivity = false,
        bFlashIcon = false;
 
-	for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos;)
+  CWorldTimerDocumentSnapshot documents;
+  for (size_t i = 0; i < documents.GetCount (); ++i)
     {
-    CMUSHclientDoc * pDoc = (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
+    CMUSHclientDoc * pDoc = documents.GetLiveAt (i);
+    if (!pDoc || pDoc->m_bWorldClosePending)
+      continue;
     if (pDoc->m_new_lines)
       {
       bNewActivity = true;
@@ -1155,6 +1204,7 @@ void CMainFrame::ProcessDeferredMessage(const CDeferredMessage & deferred)
 
     if (pDoc)
       {
+      CWorldDocumentOperationGuard operationGuard (pDoc);
       HANDLE hLookup = deferred.m_hLookup;
       if (deferred.m_iChatID != 0)
         {
@@ -1205,6 +1255,7 @@ void CMainFrame::ProcessDeferredMessage(const CDeferredMessage & deferred)
     if (pDoc &&
         pDoc->m_iConnectionAttemptNumber == deferred.m_iGeneration)
       {
+      CWorldDocumentOperationGuard operationGuard (pDoc);
       CString strPrompt;
       strPrompt.Format ("TLS connection to \"%s\" failed.\n\n%s\n\n"
                         "Connect without encryption?",
@@ -2525,9 +2576,12 @@ void CMainFrame::CheckTimerFallback ()
 
   if (fElapsedTick > 0.040)    // more than 40 milliseconds has elapsed
     {
-	  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos;)
+    CWorldTimerDocumentSnapshot documents;
+    for (size_t i = 0; i < documents.GetCount (); ++i)
       {
-      CMUSHclientDoc * pDoc = (CMUSHclientDoc*) App.m_pWorldDocTemplate->GetNextDoc(pos);
+      CMUSHclientDoc * pDoc = documents.GetLiveAt (i);
+      if (!pDoc || pDoc->m_bWorldClosePending)
+        continue;
       pDoc->CheckTickTimers ();
       }  // end for
 

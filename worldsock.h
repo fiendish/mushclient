@@ -29,6 +29,7 @@ public:
   string m_outstanding_data;
   bool m_bInReceive;
   bool m_bReceivePending;
+  bool m_bInClose;
   const __int64 m_iSocketNumber;
   bool m_bBufferedReadPending;
   __int64 m_iBufferedReadDocumentNumber;

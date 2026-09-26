@@ -266,6 +266,8 @@ void CTreePropertySheet::OnPaint()
 				m_rcCaptionBar.Height(),
 				&m_cCaptionDC,0,0,
 				SRCCOPY);
+
+	m_cCaptionDC.SelectObject(pOldFont);
 }
 
 BOOL CTreePropertySheet::OnInitDialog() 

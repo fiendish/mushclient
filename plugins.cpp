@@ -918,6 +918,7 @@ bool bError = true;
 
 void CMUSHclientDoc::OnFilePluginwizard() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
   CPluginContextGuard pluginContextGuard (this, NULL);
 
   // TODO: The property sheet attached to your project

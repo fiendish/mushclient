@@ -506,18 +506,6 @@ CMUSHclientDoc::~CMUSHclientDoc()
 {
 int i;
 
-  // stop sounds playing, release sound buffers
-  for (i = 0; i < MAX_SOUND_BUFFERS; i++)
-    if (m_pDirectSoundSecondaryBuffer [i])
-      {
-      DWORD iStatus;
-      if (SUCCEEDED (m_pDirectSoundSecondaryBuffer [i]->GetStatus (&iStatus)) &&
-          (iStatus & DSBSTATUS_PLAYING))
-        m_pDirectSoundSecondaryBuffer [i]->Stop ();
-
-      m_pDirectSoundSecondaryBuffer [i]->Release ();
-      }
-
   if (m_pTimerWnd)
     {
 	  m_pTimerWnd->DestroyWindow();
@@ -525,16 +513,12 @@ int i;
     m_pTimerWnd = NULL;
     }
 
-  for (i = 0; i < NUMITEMS (m_font); i++)  
-    delete m_font [i];
-  delete m_input_font;
-
   if (m_hNameLookup)
     WSACancelAsyncRequest (m_hNameLookup);  // cancel host name lookup in progress
+  m_hNameLookup = NULL;
 
   delete [] m_pGetHostStruct;   // delete buffer used by host name lookup
-
-  delete m_MapFailureRegexp;    // delete regexp structure for mapping failures
+  m_pGetHostStruct = NULL;
 
 	if (m_pSocket)
 	{
@@ -561,6 +545,7 @@ int i;
        udpSocketIterator != m_UDPsocketMap.end ();
        udpSocketIterator++)
       delete udpSocketIterator->second;
+  m_UDPsocketMap.clear ();
 
   // delete chat sessions
 
@@ -578,6 +563,20 @@ int i;
     delete *pit;  // delete *this* one
 
   CloseLog ();    // this writes out the log file postamble as well
+
+  // Close callbacks and script finalizers can still use these resources.
+  DisableScripting ();
+
+  StopSound (0);
+  for (i = 0; i < NUMITEMS (m_font); i++)
+    {
+    delete m_font [i];
+    m_font [i] = NULL;
+    }
+  delete m_input_font;
+  m_input_font = NULL;
+  delete m_MapFailureRegexp;
+  m_MapFailureRegexp = NULL;
 
 // delete triggers
 
@@ -644,10 +643,6 @@ int i;
 // update activity window
 
   App.m_bUpdateActivity = TRUE;
-
-// ****************** release scripting stuff
-
-  DisableScripting ();
 
   if (!bWine)
   	AfxOleUnlockApp();        // not needed?

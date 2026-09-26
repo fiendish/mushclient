@@ -10,6 +10,8 @@ import re
 import subprocess
 
 from output_callbacks import replace_once
+from cpp_blocks import block
+from check_worldsock_receive import native_path
 
 
 def between(text, first, last, label):
@@ -26,6 +28,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument('--native-windows', action='store_true',
+                        help='use cl with AddressSanitizer from an MSVC developer prompt')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     start = (args.source / 'mxp/mxpStart.cpp').read_text()
@@ -53,6 +57,7 @@ def main():
         variable = match.group(1)
         packet_cases.append('case MXP_ACTION_' + name + ': {\nCString ' + variable + ' = "response-' + name + '\\r\\n";\n' + call + '\nbreak; }')
     pieces = {
+        'WORLD_GUARD': block(header, 'class CWorldDocumentOperationGuard') + ';',
         'TRANSACTION': between(start, 'class CMXPStartTransaction', 'class CActionReferenceGuard', 'mxp/mxpStart.cpp'),
         'CUSTOM_PREPARATION': between(start,
             '    for (POSITION itempos = pElement->ElementItemList.GetHeadPosition ();',
@@ -92,8 +97,16 @@ def main():
     template = template.replace('@ENUMS@', 'enum { ' + ', '.join(names) + ' };')
     cpp = args.output / 'mxp_start_identity_test.cpp'
     cpp.write_text(template)
-    executable = args.output / 'mxp_start_identity_test'
-    command = ['clang++', '-std=c++17', '-g', '-O1', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', str(cpp), '-o', str(executable)]
+    executable = args.output / ('mxp_start_identity_test.exe' if args.native_windows else 'mxp_start_identity_test')
+    if args.native_windows:
+        command = ['cl', '/nologo', '/EHsc', '/std:c++17', '/Zi', '/Od',
+                   '/fsanitize=address', native_path(cpp),
+                   '/Fe' + native_path(executable),
+                   '/Fo' + native_path(args.output / 'test.obj'),
+                   '/Fd' + native_path(args.output / 'test.pdb'),
+                   '/link', '/INCREMENTAL:NO']
+    else:
+        command = ['clang++', '-std=c++17', '-g', '-O1', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', str(cpp), '-o', str(executable)]
     subprocess.run(command, check=True)
     env = dict(os.environ)
     # Keep diagnostics visible. A failed compile or check stops this runner.

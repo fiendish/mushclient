@@ -978,6 +978,10 @@ void CMUSHclientDoc::Dump(CDumpContext& dc) const
 
 BOOL CMUSHclientDoc::ConnectSocket(void)
 {
+  CWorldDocumentOperationGuard operationGuard (this);
+
+  if (m_pSocket && m_pSocket->m_bInClose)
+    return FALSE;
 
   // Keep the socket and completion phase of an existing host name lookup.
   if (m_hNameLookup)
@@ -1179,6 +1183,7 @@ void CMUSHclientDoc::SendMsg(CString strText,
                              const bool bQueueIt,
                              const bool bLogIt)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
 
   // cannot change what we are sending in OnPluginSent
   if (m_bPluginProcessingSent)
@@ -1250,9 +1255,12 @@ void CMUSHclientDoc::SendMsg(CString strText,
       }    // end of having a speedwalk delay
     else
       DoSendMsg (strLine, bEcho, bLogIt);  // just send it
+
+    if (m_bWorldClosePending)
+      break;
     } // end of breaking it into lines
 
-  if (!m_QueuedCommandsList.IsEmpty ())
+  if (!m_bWorldClosePending && !m_QueuedCommandsList.IsEmpty ())
     ShowQueuedCommands ();    // update status line
   }
 
@@ -1273,6 +1281,8 @@ CString str = strText;
 
   if (!m_pSocket)
     return;
+  CWorldSocket * pSocket = m_pSocket;
+  const __int64 iSocketNumber = pSocket->m_iSocketNumber;
 
 // append an end-of-line if there isn't one already
 
@@ -1287,6 +1297,13 @@ CString str = strText;
     if (!SendToAllPluginCallbacks (ON_PLUGIN_SEND, str.Left (str.GetLength () - 2)))
       return;     // plugin declines to send this line
     }
+
+  // Callbacks can reconnect; this command belongs to the original socket.
+  if (m_bWorldClosePending ||
+      m_pSocket != pSocket ||
+      !m_pSocket ||
+      m_pSocket->m_iSocketNumber != iSocketNumber)
+    return;
 
 // count number of times we sent this
 
@@ -1306,6 +1323,11 @@ CString str = strText;
       {
       m_iLastCommandCount = 0;      // so we don't recurse again
       DoSendMsg (m_strSpamMessage, m_display_my_input, LoggingInput ()); // recursive call
+      if (m_bWorldClosePending ||
+          m_pSocket != pSocket ||
+          !m_pSocket ||
+          m_pSocket->m_iSocketNumber != iSocketNumber)
+        return;
       m_strLastCommandSent = str;   // remember it for next time
       m_iLastCommandCount = 1;
       }   // end of time to do it
@@ -1321,6 +1343,12 @@ CString str = strText;
     CBoolStateGuard processingGuard (m_bPluginProcessingSent, true);
     SendToAllPluginCallbacks (ON_PLUGIN_SENT, str.Left (str.GetLength () - 2));
     }
+
+  if (m_bWorldClosePending ||
+      m_pSocket != pSocket ||
+      !m_pSocket ||
+      m_pSocket->m_iSocketNumber != iSocketNumber)
+    return;
 
 // echo sent text if required
 
@@ -1351,6 +1379,11 @@ CString str = strText;
 
 // send it
 
+   if (m_bWorldClosePending ||
+       m_pSocket != pSocket ||
+       !m_pSocket ||
+       m_pSocket->m_iSocketNumber != iSocketNumber)
+     return;
    SendPacket (str, str.GetLength ());
 
 } // end of CMUSHclientDoc::DoSendMsg
@@ -1388,9 +1421,15 @@ int count;
       if (m_iConnectPhase == eConnectDisconnecting)
         return;
       if (m_pSocket)
-        m_pSocket->OnClose (0);
-      delete m_pSocket;
-      m_pSocket = NULL;
+        {
+        CWorldSocket * pClosingSocket = m_pSocket;
+        pClosingSocket->OnClose (0);
+        if (m_pSocket == pClosingSocket)
+          {
+          m_pSocket = NULL;
+          delete pClosingSocket;
+          }
+        }
       return;
       }
     }
@@ -1405,10 +1444,15 @@ int count;
          return;
 
       if (m_pSocket)
-        m_pSocket->OnClose (GetLastError ());
-
-		  delete m_pSocket;
-		  m_pSocket = NULL;
+        {
+        CWorldSocket * pClosingSocket = m_pSocket;
+        pClosingSocket->OnClose (GetLastError ());
+        if (m_pSocket == pClosingSocket)
+          {
+          m_pSocket = NULL;
+          delete pClosingSocket;
+          }
+        }
       return;
       }
 
@@ -2759,7 +2803,7 @@ CString strLine (lpszText, size);
 
     // hex debug  (debug packets) - unless we have faked an input line from MXP processing or similar
     if (m_bDebugIncomingPackets && !fake)
-      Debug_Packets ("Incoming", lpszText, size, m_iInputPacketCount);
+      Debug_Packets ("Incoming", strLine, size, m_iInputPacketCount);
 
     {
     CValueStateGuard<unsigned short> actionSourceGuard
@@ -3715,6 +3759,7 @@ void CMUSHclientDoc::ExecuteHotspotScript (DISPID & dispid,  // dispatch ID, wil
 
 void CMUSHclientDoc::OnFileLogsession() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 
 // close log file if already open
 
@@ -4682,6 +4727,7 @@ DWORD nLines = 0,
 
 void CMUSHclientDoc::OnGamePastefile() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 
 std::unique_ptr<CStdioFile> f;
 CString str;
@@ -5338,14 +5384,23 @@ void CMUSHclientDoc::OnConnectionDisconnect()
 	if (m_pSocket)
 	{
 
-    ShutDownSocket (*m_pSocket);
+    CWorldSocket * pSocket = m_pSocket;
+    ShutDownSocket (*pSocket);
 
-    m_pSocket->OnClose (0);
+    // A nested disconnect must not delete the socket still executing OnClose.
+    if (pSocket->m_bInClose)
+      {
+      m_iConnectPhase = eConnectNotConnected;
+      return;
+      }
+
+    pSocket->OnClose (0);
 
 // delete the socket
 
-    delete m_pSocket;
-    m_pSocket = NULL;
+    if (m_pSocket == pSocket)
+      m_pSocket = NULL;
+    delete pSocket;
 
     }
 
@@ -6266,6 +6321,7 @@ CString strStatus = TFormat ("Recalling: %s", (LPCTSTR) strSearchString);
 
 void CMUSHclientDoc::DoRecallText (void)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
 CRecallSearchDlg dlg (m_RecallFindInfo.m_strFindStringList);
 
   if (!m_RecallFindInfo.m_strFindStringList.IsEmpty ())
@@ -6623,6 +6679,7 @@ void CMUSHclientDoc::RememberStyle (const CStyle * pStyle)
 
 void CMUSHclientDoc::OnDebugWorldInput() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 //#ifdef _DEBUG
 
 CDebugWorldInputDlg dlg;
@@ -7061,14 +7118,30 @@ void CMUSHclientDoc::SendWindowSizes (const int iNewWidth)
 
 void  CMUSHclientDoc::SendPacket (const char * lpBuf, const int nBufLen)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
 
-  if (m_pSocket == NULL)
+  if (m_pSocket == NULL || m_bWorldClosePending || m_pSocket->m_bInClose)
     return;
+
+  CWorldSocket * pSocket = m_pSocket;
+  const __int64 iSocketNumber = pSocket->m_iSocketNumber;
+  const SOCKET hSocket = pSocket->m_hSocket;
 
   m_iOutputPacketCount++;
 
+  // Debug callbacks can release the caller's buffer.
+  string strPacket;
   if (m_bDebugIncomingPackets)
+    {
+    strPacket.assign (lpBuf, nBufLen);
+    lpBuf = strPacket.data ();
     Debug_Packets ("Sent ", lpBuf, nBufLen, m_iOutputPacketCount);
+    }
+
+  if (m_bWorldClosePending || m_pSocket != pSocket ||
+      m_pSocket->m_iSocketNumber != iSocketNumber ||
+      m_pSocket->m_hSocket != hSocket || m_pSocket->m_bInClose)
+    return;
 
   m_pSocket->m_outstanding_data.append (lpBuf, nBufLen);
 
@@ -7387,6 +7460,7 @@ CString CMUSHclientDoc::DelayedSend(const CString strMessage, const bool bEchoIt
 
 void CMUSHclientDoc::OnFileImport() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 CImportXMLdlg dlg;
 
   dlg.m_pDoc = this;
@@ -7674,6 +7748,7 @@ int iLen = strFormat.GetLength () + 1000;
 
 void CMUSHclientDoc::OnFilePlugins() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 CPluginsDlg dlg;
   dlg.m_pDoc = this;
   dlg.DoModal (); 
@@ -8182,6 +8257,7 @@ void CMUSHclientDoc::InitiateConnection (void)
 // or been validated on a proxy server
 void CMUSHclientDoc::ConnectionEstablished (void)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
 
 #ifdef _DEBUG
 //  ListAccelerators (this, 1);     // for documenting menus, accelerators
@@ -8356,6 +8432,9 @@ CString strIpAddress = inet_ntoa (*((struct in_addr *) lpHostEntry->h_addr));
       }   // end of opened OK
     } // end of auto log file name
 
+  if (m_bWorldClosePending)
+    return;
+
 // ask for password if necessary, and send connection string
 
   CString password = m_password;
@@ -8412,6 +8491,9 @@ CString strIpAddress = inet_ntoa (*((struct in_addr *) lpHostEntry->h_addr));
 
     }   // end of connecting now
 
+  if (m_bWorldClosePending)
+    return;
+
 // now send the extra connect string
 
   if (!m_connect_text.IsEmpty ())
@@ -8421,6 +8503,9 @@ CString strIpAddress = inet_ntoa (*((struct in_addr *) lpHostEntry->h_addr));
     // don't display in case it contains a password
     SendMsg (strText, false, false, false);
     }
+
+  if (m_bWorldClosePending)
+    return;
 
 // get timers going
 
@@ -8465,6 +8550,8 @@ CString strIpAddress = inet_ntoa (*((struct in_addr *) lpHostEntry->h_addr));
       }
     } // end of executing open script
 
+  if (m_bWorldClosePending)
+    return;
   SendToAllPluginCallbacks (ON_PLUGIN_CONNECT);
 
   } // end of CMUSHclientDoc::ConnectionEstablished
@@ -8985,6 +9072,7 @@ CChatSocket * CMUSHclientDoc::GetChatSocket (const long nID)  const
 
 void CMUSHclientDoc::OnGameChatsessions() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
 CChatListDlg dlg;
 
   // show whether we really are accepting calls
@@ -9304,7 +9392,7 @@ long CMUSHclientDoc::AddSpecialFont (LPCTSTR PathName)
 	// once, we don't need to try again. 
 	if (!initialized)
 	{
-		HMODULE hDLL = LoadLibrary ("gdi32");
+		HMODULE hDLL = GetModuleHandle ("gdi32.dll");
 
     if (hDLL)
       {

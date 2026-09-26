@@ -51,6 +51,7 @@ CWorldSocket::CWorldSocket(CMUSHclientDoc* pDoc)
   m_pDoc = pDoc;
   m_bInReceive = false;
   m_bReceivePending = false;
+  m_bInClose = false;
   m_bBufferedReadPending = false;
   m_iBufferedReadDocumentNumber = 0;
   m_hBufferedReadSocket = INVALID_SOCKET;
@@ -88,11 +89,17 @@ void CWorldSocket::CheckBufferedReads (void)
 
 void CWorldSocket::OnReceive(int nErrorCode)
 {
+  // A disconnect callback's modal loop can dispatch a queued FD_READ.
+  if (m_bInClose)
+    return;
+
   if (m_bInReceive)
     {
     m_bReceivePending = true;
     return;
     }
+
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
 
   m_bInReceive = true;
   m_bBufferedReadPending = false;
@@ -196,6 +203,7 @@ void CWorldSocket::OnSend(int nErrorCode)
   // save m_pDoc locally — if the TLS handshake fails, 'this' (the socket) gets
   // deleted inside ContinueSSLHandshake, so we must not touch 'this' afterwards
   CMUSHclientDoc * pDoc = m_pDoc;
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
 int count;
 
@@ -259,9 +267,10 @@ int count;
 
 void CWorldSocket::OnClose(int nErrorCode)
   {
+  if (m_bInClose)
+    return;
+  CBoolStateGuard closeGuard (m_bInClose, true);
 
-  // Disconnect scripts and plugin callbacks may close the world. Keep the
-  // document alive until this notification has completely unwound.
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
 
 bool bWasClosed = m_pDoc->m_iConnectPhase == eConnectNotConnected;
@@ -379,5 +388,6 @@ CString str;
 void CWorldSocket::OnConnect(int nErrorCode)
   {
 
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   m_pDoc->OnConnect (nErrorCode);
   } // end of OnConnect

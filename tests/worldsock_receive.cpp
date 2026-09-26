@@ -10,7 +10,9 @@
 #include <vector>
 
 using std::string;
+#ifndef _MSC_VER
 using __int64 = long long;
+#endif
 using UINT = unsigned;
 using POSITION = unsigned;
 using SOCKET = int;
@@ -80,6 +82,14 @@ public:
   std::function<void()> receive;
   void ReceiveMsg() { auto callback = receive; callback(); }
 };
+
+int activeWorldOperations = 0;
+class CWorldDocumentOperationGuard {
+public:
+  explicit CWorldDocumentOperationGuard(CMUSHclientDoc *) { ++activeWorldOperations; }
+  ~CWorldDocumentOperationGuard() { --activeWorldOperations; }
+};
+
 struct DocTemplate {
   std::vector<CMUSHclientDoc *> docs;
   POSITION GetFirstDocPosition() { return docs.empty() ? 0 : 1; }
@@ -137,14 +147,34 @@ static void bufferedReadCases();
 int main() {
   {
     Fixture f;
+    int calls = 0;
+    f.doc.receive = [&] { ++calls; };
+    f.socket.m_bInClose = true;
+    f.socket.OnReceive(0);
+    assert(calls == 0 && !f.socket.m_bReceivePending);
+    assert(!f.socket.m_bInReceive && f.socket.baseCalls == 0);
+    f.socket.m_bInReceive = true;
+    f.socket.OnReceive(0);
+    assert(calls == 0 && !f.socket.m_bReceivePending);
+    f.socket.m_bInReceive = false;
+    f.socket.m_bInClose = false;
+    f.socket.OnReceive(0);
+    assert(calls == 1 && f.socket.baseCalls == 1);
+  }
+  std::cout << "PASS: queued reads cannot reenter a closing socket\n";
+
+  {
+    Fixture f;
     int calls = 0, depth = 0;
     f.doc.receive = [&] {
+      assert(activeWorldOperations == 1);
       assert(++depth == 1);
       if (++calls == 1) for (int i = 0; i < 3; ++i) f.socket.OnReceive(0);
       --depth;
     };
     f.socket.OnReceive(7);
     assert(calls == 2 && f.socket.peekCalls == 0);
+    assert(activeWorldOperations == 0);
     assert(f.socket.baseCalls == 1 && f.socket.baseError == 7);
     assert(!f.socket.m_bInReceive && !f.socket.m_bReceivePending);
     SSL ssl{3};
@@ -172,6 +202,7 @@ int main() {
       }
     };
     f.fail();
+    assert(activeWorldOperations == 0);
     assert(calls == 1 && output == "first"); // No synchronous retry.
     assert(f.socket.unread == "second" && f.socket.queued);
     assert(f.socket.peekCalls == 1 && f.socket.eventMask == mask);

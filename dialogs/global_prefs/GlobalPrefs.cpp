@@ -1201,6 +1201,7 @@ void CGlobalPrefsP10::OnBackgroundSwatch()
 
 void DoGlobalPrefs (CMUSHclientDoc * pCurrentDoc)
   {
+  CWorldDocumentOperationGuard operationGuard (pCurrentDoc);
 
 	CGlobalPrefsSheet propSheet;
   propSheet.m_Page1.m_pCurrentDoc = pCurrentDoc;

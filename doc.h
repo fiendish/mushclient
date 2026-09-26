@@ -3193,8 +3193,15 @@ class CWorldDocumentOperationGuard
   {
   public:
     explicit CWorldDocumentOperationGuard (CMUSHclientDoc * pDoc) : m_pDoc (pDoc)
-      { m_pDoc->BeginProgressOperation (); }
-    ~CWorldDocumentOperationGuard () { m_pDoc->EndProgressOperation (); }
+      {
+      if (m_pDoc)
+        m_pDoc->BeginProgressOperation ();
+      }
+    ~CWorldDocumentOperationGuard ()
+      {
+      if (m_pDoc)
+        m_pDoc->EndProgressOperation ();
+      }
   private:
     CMUSHclientDoc * m_pDoc;
     CWorldDocumentOperationGuard (const CWorldDocumentOperationGuard &);
