@@ -290,21 +290,38 @@ assemble the full text of the original line.
 
   m_pCurrentLine->hard_return = true;
 
-// for people with screen-readers
-
   if (flags & COMMENT)
     Screendraw (COMMENT, m_bLogNotes, strCurrentLine);
   else if (flags & USER_INPUT)
     Screendraw (USER_INPUT, m_log_input, strCurrentLine);
  
+  // OnPluginScreendraw can delete lines, invalidating prevpos. Rebuild the
+  // logging range from saved line IDs and lengths to exclude callback output.
+  map<__int64, int> screenLineLengths;
+  if (flags & NOTE_OR_COMMAND)
+    {
+    for (size_t i = 0; i < triggerLines.size (); ++i)
+      screenLineLengths [triggerLines [i].iCreationNumber] = triggerLines [i].iLength;
+    prevpos = NULL;
+    for (POSITION scan = m_LineList.GetTailPosition (); scan; )
+      {
+      POSITION current = scan;
+      CLine * pLine = m_LineList.GetPrev (scan);
+      if (pLine->nCreationNumber < triggerLines.front ().iCreationNumber)
+        break;
+      if (screenLineLengths.find (pLine->nCreationNumber) != screenLineLengths.end ())
+        {
+        prevpos = current;
+        if ((flags & COMMENT) && m_bLogNotes)
+          pLine->flags |= LOG_LINE;
+        }
+      }
+    }
+
 // if this is a world.note, and we want to log it, do so
 
   if ((flags & COMMENT) && m_bLogNotes)         // this is a note and we want it
     {
-    // remember that we want to log it (them), for retrospective logging
-    for (pos = prevpos; pos; )
-      (m_LineList.GetNext (pos))->flags |= LOG_LINE;
-
     // log it now?
     if (m_logfile && !m_bLogRaw)
       {
@@ -333,7 +350,7 @@ assemble the full text of the original line.
 
       // output as HTML if required
       if (m_bLogHTML && m_bLogInColour)
-        LogLineInHTMLcolour (prevpos);
+        LogLineInHTMLcolour (prevpos, &screenLineLengths);
       // not colour - just straight HTML?
       else if (m_bLogHTML)
           WriteToLog (FixHTMLString (strMessage));
