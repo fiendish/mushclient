@@ -65,8 +65,9 @@ def main():
     print(f"Test artifacts: {directory}", flush=True)
     subprocess.run([
         "cl", "/nologo", "/EHsc", "/MD", "/D_AFXDLL", "/D_CRT_SECURE_NO_WARNINGS",
-        "/Zi", "/Od", "/fsanitize=address", "/std:c++17", str(cpp),
-        f"/Fe{binary}", f"/Fo{directory / 'test.obj'}", f"/Fd{directory / 'test.pdb'}",
+        "/Zi", "/Od", "/fsanitize=address", "/std:c++17", native_path(cpp),
+        f"/Fe{native_path(binary)}", f"/Fo{native_path(directory / 'test.obj')}",
+        f"/Fd{native_path(directory / 'test.pdb')}",
         "/link", "/INCREMENTAL:NO", "/SUBSYSTEM:CONSOLE", "ws2_32.lib",
     ], check=True)
     cases = args.cases or [

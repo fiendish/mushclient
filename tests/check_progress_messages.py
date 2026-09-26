@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 
 from cpp_blocks import block
+from output_callbacks import replace_once
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -79,8 +80,8 @@ def main():
     doc = source('doc.cpp')
     textdoc = source('TextDocument.cpp')
     app = source('MUSHclient.cpp')
-    send = block(source('chatsock.cpp'), 'void CChatSocket::OnSend(').replace(
-        '  CWorldDocumentOperationGuard operationGuard (m_pDoc);\n', '')
+    send = replace_once(block(source('chatsock.cpp'), 'void CChatSocket::OnSend('),
+        '  CWorldDocumentOperationGuard operationGuard (m_pDoc);\n', '', 'chatsock.cpp')
     parts = {
         'PROGRESS_HEADER': source('dialogs/ProgDlg.h'),
         'PROGRESS_BODY': progress,
