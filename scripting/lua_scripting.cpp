@@ -494,6 +494,14 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   // Native callbacks can re-enter this state while its caller still owns
   // stack values. Keep those values rooted throughout lookup and execution.
   const int top = lua_gettop (L);
+  const size_t stackOverhead = 16;
+  if (nparams.size () > static_cast<size_t> (INT_MAX) - stackOverhead ||
+      sparams.size () > static_cast<size_t> (INT_MAX) - stackOverhead - nparams.size () ||
+      !lua_checkstack (L, static_cast<int> (nparams.size () + sparams.size () + stackOverhead)))
+    {
+    dispid = DISPID_UNKNOWN;
+    return true;
+    }
 
   LARGE_INTEGER start, 
                 finish;
@@ -719,6 +727,11 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
     return false;
 
   const int top = lua_gettop (L);
+  if (!lua_checkstack (L, 8))
+    {
+    dispid = DISPID_UNKNOWN;
+    return true;
+    }
 
   LARGE_INTEGER start, 
                 finish;

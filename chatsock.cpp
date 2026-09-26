@@ -1217,7 +1217,11 @@ void CChatSocket::Process_File_start				  (const CString strMessage)
 
   // A modal prompt may have allowed the connection to close.
   if (m_bDeleteMe || m_iChatStatus != eChatConnected)
+    {
+    m_strOurFileName.Empty ();
+    m_iFileSize = 0;
     return;
+    }
 
   std::unique_ptr<CFile> pNewFile;
   try

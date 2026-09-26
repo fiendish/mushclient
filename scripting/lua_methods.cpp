@@ -1226,7 +1226,14 @@ static int L_CallPlugin (lua_State *L)
       lua_settop (L, 2);
 
     // LUA_MULTRET may have filled the available stack in the self-call case.
-    lua_checkstack (L, pL == L ? 1 : ret_n + 1);
+    if (!lua_checkstack (L, pL == L ? 1 : ret_n + 2))
+      {
+      lua_settop (pL, targetBase);
+      lua_settop (L, 2);
+      lua_pushnumber (L, eErrorCallingPluginRoutine);
+      lua_pushliteral (L, "Too many return values from plugin routine");
+      return 2;
+      }
     lua_pushnumber (L, eOK);   // expected behaviour prior to 4.55 (just a single value)
 
     // if we are calling ourselves, don't make a copy of everything
