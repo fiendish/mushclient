@@ -36,17 +36,23 @@ CChatListenSocket::~CChatListenSocket()
 
 void CChatListenSocket::OnAccept(int nErrorCode)
   {
+  // A chat-display callback may stop listening and delete this socket. Finish
+  // using it before the first callback, and retain only the guarded document.
+  CMUSHclientDoc * pDoc = m_pDoc;
+  CWorldDocumentOperationGuard operationGuard (pDoc);
 
-  m_pDoc->ChatNote (eChatConnection, "Incoming chat call");
-
-std::unique_ptr<CChatSocket> pSocket (new CChatSocket (m_pDoc));
+std::unique_ptr<CChatSocket> pSocket (new CChatSocket (pDoc));
 int SockAddrLen = sizeof(pSocket->m_ServerAddr) ;
 
-  if (!Accept(*pSocket, 
-              (SOCKADDR*) &pSocket->m_ServerAddr, 
-              &SockAddrLen))
+  const BOOL bAccepted = Accept (*pSocket,
+                                (SOCKADDR*) &pSocket->m_ServerAddr,
+                                &SockAddrLen);
+
+  pDoc->ChatNote (eChatConnection, "Incoming chat call");
+
+  if (!bAccepted)
     {
-    m_pDoc->ChatNote (eChatConnection, "Cannot accept call.");
+    pDoc->ChatNote (eChatConnection, "Cannot accept call.");
     return;
     }
 
@@ -56,7 +62,7 @@ int SockAddrLen = sizeof(pSocket->m_ServerAddr) ;
   pSocket->m_strServerName = inet_ntoa (pSocket->m_ServerAddr.sin_addr);
 
 
-  m_pDoc->ChatNote (eChatConnection, 
+  pDoc->ChatNote (eChatConnection,
                   TFormat (
                     "Accepted call from %s port %d",
                             (LPCTSTR) pSocket->m_strServerName,
@@ -64,7 +70,7 @@ int SockAddrLen = sizeof(pSocket->m_ServerAddr) ;
 
   pSocket->m_iChatStatus = eChatAwaitingConnectionRequest;
 
-  m_pDoc->m_ChatList.AddTail (pSocket.get ());
+  pDoc->m_ChatList.AddTail (pSocket.get ());
   pSocket.release ();
   } // end of OnAccept
 

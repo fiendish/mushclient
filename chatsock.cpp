@@ -135,11 +135,24 @@ void CChatSocket::StopFileTransfer (const bool bAbort)
   if (!m_bDoingFileTransfer || m_pDoc == NULL)
     return;
 
+  // Complete the state change before any plugin callback can cancel again
+  // or attempt to replace this transfer.
+  CBoolStateGuard startingGuard (m_bStartingFileTransfer, true);
+  const bool bSendFile = m_bSendFile;
+  const CString strOurFileName = m_strOurFileName;
+
   delete m_pFile;     // close file
   m_pFile = NULL;  
 
   delete [] m_pFileBuffer;
   m_pFileBuffer = NULL;
+
+  m_bDoingFileTransfer = false;
+  m_bSendFile = false;
+  m_iFileSize = 0;
+  m_iFileBlocks = 0;
+  m_iBlocksTransferred = 0;
+  m_tStartedFileTransfer = 0;
 
   if (bAbort)
     {
@@ -148,25 +161,18 @@ void CChatSocket::StopFileTransfer (const bool bAbort)
       SendChatMessage (CHAT_FILE_CANCEL, "");
 
     // half-received - delete it
-    if (m_bSendFile)
+    if (bSendFile)
       m_pDoc->ChatNote (eChatFile,
-              CFormat (_T("Aborted sending file %s"), (LPCTSTR) m_strOurFileName));
+              CFormat (_T("Aborted sending file %s"), (LPCTSTR) strOurFileName));
     else
       {
       m_pDoc->ChatNote (eChatFile,
-              CFormat (_T("Aborted receiving file %s"), (LPCTSTR) m_strOurFileName));
+              CFormat (_T("Aborted receiving file %s"), (LPCTSTR) strOurFileName));
       m_pDoc->ChatNote (eChatFile,
-              CFormat (_T("File %s deleted."), (LPCTSTR) m_strOurFileName));
-      CFile::Remove (m_strOurFileName);
+              CFormat (_T("File %s deleted."), (LPCTSTR) strOurFileName));
+      CFile::Remove (strOurFileName);
       }
     }
-
-  m_bDoingFileTransfer = false;  
-  m_bSendFile = false;           
-  m_iFileSize = 0;           
-  m_iFileBlocks = 0;         
-  m_iBlocksTransferred = 0;  
-  m_tStartedFileTransfer = 0;
 
   } // end of CChatSocket::StopFileTransfer 
 
@@ -1095,6 +1101,16 @@ void CChatSocket::Process_Version					    (const CString strMessage)
 
 void CChatSocket::Process_File_start				  (const CString strMessage)
   {
+  // Both directions share one file and transfer state. Never overwrite an
+  // active transfer, including one being prepared in a modal dialog.
+  if (m_bDoingFileTransfer || m_bStartingFileTransfer)
+    {
+    SendChatMessage (CHAT_FILE_DENY, "Already transferring a file.");
+    return;
+    }
+
+  CBoolStateGuard startingGuard (m_bStartingFileTransfer, true);
+
   if (!m_bCanSendFiles)
     {
     SendChatMessage (CHAT_FILE_DENY, 
@@ -1199,30 +1215,52 @@ void CChatSocket::Process_File_start				  (const CString strMessage)
     return;
     }   // end of this file not wanted right now
 
+  // A modal prompt may have allowed the connection to close.
+  if (m_bDeleteMe || m_iChatStatus != eChatConnected)
+    {
+    m_strOurFileName.Empty ();
+    m_iFileSize = 0;
+    return;
+    }
+
+  std::unique_ptr<CFile> pNewFile;
   try
     {
-    m_pFile = new CFile (m_strOurFileName, CFile::modeCreate | CFile::modeReadWrite); // new file
+    pNewFile.reset (new CFile (m_strOurFileName, CFile::modeCreate | CFile::modeReadWrite));
     } // end of try block
 
   catch (CFileException * e)
     {
+    e->Delete ();
+    const CString strFailedFile = m_strOurFileName;
+    m_strOurFileName.Empty ();
+    m_iFileSize = 0;
     SendChatMessage (CHAT_FILE_DENY, 
                     TFormat ("%s can not open that file.",
                     (LPCTSTR) m_pDoc->m_strOurChatName));
     m_pDoc->ChatNote (eChatFile, TFormat ("File %s cannot be opened.", 
-                      (LPCTSTR) m_strOurFileName));
-    e->Delete ();
-    // reset the two fields we changed so far
-    m_strOurFileName.Empty ();
-    m_iFileSize = 0;
-
-    delete m_pFile;    // in case it was set up
+                      (LPCTSTR) strFailedFile));
 
     return;
     } // end of catching a file exception
 
+  // Publish a fully initialized, owned transfer before callbacks. A callback
+  // can then cancel it, and an exception cannot strand an untracked open file.
+  m_tStartedFileTransfer = CTime::GetCurrentTime();  // when started
+  m_bSendFile = false;   // we are receiving
+  m_bDoingFileTransfer = true;
+  m_iBlocksTransferred = 0;   // no blocks yet
+  // add block-size minus one to allow for final partial block
+  m_iFileBlocks = (m_iFileSize + m_iFileBlockSize - 1L) /
+                  m_iFileBlockSize;
+
+  shsInit  (&m_shsInfo);
+  m_pFile = pNewFile.release ();
+
   // tell them our acceptance - get first block
   SendChatMessage (CHAT_FILE_BLOCK_REQUEST, "");
+  if (!m_bDoingFileTransfer)
+    return; // cancelled by the send callback
 
   m_pDoc->ChatNote (eChatFile,
               TFormat (
@@ -1231,17 +1269,6 @@ void CChatSocket::Process_File_start				  (const CString strMessage)
                             (LPCTSTR) m_strOurFileName,
                             m_iFileSize,
                             K));
-
-  // get ready for transfer
-  m_tStartedFileTransfer = CTime::GetCurrentTime();  // when started
-  m_bSendFile = false;   // we are receiving
-  m_bDoingFileTransfer = true;           
-  m_iBlocksTransferred = 0;   // no blocks yet
-  // add block-size minus one to allow for final partial block
-  m_iFileBlocks = (m_iFileSize + m_iFileBlockSize - 1L) /
-                  m_iFileBlockSize;
-
-  shsInit  (&m_shsInfo);
 
   } // end of CChatSocket::Process_File_start
 

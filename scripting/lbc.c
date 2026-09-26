@@ -290,7 +290,11 @@ static int Bsqrt(lua_State *L)			/** sqrt(x) */
  bc_num b=bc_zero;
  bc_num c=NULL;
  bc_add(a,b,&c,DIGITS);				/* bc_sqrt works inplace! */
- if (bc_sqrt(&c,DIGITS)==0) return 0;
+ if (bc_sqrt(&c,DIGITS)==0)
+ {
+  bc_free_num(&c);
+  return 0;
+ }
  Bnew(L,c);
  return 1;
 }

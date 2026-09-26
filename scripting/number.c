@@ -1174,26 +1174,27 @@ bc_raisemod (base, expo, mod, result, scale)
   if (bc_is_zero(mod)) return -1;
   if (bc_is_neg(expo)) return -1;
 
-  /* Set initial values.  */
-  power = bc_copy_num (base);
-  exponent = bc_copy_num (expo);
-  temp = bc_copy_num (_one_);
-  bc_init_num(&parity);
-
+  /* In this binding warnings raise Lua errors, so validate before retaining
+     temporary numbers whose references a longjmp would abandon. */
   /* Check the base for scale digits. */
   if (base->n_scale != 0)
       bc_rt_warn ("non-zero scale in base");
 
   /* Check the exponent for scale digits. */
-  if (exponent->n_scale != 0)
-    {
+  if (expo->n_scale != 0)
       bc_rt_warn ("non-zero scale in exponent");
-      bc_divide (exponent, _one_, &exponent, 0); /*truncate */
-    }
 
   /* Check the modulus for scale digits. */
   if (mod->n_scale != 0)
       bc_rt_warn ("non-zero scale in modulus");
+
+  /* Set initial values only after validation. */
+  power = bc_copy_num (base);
+  exponent = bc_copy_num (expo);
+  temp = bc_copy_num (_one_);
+  bc_init_num(&parity);
+  if (exponent->n_scale != 0)
+      bc_divide (exponent, _one_, &exponent, 0); /*truncate */
 
   /* Do the calculation. */
   rscale = MAX(scale, base->n_scale);
@@ -1350,6 +1351,7 @@ bc_sqrt (num, scale)
   if (cmp_res < 0)
     {
       /* The number is between 0 and 1.  Guess should start at 1. */
+      bc_free_num (&guess);
       guess = bc_copy_num (_one_);
       cscale = (*num)->n_scale;
     }

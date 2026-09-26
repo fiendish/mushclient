@@ -289,15 +289,12 @@ static bool get_extra_boolean (lua_State *L, const int narg, const char * name)
   return bResult;
   }  // end of get_extra_boolean
 
-static CString get_extra_string (lua_State *L, const int narg, const char * name)
+static const char * get_extra_string (lua_State *L, const int narg, const char * name)
   {
-  CString strResult;
-
   lua_getfield (L, narg, name);
-  strResult = luaL_optstring (L, -1, "");
-  lua_pop (L, 1);
-
-  return strResult;
+  // Keep the value on the Lua stack until all options have been validated.
+  // A later type error or __index error must not strand a native string.
+  return luaL_optstring (L, -1, "");
   }  // end of get_extra_string
 
 // input-box display routine
@@ -326,7 +323,7 @@ static CString get_extra_string (lua_State *L, const int narg, const char * name
 // returns: what they typed, or nil if cancelled
 
 template <typename T>
-static int gen_inputbox (lua_State *L, T & msg) 
+static int gen_inputbox (lua_State *L)
   {
   const char * inputmsg     = luaL_checkstring (L, 1);
   const char * inputtitle   = luaL_optstring (L, 2, "MUSHclient");
@@ -334,6 +331,12 @@ static int gen_inputbox (lua_State *L, T & msg)
   const char * inputfont    = luaL_optstring (L, 4, "");
   const int    inputsize    = luaL_optnumber (L, 5, 9);
   const int    nExtraStuffArg = 6;  // arg 6 is extra stuff
+
+  // Reject invalid lengths before retaining the validation callback.
+  if (strlen (inputmsg) > 1000)
+     luaL_error (L, "inputbox message too long (max 1000 characters)");
+  if (strlen (inputtitle) > 100)
+     luaL_error (L, "inputbox title too long (max 100 characters)");
 
   // zero means take dialog default
   int iBoxWidth     = 0;
@@ -345,10 +348,11 @@ static int gen_inputbox (lua_State *L, T & msg)
   int iMaxReplyLength = 0;
   bool bReadOnly = false;
   bool bNoDefault = false;
-  CString strOKbuttonLabel;
-  CString strCancelbuttonLabel;
+  const char * strOKbuttonLabel = "";
+  const char * strCancelbuttonLabel = "";
   int iOKbuttonWidth = 0;
   int iCancelbuttonWidth = 0;
+  bool bHaveValidation = false;
 
 
   // if arg6 present, and a table, grab extra stuff
@@ -377,25 +381,17 @@ static int gen_inputbox (lua_State *L, T & msg)
       if (!lua_isfunction (L, -1))
         luaL_error (L, "inputbox argument #6 value for 'validate' must be a function");
 
-      lua_pushvalue (L, -1);    // function is now on top of stack   
-      msg.m_L = L;             // non-NULL indicates we have function there
-
-      // we can't leave the function on the stack, that gets cleared from time to time
-      // while the dialog box is running - so we store it in the registry and get the
-      // unique index back
-      msg.m_iValidationIndex = luaL_ref (L, LUA_REGISTRYINDEX);
+      bHaveValidation = true;
       } // validate function there
 
     }  // table of extra stuff there
  
-  if (strlen (inputmsg) > 1000)
-     luaL_error (L, "inputbox message too long (max 1000 characters)");
+  // Lua errors do not unwind C++ objects. Construct the dialog and strings
+  // only after every option (including metamethod lookups) has been checked.
+  T msg;
 
   // if we leave in & it will make the next letter underlined
   string sInputMsg = FindAndReplace (inputmsg, "&", "&&");
-
-  if (strlen (inputtitle) > 100)
-     luaL_error (L, "inputbox title too long (max 100 characters)");
 
   msg.m_strMessage  = sInputMsg.c_str ();
   msg.m_strTitle    = inputtitle;
@@ -418,6 +414,14 @@ static int gen_inputbox (lua_State *L, T & msg)
   msg.m_iCancelbuttonWidth    = iCancelbuttonWidth;
   msg.m_bNoDefault            = bNoDefault;
 
+  if (bHaveValidation)
+    {
+    msg.m_L = L;
+    // The dialog's callbacks may clear the stack, so retain the validator
+    // in the registry only after argument validation is complete.
+    msg.m_iValidationIndex = luaL_ref (L, LUA_REGISTRYINDEX);
+    }
+
   lua_settop (L, 0);
 
   if (msg.DoModal () != IDOK)
@@ -433,17 +437,41 @@ static int gen_inputbox (lua_State *L, T & msg)
 
 static int inputbox (lua_State *L) 
   {
-  CLuaInputBox msg;
-
-  return gen_inputbox (L, msg);
+  return gen_inputbox<CLuaInputBox> (L);
   }  // end of inputbox
 
 static int editbox (lua_State *L) 
   {
-  CLuaInputEditDlg msg;
-
-  return gen_inputbox (L, msg);
+  return gen_inputbox<CLuaInputEditDlg> (L);
   }  // end of editbox
+
+// Check all choices before allocating native dialog data. luaL_error uses
+// longjmp and would otherwise bypass string/vector/dialog destructors.
+static void check_choice_table (lua_State *L, const int table)
+  {
+  for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
+    {
+    if (!lua_isstring (L, -2))
+      luaL_error (L, "table must have string or number keys");
+    if (!lua_isstring (L, -1))
+      luaL_error (L, "table must have string or number values");
+    }
+  }
+
+static void check_choose_message (lua_State *L, const char * message, const char * title)
+  {
+  // Match the displayed length after ampersands are doubled, without owning
+  // a native string that luaL_error would leak.
+  size_t length = 0;
+  for (const char * p = message; *p; ++p)
+    {
+    length += *p == '&' ? 2 : 1;
+    if (length > 1000)
+      luaL_error (L, "message too long (max 1000 characters)");
+    }
+  if (strlen (title) > 100)
+    luaL_error (L, "title too long (max 100 characters)");
+  }
 
 // combo-box choose routine
 // arg1 = message to display
@@ -454,7 +482,7 @@ static int editbox (lua_State *L)
 // returns: chosen key, or nil if: cancelled, or none selected
 
 template <typename T>
-static int gen_choose (lua_State *L, T & msg) 
+static int gen_choose (lua_State *L)
   {
   const char * choosemsg     = luaL_checkstring (L, 1);
   const char * choosetitle   = luaL_optstring (L, 2, "MUSHclient");
@@ -464,7 +492,7 @@ static int gen_choose (lua_State *L, T & msg)
   bool bDefaultIsNumber = lua_type (L, 4) == LUA_TNUMBER;
   bool bHaveDefault = lua_gettop (L) >= 4 && !lua_isnil (L, 4);
 
-  string defaultstring;
+  const char * defaultstring = "";
   lua_Number defaultnumber = 0;
 
   if (bHaveDefault)
@@ -477,32 +505,22 @@ static int gen_choose (lua_State *L, T & msg)
       defaultstring = lua_tostring (L, 4);
     }
 
-  // if we leave in & it will make the next letter underlined
-  string sChooseMsg = FindAndReplace (choosemsg, "&", "&&");
-
-  if (sChooseMsg.length () > 1000)
-     luaL_error (L, "message too long (max 1000 characters)");
-
-  if (strlen (choosetitle) > 100)
-     luaL_error (L, "title too long (max 100 characters)");
+  check_choose_message (L, choosemsg, choosetitle);
 
   const int table = 3;
 
   if (!lua_istable (L, table))
      luaL_error (L, "must have table of choices as 3rd argument");
 
+  check_choice_table (L, table);
+  T msg;
+  string sChooseMsg = FindAndReplace (choosemsg, "&", "&&");
   msg.m_strMessage  = sChooseMsg.c_str ();
   msg.m_strTitle    = choosetitle;
 
   // standard Lua table iteration
   for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
     {
-    if (!lua_isstring (L, -2))
-      luaL_error (L, "table must have string or number keys");
-
-    if (!lua_isstring (L, -1))
-      luaL_error (L, "table must have string or number values");
-
     // value can simply be converted to a string
     string sValue = lua_tostring (L, -1);
 
@@ -557,14 +575,12 @@ static int gen_choose (lua_State *L, T & msg)
 
 static int choose (lua_State *L) 
   {
-  CLuaChooseBox msg;
-  return gen_choose (L, msg);   // templated function above
+  return gen_choose<CLuaChooseBox> (L);
   }  // end of choose
 
 static int listbox (lua_State *L) 
   {
-  CLuaChooseList msg;
-  return gen_choose (L, msg);   // templated function above
+  return gen_choose<CLuaChooseList> (L);
   }  // end of listbox
 
 
@@ -578,8 +594,6 @@ static int listbox (lua_State *L)
 
 static int multilistbox (lua_State *L) 
   {
-  CLuaChooseListMulti msg;
-
   const char * choosemsg     = luaL_checkstring (L, 1);
   const char * choosetitle   = luaL_optstring (L, 2, "MUSHclient");
   // arg3 is table
@@ -593,24 +607,18 @@ static int multilistbox (lua_State *L)
       luaL_error (L, "defaults must be a table, or nil");
     }
 
-  // if we leave in & it will make the next letter underlined
-  string sChooseMsg = FindAndReplace (choosemsg, "&", "&&");
-
-  if (sChooseMsg.length () > 1000)
-     luaL_error (L, "message too long (max 1000 characters)");
-
-  if (strlen (choosetitle) > 100)
-     luaL_error (L, "title too long (max 100 characters)");
+  check_choose_message (L, choosemsg, choosetitle);
 
   if (!lua_istable (L, 3))
      luaL_error (L, "must have table of choices as 3rd argument");
 
-  msg.m_strMessage  = sChooseMsg.c_str ();
-  msg.m_strTitle    = choosetitle;
-
   const int table = 3;
-
-  // standard Lua table iteration
+  // Snapshot choices and default lookups in Lua-owned storage first. A defaults
+  // __index metamethod can throw or mutate the choices, so do not look it up
+  // again after constructing the native dialog.
+  lua_newtable (L);
+  const int choices = lua_gettop (L);
+  int count = 0;
   for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
     {
     if (!lua_isstring (L, -2))
@@ -618,6 +626,34 @@ static int multilistbox (lua_State *L)
 
     if (!lua_isstring (L, -1))
       luaL_error (L, "table must have string or number values");
+
+    lua_createtable (L, 3, 0);
+    lua_pushvalue (L, -3);  // key
+    lua_rawseti (L, -2, 1);
+    lua_pushvalue (L, -2);  // value
+    lua_rawseti (L, -2, 2);
+    if (bHaveDefaults)
+      {
+      lua_pushvalue (L, -3);  // key
+      lua_gettable (L, 4);
+      bool selected = lua_toboolean (L, -1) != 0;
+      lua_pop (L, 1);
+      lua_pushboolean (L, selected);
+      lua_rawseti (L, -2, 3);
+      }
+    lua_rawseti (L, choices, ++count);
+    }
+
+  CLuaChooseListMulti msg;
+  string sChooseMsg = FindAndReplace (choosemsg, "&", "&&");
+  msg.m_strMessage = sChooseMsg.c_str ();
+  msg.m_strTitle = choosetitle;
+
+  for (int i = 1; i <= count; ++i)
+    {
+    lua_rawgeti (L, choices, i);
+    lua_rawgeti (L, -1, 1);
+    lua_rawgeti (L, -2, 2);
 
     // value can simply be converted to a string
     string sValue = lua_tostring (L, -1);
@@ -638,15 +674,14 @@ static int multilistbox (lua_State *L)
     // remember default positions
     if (bHaveDefaults)
       {
-      lua_pushvalue (L, -2);   // copy key to top of stack
-      lua_gettable (L, 4);  // see if this key is in defaults table
-      if (!(lua_isnil (L, -1) ||
-            lua_isboolean (L, -1) &&  !lua_toboolean (L, -1))) 
+      lua_rawgeti (L, -3, 3);
+      if (lua_toboolean (L, -1))
         msg.m_iDefaults.insert (msg.m_data.size ());
       lua_pop (L, 1); // remove result of table-lookup
       }  // end of having a defaults table
 
     msg.m_data.push_back (kv);
+    lua_pop (L, 3);  // entry, key, value
 
     } // end of looping through table
 
@@ -741,7 +776,6 @@ static int filepicker (lua_State *L)
   const char * sTitle = luaL_optstring (L, 1, "");
   const char * sDefaultName = luaL_optstring (L, 2, "");
   const char * sDefaultExtension = luaL_optstring (L, 3, "");
-  string sFilter;             // arg 4 = table
   bool bSave = optboolean (L, 5, 0);
 
   if (bSave)
@@ -771,9 +805,7 @@ static int filepicker (lua_State *L)
     if (!lua_istable (L, table))
       luaL_error (L, "argument 4 must be a table of filters, or nil");
 
-    // construct filter
-
-    // standard Lua table iteration
+    // Validate the entire filter table before allocating the native filter.
     for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
       {
 
@@ -781,7 +813,14 @@ static int filepicker (lua_State *L)
       if (lua_type (L, -1) != LUA_TSTRING ||
           lua_type (L, -2) != LUA_TSTRING )
         luaL_error (L, "table of filters must be suffix/description pair");
+      }
+    }
 
+  string sFilter;
+  if (lua_istable (L, table))
+    {
+    for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
+      {
       string sDescription = lua_tostring (L, -1);
       string sSuffix = lua_tostring (L, -2);
 
@@ -895,26 +934,38 @@ static int directorypicker (lua_State *L)
 
 static int spellcheckdialog (lua_State *L) 
   {
-  CSpellCheckDlg dlg;
+  const char * word = luaL_checkstring (L, 1);
+  const bool haveSuggestions = !lua_isnoneornil (L, 2);
+  if (haveSuggestions && !lua_istable (L, 2))
+    luaL_error (L, "argument 2 must be a table of suggestions, or nil");
 
-  dlg.m_strMisspeltWord = luaL_checkstring (L, 1);
-
-  if (lua_gettop (L) >= 2 && !lua_isnil (L, 2))
+  lua_newtable (L);
+  const int suggestions = lua_gettop (L);
+  int count = 0;
+  if (haveSuggestions)
     {
-
-    if (!lua_istable (L, 2))
-      luaL_error (L, "argument 2 must be a table of suggestions, or nil");
-
     for (int i = 1; ; i++)
       {
       lua_rawgeti (L, 2, i);   // get i'th item
       if (lua_isnil (L, -1))
-        break;    // first nil key, leave loop
-      dlg.m_suggestions.push_back (luaL_checkstring (L, -1));
-      lua_pop (L, 1); // remove value
+        {
+        lua_pop (L, 1);
+        break;
+        }
+      luaL_checkstring (L, -1);
+      lua_rawseti (L, suggestions, ++count);
       } // end of looping through table
 
     }      // end of not nil for argument 2
+
+  CSpellCheckDlg dlg;
+  dlg.m_strMisspeltWord = word;
+  for (int i = 1; i <= count; ++i)
+    {
+    lua_rawgeti (L, suggestions, i);
+    dlg.m_suggestions.push_back (lua_tostring (L, -1));
+    lua_pop (L, 1);
+    }
 
   if (dlg.DoModal () != IDOK)
     {
@@ -1037,7 +1088,9 @@ static int utf8encode (lua_State *L) {
 
   int numArgs = lua_gettop(L);  /* number of arguments */
   int i;
-  string sOutput;
+  // Lua owns spilled buffer storage, so a later argument error can collect it.
+  luaL_Buffer output;
+  luaL_buffinit (L, &output);
 
 unsigned char utf8 [10];    // UTF-8 should be max 6 characters
 
@@ -1053,7 +1106,10 @@ unsigned char utf8 [10];    // UTF-8 should be max 6 characters
         lua_rawgeti (L, i, j);   // get j'th item
 
         if (lua_isnil (L, -1))
+          {
+          lua_pop (L, 1);
           break;    // first nil key, leave loop
+          }
 
         // check is number
         if (!lua_isnumber (L, -1))
@@ -1073,10 +1129,9 @@ unsigned char utf8 [10];    // UTF-8 should be max 6 characters
 
         int iLen = _pcre_ord2utf (n, utf8);
 
-        // we do it this way so we can correctly append 0x00
-        sOutput.append ((const char *) utf8, iLen);
-
-        lua_pop (L, 1); // remove value from table
+        // Remove the temporary value before the buffer uses the Lua stack.
+        lua_pop (L, 1);
+        luaL_addlstring (&output, (const char *) utf8, iLen);
         } // end of looping through table
       }   // end of this argument is a table
     else
@@ -1096,12 +1151,12 @@ unsigned char utf8 [10];    // UTF-8 should be max 6 characters
       int iLen = _pcre_ord2utf (n, utf8);
 
       // we do it this way so we can correctly append 0x00
-      sOutput.append ((const char *) utf8, iLen);
+      luaL_addlstring (&output, (const char *) utf8, iLen);
       }  // end of not table item
 
     }  // end of doing each argument
 
-  lua_pushlstring (L, sOutput.c_str (), sOutput.size ());
+  luaL_pushresult (&output);
 
   return 1;  /* return the string */
 }  // utf8encode
@@ -1780,7 +1835,15 @@ static int filterpicker (lua_State *L)
   if (!lua_istable (L, table))
      luaL_error (L, "must have table of choices as first argument");
 
-CFunctionListDlg dlg;
+  // Validate both callbacks before retaining either in the registry.
+  if (!lua_isnoneornil (L, 5))
+    luaL_checktype (L, 5, LUA_TFUNCTION);
+  if (!lua_isnoneornil (L, 6))
+    luaL_checktype (L, 6, LUA_TFUNCTION);
+
+  check_choice_table (L, table);
+
+  CFunctionListDlg dlg;
 
   dlg.m_strTitle    = filtertitle;
   dlg.m_strFilter   = initialfilter;
@@ -1789,12 +1852,6 @@ CFunctionListDlg dlg;
   // standard Lua table iteration
   for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
     {
-    if (!lua_isstring (L, -2))
-      luaL_error (L, "table must have string or number keys");
-
-    if (!lua_isstring (L, -1))
-      luaL_error (L, "table must have string or number values");
-
     // value can simply be converted to a string
     string sValue = lua_tostring (L, -1);
 
@@ -1823,7 +1880,6 @@ CFunctionListDlg dlg;
     {
     if (!lua_isnil (L, 5))
       {
-      luaL_checktype (L, 5, LUA_TFUNCTION);
       lua_pushvalue (L, 5);    // function is now on top of stack   
 
       dlg.m_L = L; 
@@ -1841,7 +1897,6 @@ CFunctionListDlg dlg;
     {
     if (!lua_isnil (L, 6))
       {
-      luaL_checktype (L, 6, LUA_TFUNCTION);
       lua_pushvalue (L, 6);    // function is now on top of stack   
 
       dlg.m_L = L; 

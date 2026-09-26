@@ -454,7 +454,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
     // this crazy code is to get 0x00 bytes into telnet subnegotiations ;)
 
     VARIANT v;
-    VariantClear (&v);
+    VariantInit (&v);
     v.vt = VT_BSTR;
     CString str (sText.c_str (), sText.size ());
     v.bstrVal = str.AllocSysString (); 

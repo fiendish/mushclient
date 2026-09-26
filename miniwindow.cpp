@@ -16,7 +16,7 @@
 
 // constructor
 CMiniWindow::CMiniWindow ()  :
-          m_oldBitmap (NULL),
+          m_hOldBitmap (NULL),
           m_Bitmap (NULL),
           m_iWidth (0), m_iHeight (0),
           m_iPosition (0), m_iFlags (0),
@@ -43,7 +43,7 @@ CMiniWindow::~CMiniWindow ()  // destructor
   // get rid of old one if any
   if (m_Bitmap)
     {
-    pdc->SelectObject(m_oldBitmap);    // swap old one back
+    pdc->SelectObject((HGDIOBJ) m_hOldBitmap);    // swap old one back
     m_Bitmap->DeleteObject ();        // delete the one we made
     delete m_Bitmap;
     }
@@ -171,7 +171,7 @@ void CMiniWindow::Create (long Left, long Top, long Width, long Height,
 
   CDC * pNewDC = new CDC;
   CBitmap * pNewBitmap = NULL;
-  CBitmap * pNewOldBitmap = NULL;
+  HBITMAP hNewOldBitmap = NULL;
   try
     {
     pNewBitmap = new CBitmap;
@@ -183,16 +183,17 @@ void CMiniWindow::Create (long Left, long Top, long Width, long Height,
     if (!pNewBitmap->CreateBitmap (MAX (Width, 1), MAX (Height, 1), 1,
                                    GetDeviceCaps((*pNewDC), BITSPIXEL), NULL))
       AfxThrowResourceException ();
-    pNewOldBitmap = pNewDC->SelectObject (pNewBitmap);
-    if (!pNewOldBitmap)
+    // MFC temporary wrappers are deleted on idle; retain only the native handle.
+    hNewOldBitmap = (HBITMAP) pNewDC->SelectObject ((HGDIOBJ) pNewBitmap->GetSafeHandle ());
+    if (!hNewOldBitmap)
       AfxThrowResourceException ();
     pNewDC->SetWindowOrg(0, 0);
     pNewDC->FillSolidRect (0, 0, Width, Height, BackgroundColour);
     }
   catch (...)
     {
-    if (pNewOldBitmap)
-      pNewDC->SelectObject (pNewOldBitmap);
+    if (hNewOldBitmap)
+      pNewDC->SelectObject ((HGDIOBJ) hNewOldBitmap);
     delete pNewBitmap;
     delete pNewDC;
     throw;
@@ -201,7 +202,7 @@ void CMiniWindow::Create (long Left, long Top, long Width, long Height,
   // release the old resources only after the replacement is complete
   if (m_Bitmap)
     {
-    pdc->SelectObject(m_oldBitmap);    // swap old one back
+    pdc->SelectObject((HGDIOBJ) m_hOldBitmap);    // swap old one back
     m_Bitmap->DeleteObject ();
     delete m_Bitmap;
     }
@@ -209,7 +210,7 @@ void CMiniWindow::Create (long Left, long Top, long Width, long Height,
 
   pdc = pNewDC;
   m_Bitmap = pNewBitmap;
-  m_oldBitmap = pNewOldBitmap;
+  m_hOldBitmap = hNewOldBitmap;
 
   m_Location.x           = Left            ;
   m_Location.y           = Top             ;
@@ -1751,11 +1752,8 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
-  HotspotMapIterator it = m_Hotspots.find (HotspotId);
-  CHotspot * pOldHotspot = it == m_Hotspots.end () ? NULL : it->second;
   std::unique_ptr<CHotspot> pHotspot (new CHotspot);
 
-  pHotspot->m_rect              = CRect (Left, Top, FixRight (Right), FixBottom (Bottom));
   pHotspot->m_sMouseOver        = MouseOver;
   pHotspot->m_sCancelMouseOver  = CancelMouseOver;
   pHotspot->m_sMouseDown        = MouseDown;
@@ -1768,6 +1766,9 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
   // if not in a plugin, look in main world for hotspot callbacks, and remember the dispatch ID
   if (sPluginID.empty ())
     {
+    // Resolving a Lua name may run __index or a GC finalizer. As with mouse
+    // callbacks, do not allow WindowDelete to destroy this active window.
+    CBoolStateGuard executingGuard (m_bExecutingScript, true);
     CString strErrorMessage;
 
     pHotspot->m_dispid_MouseOver        = pDoc->GetProcedureDispid (MouseOver, "mouse over", "", strErrorMessage);
@@ -1777,6 +1778,14 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
     pHotspot->m_dispid_MouseUp          = pDoc->GetProcedureDispid (MouseUp, "mouse up", "", strErrorMessage);
     }
 
+  // Lookup may have deleted/replaced hotspots, recreated the window, or let
+  // another plugin install its callbacks. Borrow the old hotspot only now.
+  if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
+    return eHotspotPluginChanged;
+
+  pHotspot->m_rect = CRect (Left, Top, FixRight (Right), FixBottom (Bottom));
+  HotspotMapIterator it = m_Hotspots.find (HotspotId);
+  CHotspot * pOldHotspot = it == m_Hotspots.end () ? NULL : it->second;
   m_Hotspots [HotspotId] = pHotspot.get ();
   pHotspot.release ();
   delete pOldHotspot;
@@ -3901,26 +3910,38 @@ long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
-  HotspotMapIterator it = m_Hotspots.find (HotspotId);
-
-  if (it == m_Hotspots.end ())
+  if (m_Hotspots.find (HotspotId) == m_Hotspots.end ())
     return eHotspotNotInstalled;   // no such hotspot
 
-  CHotspot * pHotspot = it->second;
-
-  pHotspot->m_sMoveCallback = MoveCallback;
-  pHotspot->m_sReleaseCallback = ReleaseCallback;
-  pHotspot->m_DragFlags = Flags;
-
+  DISPID dispidMove = DISPID_UNKNOWN;
+  DISPID dispidRelease = DISPID_UNKNOWN;
 
   // if not in a plugin, look in main world for hotspot callbacks, and remember the dispatch ID
   if (sPluginID.empty ())
     {
-
+    CBoolStateGuard executingGuard (m_bExecutingScript, true);
     CString strErrorMessage;
 
-    pHotspot->m_dispid_MoveCallback     = pDoc->GetProcedureDispid (MoveCallback, "mouse move", "", strErrorMessage);
-    pHotspot->m_dispid_ReleaseCallback  = pDoc->GetProcedureDispid (ReleaseCallback, "mouse release", "", strErrorMessage);
+    dispidMove = pDoc->GetProcedureDispid (MoveCallback, "mouse move", "", strErrorMessage);
+    dispidRelease = pDoc->GetProcedureDispid (ReleaseCallback, "mouse release", "", strErrorMessage);
+    }
+
+  // Callback lookup can delete or replace the hotspot (including via
+  // WindowCreate). Do not carry its pointer across that lookup.
+  if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
+    return eHotspotPluginChanged;
+  HotspotMapIterator it = m_Hotspots.find (HotspotId);
+  if (it == m_Hotspots.end ())
+    return eHotspotNotInstalled;
+
+  CHotspot * pHotspot = it->second;
+  pHotspot->m_sMoveCallback = MoveCallback;
+  pHotspot->m_sReleaseCallback = ReleaseCallback;
+  pHotspot->m_DragFlags = Flags;
+  if (sPluginID.empty ())
+    {
+    pHotspot->m_dispid_MoveCallback = dispidMove;
+    pHotspot->m_dispid_ReleaseCallback = dispidRelease;
     }
 
   return eOK;
@@ -4235,24 +4256,31 @@ long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
-  HotspotMapIterator it = m_Hotspots.find (HotspotId);
-
-  if (it == m_Hotspots.end ())
+  if (m_Hotspots.find (HotspotId) == m_Hotspots.end ())
     return eHotspotNotInstalled;   // no such hotspot
 
-  CHotspot * pHotspot = it->second;
-
-  pHotspot->m_sScrollwheelCallback = MoveCallback;
-
+  DISPID dispidScrollwheel = DISPID_UNKNOWN;
 
   // if not in a plugin, look in main world for hotspot callbacks, and remember the dispatch ID
   if (sPluginID.empty ())
     {
-
+    CBoolStateGuard executingGuard (m_bExecutingScript, true);
     CString strErrorMessage;
 
-    pHotspot->m_dispid_ScrollwheelCallback     = pDoc->GetProcedureDispid (MoveCallback, "scroll wheel", "", strErrorMessage);
+    dispidScrollwheel = pDoc->GetProcedureDispid (MoveCallback, "scroll wheel", "", strErrorMessage);
     }
+
+  // As with drag handlers, lookup must finish before borrowing the hotspot.
+  if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
+    return eHotspotPluginChanged;
+  HotspotMapIterator it = m_Hotspots.find (HotspotId);
+  if (it == m_Hotspots.end ())
+    return eHotspotNotInstalled;
+
+  CHotspot * pHotspot = it->second;
+  pHotspot->m_sScrollwheelCallback = MoveCallback;
+  if (sPluginID.empty ())
+    pHotspot->m_dispid_ScrollwheelCallback = dispidScrollwheel;
 
   return eOK;
 

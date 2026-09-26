@@ -73,7 +73,17 @@ public:
   tCOMPtr() : m_p(NULL) { }
   tCOMPtr(const tCOMPtr & o) : m_p(o.m_p) { AddRef();};
   tCOMPtr(T * p) : m_p(p) { AddRef();};
-  void operator=(const  tCOMPtr<T> & o) { Attach(o.m_p); AddRef(); }
+  void operator=(const tCOMPtr<T> & o)
+    {
+    if (m_p == o.m_p)
+      return;
+    T * p = o.m_p;
+    if (p)
+      p->AddRef();
+    if (m_p)
+      m_p->Release();
+    m_p = p;
+    }
   ~tCOMPtr() { if (m_p) m_p->Release(); }
   operator T* () const { return m_p; }
   T& operator * () const { return *m_p; }

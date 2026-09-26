@@ -194,46 +194,69 @@ string concatArgs (lua_State *L, const char * delimiter = "", const int first = 
   {
   int n = lua_gettop(L);  /* number of arguments */
   int i;
-  string sOutput;
+  // Lua errors (including __tostring errors) bypass C++ destructors. Keep
+  // partial output on Lua's heap until all error-capable calls have finished.
+  luaL_Buffer output;
+  luaL_buffinit (L, &output);
   lua_getglobal(L, "tostring");
+  const int tostring_index = n + 1;
   for (i = first; i <= n; i++) 
     {
     const char *s;
-    lua_pushvalue(L, -1);  /* function to be called */
+    if (i > first)
+      luaL_addstring (&output, delimiter);
+    lua_pushvalue(L, tostring_index);  /* function to be called */
     lua_pushvalue(L, i);   /* value to print */
     lua_call(L, 1, 1);
     s = lua_tostring(L, -1);  /* get result */
     if (s == NULL)
       luaL_error(L, "'tostring' must return a string to be concatenated");
         
-    // add delimiter every time except first time through the loop
-    if (i > first)
-      sOutput += delimiter;
-    sOutput += s;
-    lua_pop(L, 1);  /* pop result */
+    // Preserve the existing C-string treatment of embedded NULs in each
+    // argument. addvalue consumes the result and handles buffer stack chunks.
+    lua_pushstring (L, s);
+    lua_replace (L, -2);
+    luaL_addvalue (&output);
     }
 
-  lua_pop(L, 1);  /* pop tostring function */
+  luaL_pushresult (&output);
+  string sOutput = lua_tostring (L, -1);
+  lua_pop(L, 2);  /* pop result and tostring function */
   return sOutput;
 
   } // end of concatArgs
 
-static void GetVariableListHelper (lua_State *L, CMUSHclientDoc *pDoc)
+static int L_PushStringMapSnapshot (lua_State *L)
   {
-  lua_newtable(L);                                                            
+  const tStringToStringMap & snapshot =
+    *static_cast<const tStringToStringMap *> (lua_touserdata (L, 1));
+  lua_newtable (L);
+  for (tStringToStringMap::const_iterator i = snapshot.begin ();
+       i != snapshot.end (); ++i)
+    {
+    lua_pushstring (L, i->first.c_str ());
+    lua_pushstring (L, i->second.c_str ());
+    lua_rawset (L, -3);
+    }
+  return 1;
+  }
 
+// The caller pushes L_PushStringMapSnapshot before selecting the source map.
+// Lua allocations can run finalizers that delete variables or their plugin.
+// Copy without calling Lua, then protect conversion so C++ owners unwind even
+// if Lua raises an error. The caller propagates errors after its own guards.
+static int GetVariableListHelper (lua_State *L, CMUSHclientDoc *pDoc)
+  {
+  tStringToStringMap snapshot;
   for (POSITION pos = pDoc->GetVariableMap ().GetStartPosition(); pos; )
     {
     CString strVariableName;
     CVariable * variable_item;
-
     pDoc->GetVariableMap ().GetNextAssoc (pos, strVariableName, variable_item);
-
-    lua_pushstring (L, strVariableName);
-    lua_pushstring (L, variable_item->strContents);
-    lua_rawset(L, -3);
+    snapshot [string (strVariableName)] = string (variable_item->strContents);
     }      // end of looping through each Variable
-
+  lua_pushlightuserdata (L, &snapshot);
+  return lua_pcall (L, 1, 1, 0);
   } // end of GetVariableListHelper
 
 //----- My checking routines that do not witter on about "bad self" -----
@@ -578,9 +601,10 @@ static int L_AnsiNote (lua_State *L)
 static int L_AppendToNotepad (lua_State *L)
   {
   CMUSHclientDoc * pDoc = doc (L);  // must do this first
+  const char * title = my_checkstring (L, 1);
 
   lua_pushboolean (L, pDoc->AppendToNotepad (
-                    my_checkstring (L, 1), // title
+                    title,
                     concatArgs (L, "", 2).c_str ()  // contents
                     ));
 
@@ -733,17 +757,15 @@ static int L_ArrayImport (lua_State *L)
   {
   CMUSHclientDoc * pDoc = doc (L);  // must do this first
 
-  string name = my_checkstring (L, 1);
+  const char * name = my_checkstring (L, 1);
   const int table = 2;    // 2nd argument may be table
 
   // extension here - accept table as 2nd argument
   if (lua_istable (L, table))
     {
 
-    tStringMapOfMaps::iterator it = pDoc->GetArrayMap ().find (name);
-                           
     // find table
-    if (it == pDoc->GetArrayMap ().end ())
+    if (pDoc->GetArrayMap ().find (name) == pDoc->GetArrayMap ().end ())
       {
       lua_pushnumber (L, eArrayDoesNotExist);
       return 1;
@@ -757,9 +779,23 @@ static int L_ArrayImport (lua_State *L)
       if (lua_type (L, -2) != LUA_TSTRING)
         luaL_error (L, "table must have string keys");
 
-      // get key and value
-      string sKey = lua_tostring (L, -2);
-      string sValue = lua_tostring (L, -1);
+      // Validate and convert before creating C++ strings: Lua errors do not
+      // unwind their destructors. Non-string/non-number values are invalid.
+      const char * key = lua_tostring (L, -2);
+      const char * value = lua_tostring (L, -1);
+      if (value == NULL)
+        luaL_error (L, "table values must be strings or numbers");
+
+      // Number-to-string conversion can run Lua finalizers. Do not keep an
+      // array iterator across it; a finalizer may have deleted the array.
+      tStringMapOfMaps::iterator it = pDoc->GetArrayMap ().find (name);
+      if (it == pDoc->GetArrayMap ().end ())
+        {
+        lua_pushnumber (L, eArrayDoesNotExist);
+        return 1;
+        }
+      string sKey = key;
+      string sValue = value;
 
       // insert into array
       pair<tStringToStringMap::iterator, bool> status = 
@@ -784,7 +820,7 @@ static int L_ArrayImport (lua_State *L)
 
   // not a table - normal string with delimiters
   lua_pushnumber (L, pDoc->ArrayImport (
-                  name.c_str (),  // Name
+                  name,  // Name
                   my_checkstring (L, 2),  // Values
                   my_optstring (L, 3, ",")   // Delimiter
                   ));
@@ -843,20 +879,21 @@ static int L_ArrayListValues (lua_State *L)
 static int L_ArrayList (lua_State *L)
   {
   CMUSHclientDoc * pDoc = doc (L);  // must do this first
-
-  tStringMapOfMaps::iterator it = pDoc->GetArrayMap ().find (my_checkstring (L, 1));
+  const char * name = my_checkstring (L, 1);
+  // Prepare the Lua function before borrowing any native iterators.
+  lua_pushcfunction (L, L_PushStringMapSnapshot);
+  tStringMapOfMaps::iterator it = pDoc->GetArrayMap ().find (name);
   if (it == pDoc->GetArrayMap ().end ())
     return 0;        // not found, no results
 
-  lua_newtable(L);                                                            
-  for (tStringToStringMap::iterator i = it->second->begin (); 
-       i != it->second->end ();
-       i++)
-       {
-        lua_pushstring (L, i->first.c_str ());
-        lua_pushstring (L, i->second.c_str ());
-        lua_rawset(L, -3);
-       }
+  int status;
+  {
+  tStringToStringMap snapshot (*it->second);
+  lua_pushlightuserdata (L, &snapshot);
+  status = lua_pcall (L, 1, 1, 0);
+  } // release the copy before propagating a Lua error
+  if (status)
+    return lua_error (L);
   return 1;   // one table
   } // end of L_ArrayList
 
@@ -979,6 +1016,16 @@ static int L_BroadcastPlugin (lua_State *L)
 //----------------------------------------
 //  world.CallPlugin
 //----------------------------------------
+static int L_FindPluginRoutine (lua_State *L)
+  {
+  const char * routine = static_cast<const char *> (lua_touserdata (L, 1));
+  // Run lookup under pcall: table __index callbacks can raise Lua errors.
+  // A missing function returns nil without disturbing the caller's stack.
+  if (!GetNestedFunction (L, routine, false))
+    return 0;
+  return 1;
+  }
+
 static int L_CallPlugin (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
@@ -986,13 +1033,9 @@ static int L_CallPlugin (lua_State *L)
   const char * sPluginID = my_checkstring (L, 1);
   const char * sRoutine = my_checkstring (L, 2);
 
-  // remove plugin ID and function name
-  // this is so, after the lua_pcall the stack should be empty
-  // so, if the called function does a CallPlugin back to us, it won't matter
-  // if we do a lua_settop (pL, 0) (below) to clear the stack
-
-  lua_remove (L, 1);  // remove plugin ID
-  lua_remove (L, 1);  // remove function name
+  // Keep the original arguments rooted while they are in use. A callback
+  // may collect garbage or call back into this Lua state while we are using
+  // the plugin ID, routine name, or argument string pointers.
 
   int i;    // for iterating through arguments / return values
 
@@ -1047,17 +1090,35 @@ static int L_CallPlugin (lua_State *L)
 
   if (pPlugin->m_ScriptEngine->IsLua ())
     {
-    int n = lua_gettop(L);  // number of arguments in calling script (we removed plugin ID and function name already)
+    int n = lua_gettop(L) - 2;  // exclude plugin ID and function name
 
     lua_State *pL = pPlugin->m_ScriptEngine->L;  // plugin's Lua state
 
-    // don't clear if we are calling ourselves
-    if (pL != L)
-      lua_settop (pL, 0);   // clear stack in target plugin
+    // A nested call may arrive while this state holds another call's
+    // arguments or results. Append to that stack, then restore it on exit.
+    // A self-call consumes its arguments directly, keeping the ID and name.
+    const int targetBase = pL == L ? 2 : lua_gettop (pL);
+    if (!lua_checkstack (pL, pL == L ? 4 : n + 4))
+      return luaL_error (L, "Unable to grow plugin Lua stack");
 
-    // get wanted function onto stack
-    if (!GetNestedFunction (pL, sRoutine, false))    // don't raise error
+    // Lookup and argument conversion can run finalizers or __index callbacks
+    // too. Keep the plugin alive for these operations, not just the call.
+    CPluginCallGuard callGuard (pPlugin);
+    lua_pushcfunction (pL, L_FindPluginRoutine);
+    lua_pushlightuserdata (pL, const_cast<char *> (sRoutine));
+    if (lua_pcall (pL, 1, 1, 0))
       {
+      const char * error = lua_tostring (pL, -1);
+      CString strLookupError = error ? error : "Non-string Lua error during routine lookup";
+      lua_settop (pL, targetBase);
+      lua_pushnumber (L, eErrorCallingPluginRoutine);
+      lua_pushliteral (L, "Error looking up plugin routine");
+      lua_pushstring (L, strLookupError);
+      return 3;
+      }
+    if (!lua_isfunction (pL, -1))
+      {
+      lua_settop (pL, targetBase);
       lua_pushnumber (L, eNoSuchRoutine);
       CString strError = TFormat ("No function '%s' in plugin '%s' (%s)",
                         sRoutine, 
@@ -1067,61 +1128,50 @@ static int L_CallPlugin (lua_State *L)
       return 2;    // eNoSuchRoutine, explanation
       }
    
-    // if we are calling ourselves, don't make a copy of everything
+    // Self-calls can pass every Lua type without copying. Put the function
+    // after the rooted ID/name and before its arguments.
     if (pL == L)
-      lua_insert (pL, 1);    // move function to be called as first item 
-    else
-      {   // calling a different plugin
+      lua_insert (pL, 3);
 
-      // copy all our arguments to destination script space
-      // we can handle: nil, boolean, number, string
-      // but NOT: table, function, userdata, thread
-
-      // check we can push our arguments.
-      // we need room for the function itself and at least room for the return value
-      lua_checkstack (pL, n + 2);
-
-      for (i = 1; i <= n; i++) 
+    // Across separate states, copy only nil, boolean, number, and string.
+    for (i = 1; pL != L && i <= n; i++)
+      {
+      switch (lua_type (L, i + 2))
         {
-      
-        switch (lua_type (L, i))
+        case LUA_TNIL:
+          lua_pushnil (pL);
+          break;
+
+        case LUA_TBOOLEAN:
+          lua_pushboolean (pL, lua_toboolean (L, i + 2));
+          break;
+
+        case LUA_TNUMBER:
+          lua_pushnumber (pL, lua_tonumber (L, i + 2));
+          break;
+
+        case LUA_TSTRING:
           {
-          case LUA_TNIL:
-            lua_pushnil (pL);
-            break;
+          size_t len;
+          const char * s = lua_tolstring (L, i + 2, &len);
+          lua_pushlstring (pL, s, len);
+          }
+          break;
 
-          case LUA_TBOOLEAN:
-            lua_pushboolean (pL, lua_toboolean (L, i));
-            break;
+        // not one of those? can't handle it
+        default:
+          lua_settop (pL, targetBase);
+          lua_pushnumber (L, eBadParameter);
+          CString strError = TFormat ("Cannot pass argument #%i (%s type) to CallPlugin",
+                                      i + 2,  // include plugin ID and function name
+                                      luaL_typename (L, i + 2));
+          lua_pushstring (L, strError);
+          return 2;    // eBadParameter, explanation
 
-          case LUA_TNUMBER:
-            lua_pushnumber (pL, lua_tonumber (L, i));
-            break;
+        } // end of switch on type of argument
 
-          case LUA_TSTRING:
-            {
-            size_t len;
-            const char * s = lua_tolstring (L, i, &len);
-            lua_pushlstring (pL, s, len);
-            }
-            break;
+      } // end of for each argument
 
-          // not one of those? can't handle it
-          default:
-            lua_settop (pL, 0);     // clear target plugin's stack to remove whatever we pushed onto it
-            lua_pushnumber (L, eBadParameter);
-            CString strError = TFormat ("Cannot pass argument #%i (%s type) to CallPlugin",
-                                        i + 2,  // add two because we deleted plugin ID and function name
-                                        luaL_typename (L, i));
-            lua_pushstring (L, strError);
-            return 2;    // eBadParameter, explanation
-
-          } // end of switch on type of argument
-
-        } // end of for each argument
-      }   // end of not calling ourselves
-
-    CPluginCallGuard callGuard (pPlugin);
     int iCallError;
     CString strLuaError;
     {
@@ -1146,7 +1196,7 @@ static int L_CallPlugin (lua_State *L)
       // this will display the error, and the error context
       LuaError (pL, "Run-time error", sRoutine, strType, strReason, pDoc);
 
-      lua_settop (pL, 0);     // clean stack up
+      lua_settop (pL, targetBase);
       }
     }
 
@@ -1168,18 +1218,30 @@ static int L_CallPlugin (lua_State *L)
       return 3;  // ie. eErrorCallingPluginRoutine, explanation, Lua error message
       }
 
-    int ret_n = lua_gettop(pL);  // number of returned values (might be zero)
+    int ret_n = lua_gettop(pL) - targetBase;  // number of returned values
 
+    // Input values are no longer needed. Retain only the ID/name while
+    // copying results, so large calls do not need space for both at once.
+    if (pL != L)
+      lua_settop (L, 2);
+
+    // LUA_MULTRET may have filled the available stack in the self-call case.
+    if (!lua_checkstack (L, pL == L ? 1 : ret_n + 2))
+      {
+      lua_settop (pL, targetBase);
+      lua_settop (L, 2);
+      lua_pushnumber (L, eErrorCallingPluginRoutine);
+      lua_pushliteral (L, "Too many return values from plugin routine");
+      return 2;
+      }
     lua_pushnumber (L, eOK);   // expected behaviour prior to 4.55 (just a single value)
 
     // if we are calling ourselves, don't make a copy of everything
     if (pL == L)
       {
-      lua_insert (L, 1);    // put return code as first item pushing others up
+      lua_insert (L, targetBase + 1);  // return code precedes this call's results
       return 1 + ret_n;     // eOK plus all returned values
       }
-
-    lua_checkstack (L, ret_n + 1);  // check we can push eOK plus all the return results
 
     // copy return results back to original script space
     // we can handle: nil, boolean, number, string
@@ -1188,24 +1250,24 @@ static int L_CallPlugin (lua_State *L)
     for (i = 1; i <= ret_n; i++) 
       {
       
-      switch (lua_type (pL, i))
+      switch (lua_type (pL, targetBase + i))
         {
         case LUA_TNIL:
           lua_pushnil (L);
           break;
 
         case LUA_TBOOLEAN:
-          lua_pushboolean (L, lua_toboolean (pL, i));
+          lua_pushboolean (L, lua_toboolean (pL, targetBase + i));
           break;
 
         case LUA_TNUMBER:
-          lua_pushnumber (L, lua_tonumber (pL, i));
+          lua_pushnumber (L, lua_tonumber (pL, targetBase + i));
           break;
 
         case LUA_TSTRING:
           {
           size_t len;
-          const char * s = lua_tolstring (pL, i, &len);
+          const char * s = lua_tolstring (pL, targetBase + i, &len);
           lua_pushlstring (L, s, len);
           }
           break;
@@ -1215,18 +1277,21 @@ static int L_CallPlugin (lua_State *L)
           lua_pushnumber (L, eErrorCallingPluginRoutine);
           CString strError = CFormat ("Cannot handle return value #%i (%s type) from function '%s' in plugin '%s' (%s)",
                                       i, 
-                                      luaL_typename (pL, i), 
+                                      luaL_typename (pL, targetBase + i),
                                       sRoutine,
                                       (LPCTSTR) pPlugin->m_strName, 
                                       sPluginID);
           lua_pushstring (L, strError);
-          lua_settop (pL, 0);     // clean stack in plugin
+          lua_settop (pL, targetBase);
           return 2;   // eErrorCallingPluginRoutine, explanation
 
         } // end of switch on type of argument
 
       } // end of for each argument
 
+      // The caller now owns copies. Leaving results on the target stack
+      // keeps potentially large strings alive even after both states run GC.
+      lua_settop (pL, targetBase);
       return ret_n + 1;  // eOK plus all returned values
     }  // end if Lua calling Lua
 
@@ -1234,9 +1299,9 @@ static int L_CallPlugin (lua_State *L)
 
   // old fashioned way ...
   lua_pushnumber (L, pDoc->CallPlugin (
-                  sPluginID,  // PluginID     - was argument 1 earlier on
-                  sRoutine,   // Routine      - was argument 2 earlier on
-                  my_optstring   (L, 1, "")   // Argument - optional (originally argument 3)
+                  sPluginID,
+                  sRoutine,
+                  my_optstring   (L, 3, "")   // Argument - optional
                   ));
   return 1;  // number of result fields
   } // end of L_CallPlugin
@@ -2611,7 +2676,7 @@ static int L_GetAlias (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
 
-  VARIANT MatchText, 
+  COleVariant MatchText,
           ResponseText, 
           Parameter, 
           Flags, 
@@ -2978,6 +3043,55 @@ static int L_GetLineCount (lua_State *L)
 //  world.GetLineInfo
 // extension - for info type 0 or omitted, returns a table
 //----------------------------------------
+struct CLuaLineInfoSnapshot
+  {
+  CString text, timestr;
+  int length, flags, styles;
+  long line;
+  bool newline;
+  double time, ticks, elapsed;
+
+  CLuaLineInfoSnapshot (CMUSHclientDoc * pDoc, CLine * pLine)
+    : text (pLine->text, pLine->len),
+      timestr (COleDateTime (pLine->m_theTime.GetTime ()).Format (0, 0)),
+      length (pLine->len), flags (pLine->flags),
+      styles (pLine->styleList.GetCount ()), line (pLine->m_nLineNumber),
+      newline (pLine->hard_return), time ((int) pLine->m_theTime.GetTime ()),
+      ticks (0)
+    {
+    if (App.m_iCounterFrequency)
+      {
+      ticks = (double) pLine->m_lineHighPerformanceTime.QuadPart / (double) App.m_iCounterFrequency;
+      elapsed = (double) (pLine->m_lineHighPerformanceTime.QuadPart -
+                         pDoc->m_whenWorldStartedHighPrecision.QuadPart) / (double) App.m_iCounterFrequency;
+      }
+    else
+      elapsed = pLine->m_theTime.GetTime () - (double) pDoc->m_whenWorldStarted.GetTime ();
+    }
+  };
+
+static int L_PushLineInfoSnapshot (lua_State *L)
+  {
+  const CLuaLineInfoSnapshot & line =
+    *static_cast<const CLuaLineInfoSnapshot *> (lua_touserdata (L, 1));
+  lua_newtable (L);
+  MakeTableItem     (L, "text",     line.text);
+  MakeTableItem     (L, "length",   line.length);
+  MakeTableItemBool (L, "newline",  line.newline);
+  MakeTableItemBool (L, "note",     (line.flags & COMMENT) != 0);
+  MakeTableItemBool (L, "user",     (line.flags & USER_INPUT) != 0);
+  MakeTableItemBool (L, "log",      (line.flags & LOG_LINE) != 0);
+  MakeTableItemBool (L, "bookmark", (line.flags & BOOKMARK) != 0);
+  MakeTableItemBool (L, "hr",       (line.flags & HORIZ_RULE) != 0);
+  MakeTableItem     (L, "time",     line.time);
+  MakeTableItem     (L, "timestr",  line.timestr);
+  MakeTableItem     (L, "line",     line.line);
+  MakeTableItem     (L, "styles",   line.styles);
+  MakeTableItem     (L, "ticks",    line.ticks);
+  MakeTableItem     (L, "elapsed",  line.elapsed);
+  return 1;
+  }
+
 static int L_GetLineInfo (lua_State *L)
   {
   CMUSHclientDoc * pDoc = doc (L);  // must do this first
@@ -2986,50 +3100,23 @@ static int L_GetLineInfo (lua_State *L)
   
   if (iType == 0)
     {
+    lua_pushcfunction (L, L_PushLineInfoSnapshot);
     // check line exists
     if (iLine <= 0 || iLine > pDoc->m_LineList.GetCount ())
       return 0;     // no result for no line
 
   // get pointer to line in question
 
-    CLine * pLine = pDoc->m_LineList.GetAt (pDoc->GetLinePosition (iLine - 1));
-
-    lua_newtable(L);                                                            
-    MakeTableItem     (L, "text",     CString (pLine->text, pLine->len)); // 1
-    MakeTableItem     (L, "length",   pLine->len); // 2
-    MakeTableItemBool (L, "newline",  pLine->hard_return); // 3
-    MakeTableItemBool (L, "note",     (pLine->flags & COMMENT) != 0); // 4
-    MakeTableItemBool (L, "user",     (pLine->flags & USER_INPUT) != 0); // 5
-    MakeTableItemBool (L, "log",      (pLine->flags & LOG_LINE) != 0); // 6
-    MakeTableItemBool (L, "bookmark", (pLine->flags & BOOKMARK) != 0); // 7
-    MakeTableItemBool (L, "hr",       (pLine->flags & HORIZ_RULE) != 0); // 8
-    MakeTableItem     (L, "time",     (int) pLine->m_theTime.GetTime ()); // 9a
-    MakeTableItem     (L, "timestr",  COleDateTime (pLine->m_theTime.GetTime ())); // 9b
-    MakeTableItem     (L, "line",     pLine->m_nLineNumber); // 10
-    MakeTableItem     (L, "styles",   pLine->styleList.GetCount ()); // 11
-
-    // high-performance timer
-    double ticks = 0;
-    
-    if (App.m_iCounterFrequency)
-      ticks = (double) pLine->m_lineHighPerformanceTime.QuadPart / (double) App.m_iCounterFrequency;
-    MakeTableItem (L, "ticks", ticks);
-
-    LONGLONG iTimeTaken;
-    double fElapsedTime;
-
-    // elapsed time from when world started
-    iTimeTaken = pLine->m_lineHighPerformanceTime.QuadPart - 
-                 pDoc->m_whenWorldStartedHighPrecision.QuadPart;
-    
-    if (App.m_iCounterFrequency)
-     fElapsedTime = ((double) iTimeTaken) / 
-                    ((double) App.m_iCounterFrequency);
-    else
-     fElapsedTime = pLine->m_theTime.GetTime () - (double) pDoc->m_whenWorldStarted.GetTime ();
-
-    MakeTableItem (L, "elapsed", fElapsedTime);
-
+    int status;
+    {
+    // No native line pointers may survive a Lua allocation: a finalizer can
+    // clear or trim the output buffer while the result table is being built.
+    CLuaLineInfoSnapshot snapshot (pDoc, pDoc->m_LineList.GetAt (pDoc->GetLinePosition (iLine - 1)));
+    lua_pushlightuserdata (L, &snapshot);
+    status = lua_pcall (L, 1, 1, 0);
+    }
+    if (status)
+      return lua_error (L);
     return 1;   // one table
     }     // end of returning a table
 
@@ -3527,6 +3614,8 @@ static int L_GetPluginVariableList (lua_State *L)
   // plugin name
   const char * PluginID = my_checkstring (L, 1);
 
+  lua_pushcfunction (L, L_PushStringMapSnapshot);
+
   // lookup plugin
   CPlugin * pPlugin = NULL;  
   if (strlen (PluginID) > 0)  
@@ -3535,10 +3624,13 @@ static int L_GetPluginVariableList (lua_State *L)
     if (!pPlugin)             
 	    return 0;   // no results - non-empty plugin not found     
     }                         
+  int status;
+  {
   CPluginContextGuard contextGuard (pDoc, pPlugin);
-                      
-  // now get the variable list 
-  GetVariableListHelper (L, pDoc);                   
+  status = GetVariableListHelper (L, pDoc);
+  }
+  if (status)
+    return lua_error (L);
 
   return 1;     // one result (one table)
 
@@ -3646,89 +3738,81 @@ static int L_GetSoundStatus (lua_State *L)
   } // end of L_GetSoundStatus
 
 
-static bool DoStyle (lua_State *L, 
-                      CMUSHclientDoc *pDoc, 
-                      CLine * pLine, 
-                      int iStyleNumber,
-                      CString & strText)
+struct CLuaStyleInfoSnapshot
   {
+  CString text, action, hint, variable;
+  int length, column, actiontype, flags;
+  COLORREF textcolour, backcolour;
 
-  // check style exists
-  if (iStyleNumber <= 0 || iStyleNumber > pLine->styleList.GetCount ())
-    return true;   // error, style doesn't exist
-
-  CStyle * pStyle = NULL;
-  POSITION pos;
-  int iCol = 0;
-  int iCount = 1;
-
-  // search for it sequentially so we know the column number, 
-  // so we can get its text
-  for (pos = pLine->styleList.GetHeadPosition(); pos; iCount++)
+  CLuaStyleInfoSnapshot (CMUSHclientDoc * pDoc, CStyle * pStyle,
+                         int iCol, const CString & strText)
+    : text (strText.Mid (iCol, pStyle->iLength)),
+      length (pStyle->iLength), column (iCol + 1), actiontype (0), flags (pStyle->iFlags)
     {
-    pStyle = pLine->styleList.GetNext (pos);
-    if (iCount == iStyleNumber)
-      break;  // found right one
-    
-    if (!pos)
-      return true;   // error, style doesn't exist
+    pDoc->GetStyleRGB (pStyle, textcolour, backcolour);
+    if (pStyle->pAction)
+      {
+      action = pStyle->pAction->m_strAction;
+      hint = pStyle->pAction->m_strHint;
+      variable = pStyle->pAction->m_strVariable;
+      }
+    switch (flags & ACTIONTYPE)
+      {
+      case ACTION_SEND:      actiontype = 1; break;
+      case ACTION_HYPERLINK: actiontype = 2; break;
+      case ACTION_PROMPT:    actiontype = 3; break;
+      }
+    }
+  };
 
-    iCol += pStyle->iLength; // new column
+static void PushStyleInfoSnapshot (lua_State *L, const CLuaStyleInfoSnapshot & style)
+  {
+  lua_newtable (L);
+  MakeTableItem     (L, "text",       style.text);
+  MakeTableItem     (L, "length",     style.length);
+  MakeTableItem     (L, "column",     style.column);
+  MakeTableItem     (L, "actiontype", style.actiontype);
+  MakeTableItem     (L, "action",     style.action);
+  MakeTableItem     (L, "hint",       style.hint);
+  MakeTableItem     (L, "variable",   style.variable);
+  MakeTableItemBool (L, "bold",       (style.flags & HILITE) != 0);
+  MakeTableItemBool (L, "ul",         (style.flags & UNDERLINE) != 0);
+  MakeTableItemBool (L, "blink",      (style.flags & BLINK) != 0);
+  MakeTableItemBool (L, "inverse",    (style.flags & INVERSE) != 0);
+  MakeTableItemBool (L, "changed",    (style.flags & CHANGED) != 0);
+  MakeTableItemBool (L, "starttag",   (style.flags & START_TAG) != 0);
+  MakeTableItem     (L, "textcolour", style.textcolour);
+  MakeTableItem     (L, "backcolour", style.backcolour);
+  }
 
-    } // end of looping looking for it
+struct CLuaStyleListSnapshot
+  {
+  vector<CLuaStyleInfoSnapshot> styles;
+  vector<COleVariant> values;
+  bool single, full;
+  };
 
-    int iAction = 0;
-    if (pStyle)
-      switch (pStyle->iFlags & ACTIONTYPE)
-        {
-        case ACTION_NONE:       iAction = 0; break;
-        case ACTION_SEND:       iAction = 1; break;
-          case ACTION_HYPERLINK:  iAction = 2; break;
-        case ACTION_PROMPT:     iAction = 3; break;
-        } // end of switch
-
-
-    COLORREF colour1,
-             colour2;
-
-    pDoc->GetStyleRGB (pStyle, colour1, colour2);
-    CAction * pAction = pStyle->pAction;
-
-//  1: text of style
-//  2: length of style run
-//  3: starting column of style
-//  4: action type - 0=none, 1=send to mud, 2=hyperlink, 3=prompt
-//  5: action   (eg. what to send)
-//  6: hint     (what to show)
-//  7: variable (variable to set)
-//  8: true if bold
-//  9: true if underlined
-// 10: true if blinking
-// 11: true if inverse
-// 12: true if changed by trigger from original
-// 13: true if start of a tag (action is tag name)
-// 14: foreground (text) colour in RGB
-// 15: background colour in RGB
-
-  lua_newtable(L);                                                            
-  MakeTableItem     (L, "text",     strText.Mid (iCol, pStyle->iLength)); // 1
-  MakeTableItem     (L, "length",   pStyle->iLength); // 2
-  MakeTableItem     (L, "column",   iCol + 1); // 3
-  MakeTableItem     (L, "actiontype", iAction); // 4
-  MakeTableItem     (L, "action",   pAction ? pAction->m_strAction : ""); // 5
-  MakeTableItem     (L, "hint",     pAction ? pAction->m_strHint : ""); // 6
-  MakeTableItem     (L, "variable", pAction ? pAction->m_strVariable : ""); // 7
-  MakeTableItemBool (L, "bold",     (pStyle->iFlags & HILITE) != 0); // 8
-  MakeTableItemBool (L, "ul",       (pStyle->iFlags & UNDERLINE) != 0); // 9
-  MakeTableItemBool (L, "blink",    (pStyle->iFlags & BLINK) != 0); // 10
-  MakeTableItemBool (L, "inverse",  (pStyle->iFlags & INVERSE) != 0); // 11
-  MakeTableItemBool (L, "changed",  (pStyle->iFlags & CHANGED) != 0); // 12
-  MakeTableItemBool (L, "starttag", (pStyle->iFlags & START_TAG) != 0); // 13
-  MakeTableItem     (L, "textcolour", colour1); // 14
-  MakeTableItem     (L, "backcolour", colour2); // 15
-
-  return false;   // OK return
-  } // end of DoStyle
+static int L_PushStyleInfoSnapshot (lua_State *L)
+  {
+  CLuaStyleListSnapshot & snapshot =
+    *static_cast<CLuaStyleListSnapshot *> (lua_touserdata (L, 1));
+  if (snapshot.single)
+    PushStyleInfoSnapshot (L, snapshot.styles.front ());
+  else
+    {
+    lua_newtable (L);
+    size_t count = snapshot.full ? snapshot.styles.size () : snapshot.values.size ();
+    for (size_t i = 0; i < count; ++i)
+      {
+      if (snapshot.full)
+        PushStyleInfoSnapshot (L, snapshot.styles [i]);
+      else
+        pushVariant (L, snapshot.values [i]);
+      lua_rawseti (L, -2, (int) i + 1);
+      }
+    }
+  return 1;
+  }
 
 //----------------------------------------
 //  world.GetStyleInfo
@@ -3736,58 +3820,64 @@ static bool DoStyle (lua_State *L,
 //----------------------------------------
 static int L_GetStyleInfo (lua_State *L)
   {
-
   CMUSHclientDoc * pDoc = doc (L);  // must do this first
-  int iLine = my_checknumber (L, 1);            // LineNumber  
-  int iStyleNumber = my_optnumber (L, 2, 0);    // StyleNumber 
-  int iType = my_optnumber (L, 3, 0);           // InfoType    
+  int iLine = my_checknumber (L, 1);
+  int iStyleNumber = my_optnumber (L, 2, 0);
+  int iType = my_optnumber (L, 3, 0);
 
-  CLine * pLine = NULL;
-  CString strText;
-
-  if (iStyleNumber == 0 || iType == 0)  // extension
+  if (iStyleNumber != 0 && iType != 0)
     {
-    // check line exists
-    if (iLine <= 0 || iLine > pDoc->m_LineList.GetCount ())
-      return 0;     // no result for no line
-
-    // get pointer to line in question
-
-    pLine = pDoc->m_LineList.GetAt (pDoc->GetLinePosition (iLine - 1));
-    strText = CString (pLine->text, pLine->len);
-
+    VARIANT v = pDoc->GetStyleInfo (iLine, iStyleNumber, iType);
+    return pushVariant (L, v);
     }
 
-  // if style is zero, make a table per style
-  if (iStyleNumber == 0)  // do all styles
+  lua_pushcfunction (L, L_PushStyleInfoSnapshot);
+  if (iLine <= 0 || iLine > pDoc->m_LineList.GetCount ())
+    return 0;
+  CLine * pLine = pDoc->m_LineList.GetAt (pDoc->GetLinePosition (iLine - 1));
+  int count = pLine->styleList.GetCount ();
+  if (iStyleNumber < 0 || iStyleNumber > count)
+    return 0;
+
+  int status;
+  {
+  // Copy the entire requested result before allocating Lua tables/strings.
+  // A finalizer may delete the line, its styles and actions during conversion.
+  CLuaStyleListSnapshot snapshot;
+  snapshot.single = iStyleNumber != 0;
+  snapshot.full = iType == 0;
+  if (snapshot.full)
     {
-    lua_newtable(L);    // table has one entry per style                                                         
-    for (iStyleNumber = 1; iStyleNumber <= pLine->styleList.GetCount (); iStyleNumber++)
+    CString strText (pLine->text, pLine->len);
+    snapshot.styles.reserve (snapshot.single ? 1 : count);
+    int iCol = 0, iStyle = 1;
+    for (POSITION pos = pLine->styleList.GetHeadPosition (); pos; ++iStyle)
       {
-      if (iType == 0)   // all types wanted
-        DoStyle (L, pDoc, pLine, iStyleNumber, strText);
-      else
-        {   // a single type, use our usual routine to get it
-        VARIANT v = pDoc->GetStyleInfo (iLine, iStyleNumber, iType); 
-        pushVariant (L, v);
+      CStyle * pStyle = pLine->styleList.GetNext (pos);
+      if (!snapshot.single || iStyle == iStyleNumber)
+        {
+        snapshot.styles.push_back (CLuaStyleInfoSnapshot (pDoc, pStyle, iCol, strText));
+        if (snapshot.single)
+          break;
         }
-
-      lua_rawseti(L, -2, iStyleNumber);  // put individual style table into line table
-      }  // for each style
-    return 1;   // one table
+      iCol += pStyle->iLength;
+      }
     }
-
-  // only one style, however they want all types for it
-  if (iType == 0)
+  else
     {
-    if (DoStyle (L, pDoc, pLine, iStyleNumber, strText))
-      return 0;   // error, no table returned
-    return 1;   // one table
+    snapshot.values.resize (count);
+    for (int i = 0; i < count; ++i)
+      {
+      VARIANT v = pDoc->GetStyleInfo (iLine, i + 1, iType);
+      snapshot.values [i].Attach (v);
+      }
     }
-
-  // here for usual behaviour
-  VARIANT v = pDoc->GetStyleInfo (iLine, iStyleNumber, iType); 
-  return pushVariant (L, v);
+  lua_pushlightuserdata (L, &snapshot);
+  status = lua_pcall (L, 1, 1, 0);
+  } // destroy native snapshots before propagating a Lua error
+  if (status)
+    return lua_error (L);
+  return 1;
   } // end of L_GetStyleInfo
 
 //----------------------------------------
@@ -3817,7 +3907,7 @@ static int L_GetTimer (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
 
-  VARIANT Hour, 
+  COleVariant Hour,
           Minute, 
           Second, 
           ResponseText, 
@@ -3889,7 +3979,7 @@ static int L_GetTrigger (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
 
-  VARIANT MatchText, 
+  COleVariant MatchText,
           ResponseText, 
           Flags, 
           Colour, 
@@ -4024,7 +4114,10 @@ static int L_GetVariable (lua_State *L)
 //----------------------------------------
 static int L_GetVariableList (lua_State *L)
   {
-  GetVariableListHelper (L, doc (L));
+  CMUSHclientDoc * pDoc = doc (L);
+  lua_pushcfunction (L, L_PushStringMapSnapshot);
+  if (GetVariableListHelper (L, pDoc))
+    return lua_error (L);
   return 1;  // number of result fields  (one table)
   } // end of L_GetVariableList
 
@@ -4519,19 +4612,22 @@ static int L_MtSrand (lua_State *L)
 
   if (lua_istable (L, table))
     {
-    vector <unsigned long> v;
-
-    // standard Lua table iteration
+    // Validate the entire input before allocating a C++ vector. luaL_error
+    // uses longjmp and would otherwise leak seeds already added to it.
+    size_t count = 0;
     for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
       {
       if (!lua_isnumber (L, -1))
         luaL_error (L, "MtSrand table must consist of numbers");
-
-      v.push_back (lua_tonumber (L, -1));
-      } // end of extracting vector of keys
-
-    if (v.size () == 0)
+      ++count;
+      }
+    if (count == 0)
       luaL_error (L, "MtSrand table must not be empty");
+
+    vector <unsigned long> v;
+    v.reserve (count);
+    for (lua_pushnil (L); lua_next (L, table) != 0; lua_pop (L, 1))
+      v.push_back (lua_tonumber (L, -1));
 
     init_by_array (&v [0], v.size ());
     }
@@ -4972,8 +5068,9 @@ static int L_Replace (lua_State *L)
 static int L_ReplaceNotepad (lua_State *L)
   {
   CMUSHclientDoc * pDoc = doc (L);  // must do this first
+  const char * title = my_checkstring (L, 1);
   lua_pushboolean (L, pDoc->ReplaceNotepad (
-      my_checkstring (L, 1),  // Title
+      title,
       concatArgs (L, "", 2).c_str ()   // Contents
       ));
   return 0;  // number of result fields
@@ -5206,8 +5303,9 @@ static int L_SendSpecial (lua_State *L)
 static int L_SendToNotepad (lua_State *L)
   {
   CMUSHclientDoc * pDoc = doc (L);  // must do this first
+  const char * title = my_checkstring (L, 1);
   lua_pushboolean (L, pDoc->SendToNotepad (
-      my_checkstring (L, 1), // Title
+      title,
       concatArgs (L, "", 2).c_str ()  // Contents
       ));
   return 1;  // number of result fields

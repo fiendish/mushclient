@@ -66,8 +66,6 @@ struct sdb_func {
 
     sdb *db;
     char aggregate;
-
-    sdb_func *next;
 };
 
 /* information about database */
@@ -76,9 +74,7 @@ struct sdb {
     lua_State *L;
     /* sqlite database handle */
     sqlite3 *db;
-
-    /* sql functions stack usage */
-    sdb_func *func;         /* top SQL function being called */
+    unsigned int active; /* operations that must not close the database */
 
     /* references */
     int busy_cb;        /* busy callback */
@@ -94,7 +90,7 @@ struct sdb {
 static const char *sqlite_meta      = ":sqlite3";
 static const char *sqlite_vm_meta   = ":sqlite3:vm";
 static const char *sqlite_ctx_meta  = ":sqlite3:ctx";
-static int sqlite_ctx_meta_ref;
+static const char *sqlite_vm_owners = ":sqlite3:vmowners";
 
 /*
 ** =======================================================
@@ -136,6 +132,7 @@ static void vm_push_column(lua_State *L, sqlite3_stmt *vm, int idx) {
 struct sdb_vm {
     sdb *db;                /* associated database handle */
     sqlite3_stmt *vm;       /* virtual machine */
+    unsigned int active;   /* Lua parameter lookup is using this VM */
 
     /* sqlite3_step info */
     int columns;            /* number of columns in result */
@@ -156,6 +153,26 @@ static sdb_vm *newvm(lua_State *L, sdb *db) {
     svm->has_values = 0;
     svm->vm = NULL;
     svm->temp = 0;
+    svm->active = 0;
+
+    /* A statement/row iterator can outlive the Lua variable holding its db.
+       Keep the owning userdata alive, including throughout SQL callbacks. */
+    lua_newtable(L);
+    lua_pushvalue(L, 1); /* newvm callers have the database at argument 1 */
+    lua_rawseti(L, -2, 1);
+
+    /* Weak access to the owner table lets bulk close release this reference
+       without keeping an otherwise unreachable statement or db alive. */
+    lua_getfield(L, LUA_REGISTRYINDEX, sqlite_vm_owners);
+    lua_pushlightuserdata(L, svm);
+    lua_pushvalue(L, -3);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+#ifdef LUA_52
+    lua_setuservalue(L, -2);
+#else
+    lua_setfenv(L, -2);
+#endif
 
     /* add an entry on the database table: svm -> sql text */
     lua_pushlightuserdata(L, db);
@@ -169,21 +186,48 @@ static sdb_vm *newvm(lua_State *L, sdb *db) {
 }
 
 static int cleanupvm(lua_State *L, sdb_vm *svm) {
+    int result = SQLITE_OK;
+    int had_vm = svm->vm != NULL;
+    if (svm->active) {
+        lua_pushnumber(L, SQLITE_BUSY);
+        return 1;
+    }
     /* remove entry in database table - no harm if not present in the table */
     lua_pushlightuserdata(L, svm->db);
     lua_rawget(L, LUA_REGISTRYINDEX);
-    lua_pushlightuserdata(L, svm);
-    lua_pushnil(L);
-    lua_rawset(L, -3);
+    /* The database may already have closed and removed its tracking table. */
+    if (lua_istable(L, -1)) {
+        lua_pushlightuserdata(L, svm);
+        lua_pushnil(L);
+        lua_rawset(L, -3);
+    }
     lua_pop(L, 1);
 
     svm->columns = 0;
     svm->has_values = 0;
 
-    if (!svm->vm) return 0;
+    if (svm->vm) {
+        result = sqlite3_finalize(svm->vm);
+        svm->vm = NULL;
+    }
 
-    lua_pushnumber(L, sqlite3_finalize(svm->vm));
-    svm->vm = NULL;
+    /* Release the owner even for bulk close and comment-only statements.
+       A closed statement retained by Lua must not retain the db's coroutine. */
+    lua_getfield(L, LUA_REGISTRYINDEX, sqlite_vm_owners);
+    lua_pushlightuserdata(L, svm);
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+        lua_pushnil(L);
+        lua_rawseti(L, -2, 1);
+    }
+    lua_pop(L, 1);
+    lua_pushlightuserdata(L, svm);
+    lua_pushnil(L);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+
+    if (!had_vm) return 0;
+    lua_pushnumber(L, result);
     return 1;
 }
 
@@ -249,14 +293,16 @@ static int dbvm_tostring(lua_State *L) {
 
 static int dbvm_gc(lua_State *L) {
     sdb_vm *svm = lsqlite_getvm(L, 1);
-    if (svm->vm != NULL)  /* ignore closed vms */
-        cleanupvm(L, svm);
+    /* Even a comment-only statement (no SQLite VM) has saved SQL to remove. */
+    cleanupvm(L, svm);
     return 0;
 }
 
 static int dbvm_step(lua_State *L) {
     int result;
     sdb_vm *svm = lsqlite_checkvm(L, 1);
+
+    if (svm->active) { lua_pushnumber(L, SQLITE_BUSY); return 1; }
 
     result = stepvm(L, svm);
     svm->has_values = result == SQLITE_ROW ? 1 : 0;
@@ -273,6 +319,7 @@ static int dbvm_finalize(lua_State *L) {
 
 static int dbvm_reset(lua_State *L) {
     sdb_vm *svm = lsqlite_checkvm(L, 1);
+    if (svm->active) { lua_pushnumber(L, SQLITE_BUSY); return 1; }
     sqlite3_reset(svm->vm);
     lua_pushnumber(L, sqlite3_errcode(svm->db->db));
     return 1;
@@ -494,6 +541,7 @@ static int dbvm_bind(lua_State *L) {
     int index = luaL_checkint(L, 2);
     int result;
 
+    if (svm->active) { lua_pushnumber(L, SQLITE_BUSY); return 1; }
     dbvm_check_bind_index(L, svm, index);
     result = dbvm_bind_index(L, vm, index, 3);
 
@@ -507,6 +555,7 @@ static int dbvm_bind_blob(lua_State *L) {
     const char *value = luaL_checkstring(L, 3);
     int len = lua_strlen(L, 3);
 
+    if (svm->active) { lua_pushnumber(L, SQLITE_BUSY); return 1; }
     lua_pushnumber(L, sqlite3_bind_blob(svm->vm, index, value, len, SQLITE_TRANSIENT));
     return 1;
 }
@@ -517,6 +566,7 @@ static int dbvm_bind_values(lua_State *L) {
     int top = lua_gettop(L);
     int result, n;
 
+    if (svm->active) { lua_pushnumber(L, SQLITE_BUSY); return 1; }
     if (top - 1 != sqlite3_bind_parameter_count(vm))
         luaL_error(L,
             "incorrect number of parameters to bind (%d given, %d to bind)",
@@ -535,7 +585,7 @@ static int dbvm_bind_values(lua_State *L) {
     return 1;
 }
 
-static int dbvm_bind_names(lua_State *L) {
+static int dbvm_bind_names_lookup(lua_State *L) {
     sdb_vm *svm = lsqlite_checkvm(L, 1);
     sqlite3_stmt *vm = svm->vm;
     int count = sqlite3_bind_parameter_count(vm);
@@ -568,6 +618,29 @@ static int dbvm_bind_names(lua_State *L) {
     return 1;
 }
 
+static int dbvm_bind_names(lua_State *L) {
+    int args = lua_gettop(L);
+    int status;
+    sdb_vm *svm;
+
+    /* __index and automatic GC can run during parameter lookup. Keep the
+       userdata rooted below the protected call, even after its arguments pop. */
+    lua_pushcfunction(L, dbvm_bind_names_lookup);
+    lua_insert(L, 1);
+    lua_pushvalue(L, 2);
+    lua_insert(L, 1);
+    svm = lsqlite_checkvm(L, 1);
+    if (svm->active) { lua_pushnumber(L, SQLITE_BUSY); return 1; }
+
+    ++svm->active;
+    ++svm->db->active;
+    status = lua_pcall(L, args, LUA_MULTRET, 0);
+    --svm->db->active;
+    --svm->active;
+    if (status) return lua_error(L);
+    return lua_gettop(L) - 1;
+}
+
 /*
 ** =======================================================
 ** Database (internal management)
@@ -585,7 +658,7 @@ static sdb *newdb (lua_State *L) {
     sdb *db = (sdb*)lua_newuserdata(L, sizeof(sdb));
     db->L = L;
     db->db = NULL;  /* database handle is currently `closed' */
-    db->func = NULL;
+    db->active = 0;
 
     db->busy_cb =
     db->busy_udata =
@@ -597,6 +670,18 @@ static sdb *newdb (lua_State *L) {
     luaL_getmetatable(L, sqlite_meta);
     lua_setmetatable(L, -2);        /* set metatable */
 
+    /* Callbacks use db->L even when the database is later used from another
+       coroutine. Keep its creating thread alive with the database, not with
+       a registry reference that would make an uncollectable db/thread cycle. */
+    lua_newtable(L);
+    lua_pushthread(L);
+    lua_rawseti(L, -2, 1);
+#ifdef LUA_52
+    lua_setuservalue(L, -2);
+#else
+    lua_setfenv(L, -2);
+#endif
+
     /* to keep track of 'open' virtual machines */
     lua_pushlightuserdata(L, db);
     lua_newtable(L);
@@ -606,10 +691,10 @@ static sdb *newdb (lua_State *L) {
 }
 
 static int cleanupdb(lua_State *L, sdb *db) {
-    sdb_func *func;
-    sdb_func *func_next;
     int top;
     int result;
+
+    if (db->active) return SQLITE_BUSY;
 
     /* free associated virtual machines */
     lua_pushlightuserdata(L, db);
@@ -645,17 +730,6 @@ static int cleanupdb(lua_State *L, sdb *db) {
     result = sqlite3_close(db->db);
     db->db = NULL;
 
-    /* free associated memory with created functions */
-    func = db->func;
-    while (func) {
-        func_next = func->next;
-        luaL_unref(L, LUA_REGISTRYINDEX, func->fn_step);
-        luaL_unref(L, LUA_REGISTRYINDEX, func->fn_finalize);
-        luaL_unref(L, LUA_REGISTRYINDEX, func->udata);
-        free(func);
-        func = func_next;
-    }
-    db->func = NULL;
     return result;
 }
 
@@ -684,7 +758,8 @@ typedef struct {
 
 static lcontext *lsqlite_make_context(lua_State *L) {
     lcontext *ctx = (lcontext*)lua_newuserdata(L, sizeof(lcontext));
-    lua_rawgeti(L, LUA_REGISTRYINDEX, sqlite_ctx_meta_ref);
+    /* Registry reference numbers belong to one Lua state, not the process. */
+    luaL_getmetatable(L, sqlite_ctx_meta);
     lua_setmetatable(L, -2);
     ctx->ctx = NULL;
     ctx->ud = LUA_NOREF;
@@ -937,6 +1012,10 @@ static void db_sql_normal_function(sqlite3_context *context, int argc, sqlite3_v
 
     if (!func->aggregate) {
         ctx = lsqlite_make_context(L); /* push context - used to set results */
+        /* The callback can drop its argument and run GC. Retain a separate
+           stack reference until we have invalidated ctx after lua_pcall. */
+        lua_pushvalue(L, -1);
+        lua_insert(L, top + 1);
     }
     else {
         /* reuse context userdata value */
@@ -1037,6 +1116,15 @@ static void db_sql_finalize_function(sqlite3_context *context) {
 ** Params of step: context, params
 ** Params of finalize: context
 */
+static void db_free_function(void *data) {
+    sdb_func *func = (sdb_func*)data;
+    lua_State *L = func->db->L;
+    luaL_unref(L, LUA_REGISTRYINDEX, func->fn_step);
+    luaL_unref(L, LUA_REGISTRYINDEX, func->fn_finalize);
+    luaL_unref(L, LUA_REGISTRYINDEX, func->udata);
+    free(func);
+}
+
 static int db_register_function(lua_State *L, int aggregate) {
     sdb *db = lsqlite_checkdb(L, 1);
     const char *name;
@@ -1058,24 +1146,26 @@ static int db_register_function(lua_State *L, int aggregate) {
         luaL_error(L, "out of memory");
     }
 
-    result = sqlite3_create_function(
+    func->db = db;
+    func->aggregate = aggregate;
+    func->fn_step = func->fn_finalize = func->udata = LUA_NOREF;
+
+    /* SQLite releases replaced functions immediately, and also owns cleanup
+       on registration failure and database close. A database-owned list kept
+       every replaced callback and its Lua userdata alive until close. */
+    result = sqlite3_create_function_v2(
         db->db, name, args, SQLITE_UTF8, func,
         aggregate ? NULL : db_sql_normal_function,
         aggregate ? db_sql_normal_function : NULL,
-        aggregate ? db_sql_finalize_function : NULL
+        aggregate ? db_sql_finalize_function : NULL,
+        db_free_function
     );
 
     if (result == SQLITE_OK) {
         /* safety measures for userdata field to be present in the stack */
         lua_settop(L, 5 + aggregate);
 
-        /* save registered function in db function list */
-        func->db = db;
-        func->aggregate = aggregate;
-        func->next = db->func;
-        db->func = func;
-
-        /* save the setp/normal function callback */
+        /* save the step/normal function callback */
         lua_pushvalue(L, 4);
         func->fn_step = luaL_ref(L, LUA_REGISTRYINDEX);
         /* save user data */
@@ -1088,10 +1178,6 @@ static int db_register_function(lua_State *L, int aggregate) {
         }
         else
             func->fn_finalize = LUA_NOREF;
-    }
-    else {
-        /* free allocated memory */
-        free(func);
     }
 
     lua_pushboolean(L, result == SQLITE_OK ? 1 : 0);
@@ -1137,6 +1223,7 @@ static int db_create_collation(lua_State *L) {
     sdb *db=lsqlite_checkdb(L,1);
     const char *collname=luaL_checkstring(L,2);
     scc *co=NULL;
+    int result;
     int (*collfunc)(scc *,int,const void *,int,const void *)=NULL;
     lua_settop(L,3); /* default args to nil, and exclude extras */
     if (lua_isfunction(L,3)) collfunc=collwrapper;
@@ -1146,16 +1233,21 @@ static int db_create_collation(lua_State *L) {
         co=(scc *)malloc(sizeof(scc)); /* userdata is a no-no as it
                                           will be garbage-collected */
         if (co) {
-            co->L=L;
+            /* Use the database's anchored thread. The registering coroutine
+               may finish and be collected while the collation is still used. */
+            co->L=db->L;
             /* lua_settop(L,3) above means we don't need: lua_pushvalue(L,3); */
             co->ref=luaL_ref(L,LUA_REGISTRYINDEX);
         }
         else luaL_error(L,"create_collation: could not allocate callback");
     }
-    sqlite3_create_collation_v2(db->db, collname, SQLITE_UTF8,
+    result = sqlite3_create_collation_v2(db->db, collname, SQLITE_UTF8,
         (void *)co,
         (int(*)(void*,int,const void*,int,const void*))collfunc,
         (void(*)(void*))collfree);
+    /* Unlike create_function_v2, SQLite does not call the destructor when
+       collation registration fails (for example, with active statements). */
+    if (result != SQLITE_OK) collfree(co);
     return 0;
 }
 
@@ -1456,6 +1548,9 @@ static int db_prepare(lua_State *L) {
         return 2;
     }
 
+    /* Empty/comment-only SQL produces a closed statement, not an owner. */
+    if (!svm->vm) cleanupvm(L, svm);
+
     /* vm already in the stack */
     lua_pushstring(L, sqltail);
     return 2;
@@ -1467,6 +1562,9 @@ static int db_do_next_row(lua_State *L, int packed) {
     sqlite3_stmt *vm;
     int columns;
     int i;
+
+    if (svm->active)
+        return luaL_error(L, "attempt to use busy sqlite virtual machine");
 
     result = stepvm(L, svm);
     vm = svm->vm; /* stepvm may change svm->vm if re-prepare is needed */
@@ -1595,7 +1693,22 @@ static int db_tostring(lua_State *L) {
 
 static int db_close(lua_State *L) {
     sdb *db = lsqlite_checkdb(L, 1);
-    lua_pushnumber(L, cleanupdb(L, db));
+    int result = cleanupdb(L, db);
+    if (result != SQLITE_OK) {
+        lua_pushnumber(L, result);
+        return 1;
+    }
+    /* All native callbacks have been released; a closed userdata need not
+       retain its creating coroutine (and that coroutine's remaining locals). */
+#ifdef LUA_52
+    lua_getuservalue(L, 1);
+#else
+    lua_getfenv(L, 1);
+#endif
+    lua_pushnil(L);
+    lua_rawseti(L, -2, 1);
+    lua_pop(L, 1);
+    lua_pushnumber(L, result);
     return 1;
 }
 
@@ -1603,24 +1716,26 @@ static int db_close_vm(lua_State *L) {
     sdb *db = lsqlite_checkdb(L, 1);
     /* cleanup temporary only tables? */
     int temp = lua_toboolean(L, 2);
+    int table_index;
 
     /* free associated virtual machines */
     lua_pushlightuserdata(L, db);
     lua_rawget(L, LUA_REGISTRYINDEX);
+    table_index = lua_gettop(L);
 
     /* close all used handles */
     lua_pushnil(L);
     while (lua_next(L, -2)) {
         sdb_vm *svm = lua_touserdata(L, -2); /* key: vm; val: sql text */
 
-        if ((!temp || svm->temp) && svm->vm)
-        {
-            sqlite3_finalize(svm->vm);
-            svm->vm = NULL;
-        }
+        /* Finalization must also remove the saved SQL and raw userdata key;
+           otherwise closed/collected statements remain in this registry. */
+        if (!temp || svm->temp)
+            cleanupvm(L, svm);
 
-        /* leave key in the stack */
-        lua_pop(L, 1);
+        /* Leave the current key for lua_next, dropping the SQL and any
+           finalization result. Deleting the current entry is permitted. */
+        lua_settop(L, table_index + 1);
     }
     return 0;
 }
@@ -1869,12 +1984,23 @@ static void create_meta(lua_State *L, const char *name, const luaL_Reg *lib) {
 }
 
 LUALIB_API int luaopen_lsqlite3(lua_State *L) {
+    /* Preserve this table if the library is initialized again in one state. */
+    lua_getfield(L, LUA_REGISTRYINDEX, sqlite_vm_owners);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_newtable(L);
+        lua_pushliteral(L, "v");
+        lua_setfield(L, -2, "__mode");
+        lua_setmetatable(L, -2);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, sqlite_vm_owners);
+    }
+    lua_pop(L, 1);
+
     create_meta(L, sqlite_meta, dblib);
     create_meta(L, sqlite_vm_meta, vmlib);
     create_meta(L, sqlite_ctx_meta, ctxlib);
-
-    luaL_getmetatable(L, sqlite_ctx_meta);
-    sqlite_ctx_meta_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
     /* register (local) sqlite metatable */
     luaL_register(L, "sqlite3", sqlitelib);

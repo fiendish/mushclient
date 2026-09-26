@@ -272,6 +272,8 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
   if (!L)
     return true;
 
+  const int top = lua_gettop (L);
+
   LARGE_INTEGER start, 
                 finish;
 
@@ -300,7 +302,7 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
     return true;
     }
 
-  lua_settop(L, 0);   // clear stack
+  lua_settop (L, top);   // discard this chunk's results, not caller arguments
 
 // -----------------
 
@@ -363,7 +365,9 @@ void LuaError (lua_State *L,
 
   dlg.m_strEvent = strEvent;
   dlg.m_strDescription = lua_tostring(L, -1);
-  lua_settop(L, 0);   // clear stack
+  // The error is on top of a possibly active caller's stack. Reporting it
+  // must not unroot that caller's arguments during output/dialog callbacks.
+  lua_pop (L, 1);
 
   dlg.m_strRaisedBy = "No active world";
 
@@ -487,7 +491,17 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   if (dispid == DISPID_UNKNOWN)
     return false;
 
-  lua_settop (L, 0);  // start with empty stack
+  // Native callbacks can re-enter this state while its caller still owns
+  // stack values. Keep those values rooted throughout lookup and execution.
+  const int top = lua_gettop (L);
+  const size_t stackOverhead = 16;
+  if (nparams.size () > static_cast<size_t> (INT_MAX) - stackOverhead ||
+      sparams.size () > static_cast<size_t> (INT_MAX) - stackOverhead - nparams.size () ||
+      !lua_checkstack (L, static_cast<int> (nparams.size () + sparams.size () + stackOverhead)))
+    {
+    dispid = DISPID_UNKNOWN;
+    return true;
+    }
 
   LARGE_INTEGER start, 
                 finish;
@@ -513,6 +527,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   if (!GetNestedFunction (L, szProcedure, true))
     {
     dispid = DISPID_UNKNOWN;   // stop further invocations
+    lua_settop (L, top);
     return true;    // error return
     }
 
@@ -675,17 +690,17 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
 
     // if a boolean result wanted, return it
 
-    if (lua_gettop (L) > 0)
+    if (lua_gettop (L) > top)
       {
-      if (lua_isboolean (L, 1))
-        *result = lua_toboolean (L, 1);
+      if (lua_isboolean (L, top + 1))
+        *result = lua_toboolean (L, top + 1);
       else
-        *result = lua_tonumber (L, 1);  // I use number rather than boolean
+        *result = lua_tonumber (L, top + 1);  // I use number rather than boolean
                                        // because 0 is considered true in Lua
       }
     }   // end of result wanted
 
-  lua_settop (L, 0);  // discard any results now
+  lua_settop (L, top);  // discard only this invocation's results
   
   return false;   // no error
   } // end of CScriptEngine::ExecuteLua 
@@ -711,7 +726,12 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
   if (dispid == DISPID_UNKNOWN)
     return false;
 
-  lua_settop (L, 0);  // start with empty stack
+  const int top = lua_gettop (L);
+  if (!lua_checkstack (L, 8))
+    {
+    dispid = DISPID_UNKNOWN;
+    return true;
+    }
 
   LARGE_INTEGER start, 
                 finish;
@@ -737,6 +757,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
   if (!GetNestedFunction (L, szProcedure, true))
     {
     dispid = DISPID_UNKNOWN;   // stop further invocations
+    lua_settop (L, top);
     return true;    // error return
     }
 
@@ -768,17 +789,17 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
       m_pDoc->m_CurrentPlugin->m_iScriptTimeTaken += finish.QuadPart - start.QuadPart;
     }
 
-  if (lua_gettop (L) > 0 && lua_isstring (L, 1))
+  if (lua_gettop (L) > top && lua_isstring (L, top + 1))
     {
     // get result
 
     size_t textLength;
-    const char * text = luaL_checklstring (L, 1, &textLength);
+    const char * text = luaL_checklstring (L, top + 1, &textLength);
 
     result = CString (text, textLength);
     }
 
-  lua_settop (L, 0);  // discard any results now
+  lua_settop (L, top);  // discard only this invocation's results
 
   return false;   // no error
 

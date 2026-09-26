@@ -297,6 +297,7 @@ public:
   BOOL ActivateNotepad(LPCTSTR Title);
 
   HCURSOR	 g_hCursorIbeam;
+  CWnd       m_TrayOwnerWindow;  // hidden owner used by tray-only mode
 
   int db_simple_query (const char * sql, string & result, const bool bShowError = false, const char * default_value = "");
   int db_execute (const char * sql, const bool bShowError = false);
