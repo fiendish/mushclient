@@ -790,6 +790,8 @@ BOOL CMUSHclientApp::InitInstance()
 
     for (vector<string>::const_iterator i = v.begin (); i != v.end (); i++)
       {
+      if (i->empty ())
+        continue;
       CString strPath = Make_Absolute_Path (i->c_str ());
       m_pWorldDocTemplate->OpenDocumentFile (strPath);
       }

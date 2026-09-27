@@ -41,6 +41,8 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  try
+    {
   CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // If Lua, we may have been called with no arguments, so just do that
@@ -166,6 +168,15 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
 
   return hr != S_OK;    // true on error
 
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    dispid = DISPID_UNKNOWN;
+    if (result)
+      result->Clear ();
+    return true;
+    }
   } // end of CScriptEngine::ExecuteScript
  
 
@@ -273,6 +284,8 @@ STDMETHODIMP CActiveScriptSite::OnScriptError(IActiveScriptError *pscripterror)
 
 bool CScriptEngine::CreateScriptEngine (void)
   {
+  try
+    {
   CPluginDirectoryGuard directoryGuard (m_pPlugin);
   
  // Lua does not use scripting engine
@@ -285,10 +298,6 @@ bool CScriptEngine::CreateScriptEngine (void)
   // not under Wine
  if (bWine)
     return true;
-
- try
-  {
-
 
   CLSID clsid;
   OLECHAR wszOutput[101];
@@ -397,6 +406,13 @@ WCHAR charWorld[]=L"world";
 
   }   // end of try block
 
+ catch (CFileException * e)
+   {
+   e->Delete ();
+   DisableScripting ();
+   return true;
+   }
+
  catch (HRESULT hr)
    {
    ShowError (hr, "starting scripting support");
@@ -418,6 +434,8 @@ bool CScriptEngine::Parse (const CString & strCode, const CString & strWhat)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  try
+    {
   CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   CValueStateGuard<CString> procedureGuard (strProcedure, CString ());
@@ -491,17 +509,27 @@ SCRIPTSTATE ss;
 
   return hr != S_OK;    // true = error
 
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    return true;
+    }
   } // end of CScriptEngine::ParseScript 
 
 
-DISPID CScriptEngine::GetDispid (const CString & strName)
+DISPID CScriptEngine::GetDispid (const CString & strName, bool * pLookupError)
+  {
+  if (pLookupError)
+    *pLookupError = false;
+  CPluginCallGuard callGuard (m_pPlugin, true);
+  try
     {
-    CPluginCallGuard callGuard (m_pPlugin, true);
-    CPluginDirectoryGuard directoryGuard (m_pPlugin);
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
  // Do Lua differently
   if (L)
-    return GetLuaDispid (strName);
+    return GetLuaDispid (strName, pLookupError);
 
   if (!m_pDispatch)
     return DISPID_UNKNOWN;   // no script engine
@@ -523,6 +551,14 @@ DISPID dispid;
 
   return dispid;     // might be zero, the way PHP currently is :)
 
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    if (pLookupError)
+      *pLookupError = true;
+    return DISPID_UNKNOWN;
+    }
   } // end of CScriptEngine::GetDispid
 
 

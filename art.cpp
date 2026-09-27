@@ -669,7 +669,8 @@ CAsciiArtDlg dlg;
 
   dlg.m_strText = App.m_strAsciiArtText;
   dlg.m_iLayout = App.m_iAsciiArtLayout;
-  dlg.m_strFont = Make_Absolute_Path (App.m_strAsciiArtFont);
+  if (!App.m_strAsciiArtFont.IsEmpty ())
+    dlg.m_strFont = Make_Absolute_Path (App.m_strAsciiArtFont);
 
   if (dlg.DoModal () != IDOK)
     return;

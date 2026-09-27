@@ -444,7 +444,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       list<string> sparams;
       sparams.push_back (sText);
       bool result;
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                    callinfo._name.c_str (), 
                                    eDontChangeAction,
                                    strType, 
@@ -453,7 +453,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                    sparams, 
                                    nInvocationCount,
                                    NULL, NULL, NULL,
-                                   &result);
+                                   &result))
+        return false;
       return result;
       }   // end of Lua
     else
@@ -473,14 +474,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
 
       COleVariant result;
 
-      m_ScriptEngine->Execute (iRoutine, 
+      if (m_ScriptEngine->Execute (iRoutine,
                                callinfo._name.c_str (), 
                                eDontChangeAction,
                                strType,
                                strReason,
                                params, 
                                nInvocationCount, 
-                               &result);
+                               &result))
+        return false;
 
       // see what result was
       if (result.vt != VT_EMPTY)
@@ -526,7 +528,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       list<string> sparams;
       nparams.push_back (arg1);
       sparams.push_back (sText);
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                   callinfo._name.c_str (), 
                                   eDontChangeAction,
                                   strType, 
@@ -535,7 +537,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult); 
+                                  &bResult))
+        return false;
       return bResult;
       }   // end of Lua
 
@@ -566,14 +569,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
     
     COleVariant result;
 
-    m_ScriptEngine->Execute (iRoutine, 
+    if (m_ScriptEngine->Execute (iRoutine,
                              callinfo._name.c_str (), 
                              eDontChangeAction,
                              strType,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result);
+                             &result))
+        return false;
 
     // see what result was
     if (result.vt != VT_EMPTY)
@@ -618,7 +622,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       nparams.push_back (arg1);
       nparams.push_back (arg2);
       sparams.push_back (sText);
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                   callinfo._name.c_str (), 
                                   eDontChangeAction,
                                   strType, 
@@ -627,7 +631,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult); 
+                                  &bResult))
+        return false;
       return bResult;
       }   // end of Lua
 
@@ -653,14 +658,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
     
     COleVariant result;
 
-    m_ScriptEngine->Execute (iRoutine, 
+    if (m_ScriptEngine->Execute (iRoutine,
                              callinfo._name.c_str (), 
                              eDontChangeAction,
                              strType,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result);
+                             &result))
+        return false;
 
     // see what result was
     if (result.vt != VT_EMPTY)
@@ -708,7 +714,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       sparams.push_back ((LPCTSTR) arg2);
       sparams.push_back ((LPCTSTR) arg3);
       sparams.push_back ((LPCTSTR) arg4);
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                   callinfo._name.c_str (), 
                                   eDontChangeAction,
                                   strType, 
@@ -717,7 +723,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult); 
+                                  &bResult))
+        return false;
       return bResult;
       }   // end of Lua
 
@@ -745,14 +752,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
     
     COleVariant result;
 
-    m_ScriptEngine->Execute (iRoutine, 
+    if (m_ScriptEngine->Execute (iRoutine,
                              callinfo._name.c_str (), 
                              eDontChangeAction,
                              strType,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result);
+                             &result))
+        return false;
 
     // see what result was
     if (result.vt != VT_EMPTY)

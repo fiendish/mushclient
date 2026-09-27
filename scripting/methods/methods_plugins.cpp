@@ -408,14 +408,19 @@ CPlugin * pPlugin = GetPlugin (PluginID);
   if (!pPlugin->m_bEnabled)
     return ePluginDisabled;
 
-DISPID iDispid = pPlugin->m_ScriptEngine->GetDispid (Routine);
+  CPluginCallGuard callGuard (pPlugin);
+  try
+    {
+  bool bLookupError = false;
+  DISPID iDispid = pPlugin->m_ScriptEngine->GetDispid (Routine, &bLookupError);
+  if (bLookupError)
+    return eErrorCallingPluginRoutine;
 
   if (iDispid == DISPID_UNKNOWN)
     return eNoSuchRoutine;
 
 long nInvocationCount = 0;
 
-  CPluginCallGuard callGuard (pPlugin);
   CPluginContextGuard contextGuard (this, pPlugin, true);
 
   CString strType = TFormat ("Plugin %s", (LPCTSTR) pPlugin->m_strName); 
@@ -467,6 +472,12 @@ long nInvocationCount = 0;
     return eErrorCallingPluginRoutine;
 
 	return eOK;
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    return eErrorCallingPluginRoutine;
+    }
 }    // end of CMUSHclientDoc::CallPlugin
 
 // does a plugin support a routine, eg.

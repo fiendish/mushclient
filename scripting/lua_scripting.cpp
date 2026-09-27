@@ -267,6 +267,9 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  const int savedTop = L ? lua_gettop (L) : 0;
+  try
+    {
   CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // safety check ;)
@@ -316,7 +319,14 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
     }
 
   return false;
-
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    if (L)
+      lua_settop (L, savedTop);
+    return true;
+    }
   }
 
 // For Lua we will simply use the DISPID as a flag to indicate if we found
@@ -326,12 +336,26 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
 
 // Version 3.75+ supports dotted functions (eg. string.gsub)
 
-DISPID CScriptEngine::GetLuaDispid (const CString & strName)
+DISPID CScriptEngine::GetLuaDispid (const CString & strName, bool * pLookupError)
   {
+  if (pLookupError)
+    *pLookupError = false;
+  const int savedTop = L ? lua_gettop (L) : 0;
+  try
+    {
   CPluginDirectoryGuard directoryGuard (m_pPlugin);
   return (L && FindLuaFunction (L, strName))
           ? 1 : DISPID_UNKNOWN;  // if known 1 is flag, otherwise DISPID_UNKNOWN
-       
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    if (L)
+      lua_settop (L, savedTop);
+    if (pLookupError)
+      *pLookupError = true;
+    return DISPID_UNKNOWN;
+    }
   }
 
 
@@ -484,6 +508,11 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  if (result)
+    *result = false;
+  const int savedTop = L ? lua_gettop (L) : 0;
+  try
+    {
   CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // safety check ;)
@@ -706,6 +735,15 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   lua_settop (L, top);  // discard only this invocation's results
   
   return false;   // no error
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    if (L)
+      lua_settop (L, savedTop);
+    dispid = DISPID_UNKNOWN;
+    return true;
+    }
   } // end of CScriptEngine::ExecuteLua 
 
 // returns true if script error
@@ -720,6 +758,9 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  const int savedTop = L ? lua_gettop (L) : 0;
+  try
+    {
   CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // safety check ;)
@@ -807,6 +848,15 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
 
   return false;   // no error
 
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    if (L)
+      lua_settop (L, savedTop);
+    dispid = DISPID_UNKNOWN;
+    return true;
+    }
   } // end of CScriptEngine::ExecuteLua 
 
 

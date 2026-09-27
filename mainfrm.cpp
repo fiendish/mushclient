@@ -2024,9 +2024,12 @@ void CMainFrame::OpenAndConnectToWorldsInStartupList (const bool bConnect)
       }
     else
       {
-      CString strPath = Make_Absolute_Path (strWorldList.Left (i));
-      pDoc = App.OpenDocumentFile (strPath);
+      CString strWorld = strWorldList.Left (i);
       strWorldList = strWorldList.Mid (i + 1);
+      if (strWorld.IsEmpty ())
+        continue;
+      CString strPath = Make_Absolute_Path (strWorld);
+      pDoc = App.OpenDocumentFile (strPath);
       }
 
     if (bConnect && pDoc && pDoc->IsKindOf(RUNTIME_CLASS(CMUSHclientDoc)))

@@ -51,8 +51,8 @@ class CScriptEngine : public CObject
   bool CreateScriptEngine (void);
   bool Parse (const CString & strCode, const CString & strWhat);
 
-  DISPID GetDispid (const CString & strName);
-  DISPID GetLuaDispid (const CString & strName);
+  DISPID GetDispid (const CString & strName, bool * pLookupError = NULL);
+  DISPID GetLuaDispid (const CString & strName, bool * pLookupError = NULL);
 
   // returns true if script error
   bool Execute (DISPID & dispid,  // dispatch ID, will be set to DISPID_UNKNOWN on an error
