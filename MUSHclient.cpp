@@ -240,10 +240,21 @@ BOOL CMUSHclientApp::InitInstance()
   MUSHCLIENT_VERSION += "-pre";
 #endif
 
-  if (GetModuleFileName (NULL, fullfilename, sizeof (fullfilename)))
-    m_strMUSHclientFileName = ExtractDirectory (CString (fullfilename));
-  else
-    m_strMUSHclientFileName = ".\\MUSHclient.exe";
+  DWORD executablePathLength = GetModuleFileName (NULL, fullfilename, sizeof (fullfilename));
+  if (executablePathLength == 0 || executablePathLength >= sizeof (fullfilename))
+    {
+    ::AfxMessageBox ("Unable to determine the executable directory.");
+    return FALSE;
+    }
+  m_strMUSHclientFileName = ExtractDirectory (CString (fullfilename));
+
+  // Resolve startup files from this installation, regardless of the launcher.
+  if (_chdir (m_strMUSHclientFileName) != 0)
+    {
+    ::AfxMessageBox (CFormat ("Unable to use the executable directory: %s",
+                             (LPCTSTR) m_strMUSHclientFileName));
+    return FALSE;
+    }
 
   // stupid cursor disappears under Parallels
   g_hCursorIbeam = CopyCursor(AfxGetApp()->LoadCursor (IDC_MY_IBEAM));  
