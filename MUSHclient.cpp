@@ -250,7 +250,11 @@ BOOL CMUSHclientApp::InitInstance()
 
   // Resolve startup files from this installation, regardless of the launcher.
   if (_chdir (m_strMUSHclientFileName) != 0)
-    AfxThrowFileException (CFileException::genericException, errno, m_strMUSHclientFileName);
+    {
+    ::AfxMessageBox (CFormat ("Unable to use the executable directory: %s",
+                             (LPCTSTR) m_strMUSHclientFileName));
+    return FALSE;
+    }
 
   // stupid cursor disappears under Parallels
   g_hCursorIbeam = CopyCursor(AfxGetApp()->LoadCursor (IDC_MY_IBEAM));  
