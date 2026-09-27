@@ -88,6 +88,10 @@ public:
   void DeferTextDocumentClose (__int64 iDocumentNumber);
   void DeferWorldDocumentClose (__int64 iDocumentNumber);
   bool HasActiveDocumentOperations () const;
+  void CollectIdleLuaGarbage ();
+  DWORD m_dwLastLuaGC;
+  size_t m_iNextLuaGC;
+
 
   CAtomicElementMap  m_ElementMap;   // MXP elements we know of (eg. <b> )
   CMapStringToString m_EntityMap;    // MXP entities we know of (eg. &lt; )

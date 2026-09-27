@@ -226,6 +226,8 @@ CMUSHclientApp::CMUSHclientApp()
 	// Place all significant initialization in InitInstance
 
 EnableAutomation();
+  m_dwLastLuaGC = 0;
+  m_iNextLuaGC = 0;
    
 //::AfxOleLockApp();
 
@@ -1124,6 +1126,80 @@ bool CMUSHclientApp::HasActiveDocumentOperations () const
   return false;
 }
 
+struct CIdleLuaTarget
+  {
+  __int64 world;
+  CString plugin;
+  __int64 instance;
+  };
+
+void CMUSHclientApp::CollectIdleLuaGarbage ()
+  {
+  const DWORD now = GetTickCount ();
+  if (now - m_dwLastLuaGC < 100 || HasActiveDocumentOperations () ||
+      CProgressDlg::IsPumpingMessages ())
+    return;
+  m_dwLastLuaGC = now;
+
+  vector<CIdleLuaTarget> targets;
+  for (POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+    {
+    CMUSHclientDoc * doc = (CMUSHclientDoc *) m_pWorldDocTemplate->GetNextDoc (pos);
+    if (doc->m_bWorldClosePending)
+      continue;
+    CIdleLuaTarget target;
+    target.world = doc->m_iUniqueDocumentNumber;
+    target.instance = 0;
+    if (doc->m_ScriptEngine && doc->m_ScriptEngine->LuaGCReady (now))
+      targets.push_back (target);
+    for (PluginListIterator it = doc->m_PluginList.begin (); it != doc->m_PluginList.end (); ++it)
+      if ((*it)->m_ScriptEngine && (*it)->m_ScriptEngine->LuaGCReady (now))
+        {
+        target.plugin = (*it)->m_strID;
+        target.instance = (*it)->m_iPluginInstanceNumber;
+        targets.push_back (target);
+        }
+    }
+  if (targets.empty ())
+    return;
+
+  LARGE_INTEGER started;
+  QueryPerformanceCounter (&started);
+  size_t next = m_iNextLuaGC % targets.size ();
+  for (size_t visited = 0; visited < 8; ++visited)
+    {
+    MSG msg;
+    if (PeekMessage (&msg, NULL, 0, 0, PM_NOREMOVE))
+      break;
+    const CIdleLuaTarget target = targets [next];
+    next = (next + 1) % targets.size ();
+    m_iNextLuaGC = next;
+
+    // Finalizers may remove other plugins or worlds. Resolve each identity
+    // again instead of keeping pointers across a collection step.
+    for (POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+      {
+      CMUSHclientDoc * doc = (CMUSHclientDoc *) m_pWorldDocTemplate->GetNextDoc (pos);
+      if (doc->m_iUniqueDocumentNumber != target.world || doc->m_bWorldClosePending)
+        continue;
+      CScriptEngine * engine = doc->m_ScriptEngine;
+      if (!target.plugin.IsEmpty ())
+        {
+        CPlugin * plugin = doc->GetPluginInstance (target.plugin, target.instance);
+        engine = plugin ? plugin->m_ScriptEngine : NULL;
+        }
+      if (engine)
+        engine->CollectLuaGarbage (now);
+      break;
+      }
+    LARGE_INTEGER finished;
+    QueryPerformanceCounter (&finished);
+    if (m_iCounterFrequency &&
+        finished.QuadPart - started.QuadPart >= m_iCounterFrequency / 500)
+      break;
+    }
+  }
+
 BOOL CMUSHclientApp::OnIdle(LONG lCount) 
 {
   if (CProgressDlg::IsPumpingMessages () || HasActiveDocumentOperations ())
@@ -1236,6 +1312,8 @@ BOOL CMUSHclientApp::OnIdle(LONG lCount)
       return 1;
       }
     }
+
+  CollectIdleLuaGarbage ();
 
 HWND hwndForeground = ::GetForegroundWindow( );
 

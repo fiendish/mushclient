@@ -1092,6 +1092,7 @@ static int L_CallPlugin (lua_State *L)
     {
     int n = lua_gettop(L) - 2;  // exclude plugin ID and function name
 
+    pPlugin->m_ScriptEngine->LuaActivity ();
     lua_State *pL = pPlugin->m_ScriptEngine->L;  // plugin's Lua state
 
     // A nested call may arrive while this state holds another call's

@@ -12,6 +12,7 @@ extern "C"
   }
 
 #include "paneline.h"
+#include "idle_gc.h"
 
 #define DOCUMENT_STATE "mushclient.document"
 #define WORLD_LIBRARY "world"
@@ -70,6 +71,10 @@ class CScriptEngine : public CObject
   void OpenLua ();
   void OpenLuaDelayed ();
   void CloseLua ();
+  void LuaActivity () { m_idleGC.Activity (); }
+  bool CollectLuaGarbage (DWORD now);
+  bool LuaGCReady (DWORD now) const
+    { return L && m_idleGC.Ready (now) && lua_gc (L, 9, 0) == 1; }
 
 //  void RegisterLuaRoutines ();
 
@@ -104,6 +109,8 @@ class CScriptEngine : public CObject
   lua_State           * L;                  // Lua state
 
   private:
+
+  CLuaIdleGC m_idleGC;
 
   IActiveScript       * m_IActiveScript;          // VBscript interface
   IActiveScriptParse  * m_IActiveScriptParse;     // parser

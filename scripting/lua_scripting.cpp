@@ -179,6 +179,7 @@ int luacom_open_glue (lua_State *L)
 
 void CScriptEngine::OpenLuaDelayed ()
   {
+  m_idleGC = CLuaIdleGC ();
   L = MakeLuaState();   /* opens Lua */
   if (!L)
     return;         // can't open Lua
@@ -262,11 +263,43 @@ void CScriptEngine::CloseLua ()
     }
   }  // end of CScriptEngine::CloseLua
 
+bool CScriptEngine::CollectLuaGarbage (DWORD now)
+  {
+  if (!L || !m_idleGC.Ready (now) || m_pDoc->m_bWorldClosePending ||
+      m_pDoc->m_iActiveProgressOperations ||
+      (m_pPlugin && m_pPlugin->m_iActiveScriptCalls))
+    return false;
+
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
+  CPluginContextGuard contextGuard (m_pDoc, m_pPlugin);
+  CPluginCallGuard callGuard (m_pPlugin, true);
+  CValueStateGuard<unsigned short> actionGuard
+    (m_pDoc->m_iCurrentActionSource, eUnknownActionSource);
+  const int top = lua_gettop (L);
+  try
+    {
+    CPluginDirectoryGuard directoryGuard (m_pPlugin);
+    const int result = m_idleGC.Collect (L, now);
+    if (result < 0)
+      LuaError (L, "Garbage collection error", "", "", "", m_pDoc);
+    lua_settop (L, top);
+    return result != 0;
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    m_idleGC.Cancel (now);
+    lua_settop (L, top);
+    return true;
+    }
+  }
+
 // send some code to Lua to be parsed
 bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  LuaActivity ();
   const int savedTop = L ? lua_gettop (L) : 0;
   try
     {
@@ -338,8 +371,10 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
 
 DISPID CScriptEngine::GetLuaDispid (const CString & strName, bool * pLookupError)
   {
+  CWorldDocumentOperationGuard operationGuard (m_pDoc);
   if (pLookupError)
     *pLookupError = false;
+  LuaActivity ();
   const int savedTop = L ? lua_gettop (L) : 0;
   try
     {
@@ -510,6 +545,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
   if (result)
     *result = false;
+  LuaActivity ();
   const int savedTop = L ? lua_gettop (L) : 0;
   try
     {
@@ -758,6 +794,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  LuaActivity ();
   const int savedTop = L ? lua_gettop (L) : 0;
   try
     {

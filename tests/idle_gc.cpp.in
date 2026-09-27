@@ -1,0 +1,241 @@
+#include <cassert>
+#include <cstdio>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <list>
+#include <algorithm>
+#include <stdexcept>
+#include <functional>
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
+}
+static bool supportsRunning = true;
+static bool failStep = false;
+static int runtimeGC(lua_State *L, int what, int data) {
+  if (what == 9 && !supportsRunning) return -1;
+  if (what == LUA_GCSTEP && failStep) { failStep=false; return luaL_error(L,"collection failure"); }
+  return lua_gc(L, what, data);
+}
+#define lua_gc runtimeGC
+#include "scripting/idle_gc.h"
+using std::vector;
+using std::list;
+typedef uint32_t DWORD;
+typedef size_t POSITION;
+struct LARGE_INTEGER { long long QuadPart; };
+struct MSG {};
+#define PM_NOREMOVE 0
+static DWORD clockNow=10000;
+static long long perfNow=0;
+static bool messageWaiting=false;
+DWORD GetTickCount() { return clockNow; }
+void QueryPerformanceCounter(LARGE_INTEGER *v) { v->QuadPart=perfNow; }
+bool PeekMessage(MSG *, void *, int, int, int) { return messageWaiting; }
+struct CString : std::string {
+  using std::string::string;
+  CString() {}
+  bool IsEmpty() const { return empty(); }
+};
+struct CFileException { void Delete() { delete this; } };
+class CMUSHclientDoc;
+class CPlugin;
+@GUARD@
+struct CScriptEngine {
+  lua_State *L;
+  CMUSHclientDoc *m_pDoc;
+  CPlugin *m_pPlugin;
+  CLuaIdleGC m_idleGC;
+  int calls=0;
+  CScriptEngine(CMUSHclientDoc *d, CPlugin *p);
+  ~CScriptEngine() { if(L) lua_close(L); }
+  bool CollectLuaGarbage(DWORD now);
+  bool LuaGCReady(DWORD now) const {
+    return L && m_idleGC.Ready(now) && lua_gc(L,9,0)==1;
+  }
+  void LuaActivity() { m_idleGC.Activity(); }
+};
+struct CPlugin {
+  CString m_strID;
+  long long m_iPluginInstanceNumber;
+  int m_iActiveScriptCalls=0;
+  bool m_bEnabled=false;
+  CScriptEngine *m_ScriptEngine;
+  CPlugin(CMUSHclientDoc *d, const char *id, long long instance)
+    : m_strID(id),m_iPluginInstanceNumber(instance),m_ScriptEngine(new CScriptEngine(d,this)) {}
+  ~CPlugin() { delete m_ScriptEngine; }
+};
+typedef list<CPlugin*> CPluginList;
+typedef CPluginList::iterator PluginListIterator;
+struct CMUSHclientDoc {
+  long long m_iUniqueDocumentNumber;
+  bool m_bWorldClosePending=false;
+  int m_iActiveProgressOperations=0;
+  unsigned short m_iCurrentActionSource=73;
+  CPlugin *m_CurrentPlugin=nullptr;
+  CScriptEngine *m_ScriptEngine=nullptr;
+  CPluginList m_PluginList;
+  explicit CMUSHclientDoc(long long id):m_iUniqueDocumentNumber(id) {}
+  ~CMUSHclientDoc() { delete m_ScriptEngine; for(auto p:m_PluginList) delete p; }
+  CPlugin *GetPluginInstance(const CString& id, long long instance) {
+    for(auto p:m_PluginList) if(p->m_strID==id && p->m_iPluginInstanceNumber==instance) return p;
+    return nullptr;
+  }
+};
+static int errors=0, steps=0;
+static long long stepCost=0;
+const unsigned short eUnknownActionSource=0;
+struct CWorldDocumentOperationGuard {
+  CMUSHclientDoc *d;
+  CWorldDocumentOperationGuard(CMUSHclientDoc *v):d(v) { ++d->m_iActiveProgressOperations; }
+  ~CWorldDocumentOperationGuard() { --d->m_iActiveProgressOperations; }
+};
+struct CPluginContextGuard {
+  CMUSHclientDoc *d; CPlugin *old;
+  CPluginContextGuard(CMUSHclientDoc *v,CPlugin *p):d(v),old(v->m_CurrentPlugin) {d->m_CurrentPlugin=p;}
+  ~CPluginContextGuard(){d->m_CurrentPlugin=old;}
+};
+struct CPluginCallGuard {
+  CPlugin *p;
+  CPluginCallGuard(CPlugin *v,bool):p(v){if(p)++p->m_iActiveScriptCalls;}
+  ~CPluginCallGuard(){if(p)--p->m_iActiveScriptCalls;}
+};
+struct CPluginDirectoryGuard {
+  CPluginDirectoryGuard(CPlugin *p) {
+    ++steps; perfNow+=stepCost;
+    if(p) {assert(p->m_iActiveScriptCalls); ++p->m_ScriptEngine->calls;
+      assert(p->m_ScriptEngine->m_pDoc->m_CurrentPlugin==p);}
+  }
+};
+void LuaError(lua_State *L,const char*,const char*,const char*,const char*,CMUSHclientDoc *d) {
+  assert(d->m_iActiveProgressOperations); ++errors;lua_pop(L,1);
+}
+struct DocumentTemplate {
+  vector<CMUSHclientDoc*> docs;
+  POSITION GetFirstDocPosition(){return docs.empty()?0:1;}
+  CMUSHclientDoc *GetNextDoc(POSITION& pos){auto d=docs.at(pos-1);pos=pos<docs.size()?pos+1:0;return d;}
+};
+struct CProgressDlg { static bool IsPumpingMessages(){return false;} };
+struct CMUSHclientApp {
+  DocumentTemplate *m_pWorldDocTemplate;
+  DWORD m_dwLastLuaGC=0;
+  size_t m_iNextLuaGC=0;
+  long long m_iCounterFrequency=1000;
+  bool HasActiveDocumentOperations() const {
+    for(auto d:m_pWorldDocTemplate->docs) if(d->m_iActiveProgressOperations) return true;
+    return false;
+  }
+  void CollectIdleLuaGarbage();
+};
+static std::function<void()> finalizer;
+static int finalize(lua_State *) { if(finalizer)finalizer();return 0; }
+static void run(lua_State *L,const char *s) {
+  if(luaL_dostring(L,s))throw std::runtime_error(lua_tostring(L,-1));
+}
+CScriptEngine::CScriptEngine(CMUSHclientDoc *d,CPlugin *p):m_pDoc(d),m_pPlugin(p) {
+  L=luaL_newstate();luaL_openlibs(L);lua_register(L,"native_finalizer",finalize);
+  run(L,"assert(jit.status())");
+}
+@FUNCTIONS@
+static CPlugin *add(CMUSHclientDoc& d,const char *id,long long instance) {
+  auto p=new CPlugin(&d,id,instance);d.m_PluginList.push_back(p);return p;
+}
+static void garbage(CScriptEngine& e) {
+  run(e.L,"local t={} for i=1,20000 do t[i]={i, tostring(i), {a=i,b=i+1}} end trash=t");
+  run(e.L,"trash=nil");e.LuaActivity();
+}
+static void scheduleFinalizer(CScriptEngine& e,const char *body="native_finalizer()") {
+  lua_gc(e.L,LUA_GCSTOP,0);
+  std::string s="do local p=newproxy(true);getmetatable(p).__gc=function() ";
+  s+=body;s+=" end end";run(e.L,s.c_str());lua_gc(e.L,LUA_GCRESTART,0);e.LuaActivity();
+}
+int main() {
+  {
+    CMUSHclientDoc doc(1);auto p=add(doc,"memory",1);auto& e=*p->m_ScriptEngine;
+    garbage(e);int before=lua_gc(e.L,LUA_GCCOUNT,0);
+    lua_pushliteral(e.L,"sentinel");int iterations=0;
+    while(e.CollectLuaGarbage(clockNow)) assert(++iterations<2000);
+    assert(iterations>2);assert(lua_gc(e.L,LUA_GCCOUNT,0)<before/4);
+    assert(lua_gettop(e.L)==1 && std::string(lua_tostring(e.L,1))=="sentinel");
+    run(e.L,"assert(jit.status())");assert(!e.CollectLuaGarbage(clockNow+20000));
+    e.LuaActivity();assert(!e.CollectLuaGarbage(clockNow+4999));assert(e.CollectLuaGarbage(clockNow+5000));
+    lua_gc(e.L,LUA_GCSTOP,0);assert(!e.CollectLuaGarbage(clockNow+20000));assert(lua_gc(e.L,9,0)==0);
+    lua_gc(e.L,LUA_GCRESTART,0);supportsRunning=false;
+    assert(!e.CollectLuaGarbage(clockNow+20000));supportsRunning=true;
+    assert(e.CollectLuaGarbage(clockNow+20000));
+    CLuaIdleGC wrapping;while(wrapping.Collect(e.L,0xfffffff0u)){}
+    wrapping.Activity();assert(!wrapping.Ready(1000));assert(wrapping.Ready(6000));
+  }
+  puts("collection, JIT, stack roots, cooldown, paused and older runtimes: passed");
+  {
+    CMUSHclientDoc doc(2);auto p=add(doc,"finalizers",1);auto& e=*p->m_ScriptEngine;
+    DocumentTemplate docs;docs.docs.push_back(&doc);CMUSHclientApp app;app.m_pWorldDocTemplate=&docs;
+    bool called=false;
+    finalizer=[&](){called=true;assert(doc.m_CurrentPlugin==p);assert(p->m_iActiveScriptCalls);
+      assert(doc.m_iActiveProgressOperations);assert(doc.m_iCurrentActionSource==eUnknownActionSource);
+      int n=steps;app.CollectIdleLuaGarbage();assert(steps==n);};
+    scheduleFinalizer(e);while(e.CollectLuaGarbage(clockNow)){}
+    assert(called && !doc.m_iActiveProgressOperations && !p->m_iActiveScriptCalls);
+    assert(doc.m_CurrentPlugin==nullptr && doc.m_iCurrentActionSource==73);finalizer=nullptr;
+    clockNow+=6000;scheduleFinalizer(e,"error('test finalizer failure')");
+    int saved=lua_gettop(e.L);while(e.CollectLuaGarbage(clockNow)){}
+    assert(lua_gettop(e.L)==saved);
+    int oldErrors=errors;clockNow+=6000;e.LuaActivity();failStep=true;
+    assert(e.CollectLuaGarbage(clockNow));
+    assert(errors==oldErrors+1 && lua_gettop(e.L)==saved);
+    clockNow+=6000;finalizer=[](){throw new CFileException;};
+    scheduleFinalizer(e);while(e.CollectLuaGarbage(clockNow)){}
+    assert(lua_gettop(e.L)==saved && !doc.m_iActiveProgressOperations);
+    assert(!p->m_iActiveScriptCalls && doc.m_CurrentPlugin==nullptr);
+    finalizer=nullptr;run(e.L,"assert(jit.status())");
+  }
+  puts("finalizer context, reentrancy and protected error handling: passed");
+  {
+    CMUSHclientDoc doc(3);DocumentTemplate docs;docs.docs.push_back(&doc);
+    CMUSHclientApp app;app.m_pWorldDocTemplate=&docs;
+    for(int i=0;i<12;i++){char id[16];sprintf(id,"plugin%d",i);garbage(*add(doc,id,i+1)->m_ScriptEngine);}
+    int old=steps;messageWaiting=true;app.CollectIdleLuaGarbage();assert(old==steps);
+    messageWaiting=false;clockNow+=100;app.CollectIdleLuaGarbage();assert(steps==old+8);
+    app.CollectIdleLuaGarbage();assert(steps==old+8);
+    clockNow+=100;app.CollectIdleLuaGarbage();for(auto p:doc.m_PluginList)assert(p->m_ScriptEngine->calls);
+    old=steps;stepCost=3;clockNow+=100;app.CollectIdleLuaGarbage();assert(steps==old+1);stepCost=0;
+    doc.m_ScriptEngine=new CScriptEngine(&doc,nullptr);garbage(*doc.m_ScriptEngine);
+    doc.m_PluginList.front()->m_ScriptEngine->m_pDoc->m_bWorldClosePending=true;
+    old=steps;clockNow+=100;app.CollectIdleLuaGarbage();assert(steps==old);
+    doc.m_bWorldClosePending=false;app.m_iNextLuaGC=0;clockNow+=100;
+    app.CollectIdleLuaGarbage();assert(steps>old);
+  }
+  puts("message priority, throttling, fairness, budget, disabled plugins and world scripts: passed");
+  {
+    CMUSHclientDoc doc(4);DocumentTemplate docs;docs.docs.push_back(&doc);
+    CMUSHclientApp app;app.m_pWorldDocTemplate=&docs;
+    auto first=add(doc,"first",1);auto victim=add(doc,"victim",2);CPlugin *replacement=nullptr;
+    finalizer=[&](){doc.m_PluginList.remove(victim);delete victim;
+      replacement=add(doc,"victim",3);};
+    scheduleFinalizer(*first->m_ScriptEngine);
+    for(int i=0;i<500 && !replacement;i++){clockNow+=100;app.CollectIdleLuaGarbage();}
+    assert(replacement && replacement->m_ScriptEngine->calls==0);finalizer=nullptr;messageWaiting=false;
+    app.m_iNextLuaGC=0;clockNow+=100;app.CollectIdleLuaGarbage();assert(replacement->m_ScriptEngine->calls>0);
+  }
+  puts("plugin replacement during finalization: passed");
+  {
+    CMUSHclientDoc doc(5);auto victim=new CMUSHclientDoc(6);
+    DocumentTemplate docs;docs.docs.push_back(&doc);docs.docs.push_back(victim);
+    CMUSHclientApp app;app.m_pWorldDocTemplate=&docs;
+    auto first=add(doc,"first",1);add(*victim,"victim",1);
+    bool removed=false;
+    finalizer=[&](){docs.docs.pop_back();delete victim;removed=true;};
+    scheduleFinalizer(*first->m_ScriptEngine);
+    for(int i=0;i<500 && !removed;i++){clockNow+=100;app.CollectIdleLuaGarbage();}
+    assert(removed);finalizer=nullptr;
+    clockNow+=6000;bool queued=false;int atQueue=0;
+    finalizer=[&](){queued=true;atQueue=steps;messageWaiting=true;};
+    scheduleFinalizer(*first->m_ScriptEngine);
+    for(int i=0;i<500 && !queued;i++){clockNow+=100;app.CollectIdleLuaGarbage();}
+    assert(queued && atQueue==steps);finalizer=nullptr;messageWaiting=false;
+  }
+  puts("world removal and messages arriving during a collection slice: passed");
+  return 0;
+}
