@@ -2488,6 +2488,53 @@ lua_State *MakeLuaState (void) {
   return L;
 }
 
+CString Make_Relative_Path (CString strFileName)
+  {
+  CString strPath = strFileName;
+  strPath.Replace ('/', '\\');
+
+  // Only absolute paths can be rebased without changing their meaning.
+  if (!((strPath.GetLength () >= 3 &&
+         isalpha ((unsigned char) strPath [0]) &&
+         strPath [1] == ':' && strPath [2] == '\\') ||
+        strPath.Left (2) == "\\\\"))
+    return strFileName;
+
+  CString strDirectory = App.m_strMUSHclientFileName;
+  if (strDirectory.IsEmpty ())
+    return strFileName;
+
+  // Resolve dot components before checking the directory boundary.
+  DWORD length = GetFullPathName (strPath, 0, NULL, NULL);
+  if (length == 0)
+    return strFileName;
+  vector<char> path (length);
+  DWORD result = GetFullPathName (strPath, length, &path [0], NULL);
+  if (result == 0 || result >= length)
+    return strFileName;
+  strPath = &path [0];
+
+  length = GetFullPathName (strDirectory, 0, NULL, NULL);
+  if (length == 0)
+    return strFileName;
+  vector<char> directory (length);
+  result = GetFullPathName (strDirectory, length, &directory [0], NULL);
+  if (result == 0 || result >= length)
+    return strFileName;
+  strDirectory = &directory [0];
+  strDirectory.TrimRight ('\\');
+
+  if (strPath.CompareNoCase (strDirectory) == 0)
+    return ".\\";
+
+  strDirectory += '\\';
+  if (strPath.Left (strDirectory.GetLength ()).CompareNoCase (strDirectory) == 0)
+    return ".\\" + strPath.Mid (strDirectory.GetLength ());
+
+  return strFileName;
+  } // end of Make_Relative_Path
+
+
 // see lengthy forum post at: http://www.gammon.com.au/forum/?id=7776
 //    (hello, Shadowfyr!)
 

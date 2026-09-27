@@ -460,6 +460,7 @@ typedef struct
 #define OPT_PASSWORD      0x000004    // use base 64 encoding
 #define OPT_COMMAND_STACK 0x000008    // this is the command stack character
 #define OPT_WORLD_ID      0x000010    // this is the world ID
+#define OPT_PATH          0x000020    // save installation paths relatively
 
 // also can have values above: OPT_UPDATE_VIEWS, 
 //                             OPT_UPDATE_INPUT_FONT, 

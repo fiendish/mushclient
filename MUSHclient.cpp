@@ -2305,6 +2305,23 @@ int CMUSHclientApp::db_execute (const char * sql, const bool bShowError)
   }   // end of CMUSHclientApp::db_execute
 
 
+// MFC keeps absolute recent filenames in memory, but stores portable paths.
+CString CMUSHclientApp::GetProfileString (LPCTSTR section, LPCTSTR entry, LPCTSTR defaultValue)
+  {
+  CString value = CWinApp::GetProfileString (section, entry, defaultValue);
+  if (strcmp (section, "Recent File List") == 0 && value.Left (2) == ".\\")
+    return m_strMUSHclientFileName + value.Mid (2);
+  return value;
+  }
+
+BOOL CMUSHclientApp::WriteProfileString (LPCTSTR section, LPCTSTR entry, LPCTSTR value)
+  {
+  if (value && strcmp (section, "Recent File List") == 0)
+    return CWinApp::WriteProfileString (section, entry, Make_Relative_Path (value));
+  return CWinApp::WriteProfileString (section, entry, value);
+  }
+
+
 // replaces: WriteProfileString
 int CMUSHclientApp::db_write_string (LPCTSTR lpszSection, LPCTSTR lpszEntry, LPCTSTR lpszValue)
   {
@@ -2315,6 +2332,8 @@ int CMUSHclientApp::db_write_string (LPCTSTR lpszSection, LPCTSTR lpszEntry, LPC
   CString strEntry = lpszEntry;
   CString strValue = lpszValue;
 
+  if (strcmp (lpszSection, "prefs") == 0)
+    strValue = MakeGlobalOptionPathsRelative (lpszEntry, strValue);
 
   strEntry.Replace ("'", "''");  // fix up quotes
   strValue.Replace ("'", "''");  // fix up quotes

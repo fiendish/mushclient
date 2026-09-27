@@ -76,26 +76,26 @@ static tGlobalConfigurationAlphaOption AlphaGlobalOptionsTable  [] = {
 
 // option in MUSHclient.h                          name in registry          default
 
-{ GLB_ALPHA_OPT (m_strAsciiArtFont             ), "AsciiArtFont",     "fonts\\standard.flf" },                    
-{ GLB_ALPHA_OPT (m_strDefaultAliasesFile       ), "DefaultAliasesFile",   "" },             
-{ GLB_ALPHA_OPT (m_strDefaultColoursFile       ), "DefaultColoursFile",   "" },      
+{ GLB_ALPHA_OPT (m_strAsciiArtFont             ), "AsciiArtFont",     "fonts\\standard.flf", eFilePath },
+{ GLB_ALPHA_OPT (m_strDefaultAliasesFile       ), "DefaultAliasesFile",   "", eFilePath },
+{ GLB_ALPHA_OPT (m_strDefaultColoursFile       ), "DefaultColoursFile",   "", eFilePath },
 { GLB_ALPHA_OPT (m_strDefaultInputFont         ), "DefaultInputFont",     "FixedSys" },                   
-{ GLB_ALPHA_OPT (m_strDefaultLogFileDirectory  ), "DefaultLogFileDirectory",    ".\\logs\\" },
-{ GLB_ALPHA_OPT (m_strDefaultMacrosFile        ), "DefaultMacrosFile",    "" },      
-{ GLB_ALPHA_OPT (m_strDefaultNameGenerationFile), "DefaultNameGenerationFile",    "names.txt" },      
+{ GLB_ALPHA_OPT (m_strDefaultLogFileDirectory  ), "DefaultLogFileDirectory",    ".\\logs\\", eFilePath },
+{ GLB_ALPHA_OPT (m_strDefaultMacrosFile        ), "DefaultMacrosFile",    "", eFilePath },
+{ GLB_ALPHA_OPT (m_strDefaultNameGenerationFile), "DefaultNameGenerationFile",    "names.txt", eFilePath },
 { GLB_ALPHA_OPT (m_strDefaultOutputFont        ), "DefaultOutputFont",   "FixedSys" },              
-{ GLB_ALPHA_OPT (m_strDefaultTimersFile        ), "DefaultTimersFile",   "" },          
-{ GLB_ALPHA_OPT (m_strDefaultTriggersFile      ), "DefaultTriggersFile",  "" },          
-{ GLB_ALPHA_OPT (m_strDefaultWorldFileDirectory), "DefaultWorldFileDirectory",    ".\\worlds\\" },
+{ GLB_ALPHA_OPT (m_strDefaultTimersFile        ), "DefaultTimersFile",   "", eFilePath },
+{ GLB_ALPHA_OPT (m_strDefaultTriggersFile      ), "DefaultTriggersFile",  "", eFilePath },
+{ GLB_ALPHA_OPT (m_strDefaultWorldFileDirectory), "DefaultWorldFileDirectory",    ".\\worlds\\", eFilePath },
 { GLB_ALPHA_OPT (m_strNotepadQuoteString       ), "NotepadQuoteString",     "> " },                    
-{ GLB_ALPHA_OPT (m_strPluginList               ), "PluginList",                  "" },
-{ GLB_ALPHA_OPT (m_strPluginsDirectory         ), "PluginsDirectory", ".\\worlds\\plugins\\" },
-{ GLB_ALPHA_OPT (m_strDefaultStateFilesDirectory), "StateFilesDirectory", ".\\worlds\\plugins\\state\\" },   // however see below
+{ GLB_ALPHA_OPT (m_strPluginList               ), "PluginList",                  "", eFilePathList },
+{ GLB_ALPHA_OPT (m_strPluginsDirectory         ), "PluginsDirectory", ".\\worlds\\plugins\\", eFilePath },
+{ GLB_ALPHA_OPT (m_strDefaultStateFilesDirectory), "StateFilesDirectory", ".\\worlds\\plugins\\state\\", eFilePath },   // however see below
 { GLB_ALPHA_OPT (m_strPrinterFont              ), "PrinterFont",                "Courier" },
-{ GLB_ALPHA_OPT (m_strTrayIconFileName         ), "TrayIconFileName",  "" },                    
+{ GLB_ALPHA_OPT (m_strTrayIconFileName         ), "TrayIconFileName",  "", eFilePath },
 { GLB_ALPHA_OPT (m_strWordDelimiters           ), "WordDelimiters",         ".,()[]\"\'" },
 { GLB_ALPHA_OPT (m_strWordDelimitersDblClick   ), "WordDelimitersDblClick", ".,()[]\"\'" },
-{ GLB_ALPHA_OPT (m_strWorldList                ), "WorldList",                  "" },
+{ GLB_ALPHA_OPT (m_strWorldList                ), "WorldList",                  "", eFilePathList },
 { GLB_ALPHA_OPT (m_strLuaScript                ), "LuaScript",                  "" },
 { GLB_ALPHA_OPT (m_strLocale                   ), "Locale",                  "EN" },
 { GLB_ALPHA_OPT (m_strFixedPitchFont           ), "FixedPitchFont",          "FixedSys" },
@@ -103,6 +103,35 @@ static tGlobalConfigurationAlphaOption AlphaGlobalOptionsTable  [] = {
 {NULL}   // end of table marker            
 
 };    // end of table
+
+
+CString CMUSHclientApp::MakeGlobalOptionPathsRelative (LPCTSTR name, CString value)
+  {
+  for (int i = 0; AlphaGlobalOptionsTable [i].pName; i++)
+    {
+    if (strcmp (name, AlphaGlobalOptionsTable [i].pName) != 0)
+      continue;
+
+    if (AlphaGlobalOptionsTable [i].pathType == eFilePath)
+      return Make_Relative_Path (value);
+
+    if (AlphaGlobalOptionsTable [i].pathType == eFilePathList)
+      {
+      CString result;
+      int start = 0;
+      int end;
+      while ((end = value.Find ('*', start)) != -1)
+        {
+        result += Make_Relative_Path (value.Mid (start, end - start)) + '*';
+        start = end + 1;
+        }
+      return result + Make_Relative_Path (value.Mid (start));
+      }
+
+    break;
+    }
+  return value;
+  }
 
 
 // copy the registry prefs into the SQLite database into table 'prefs'
@@ -143,10 +172,7 @@ int CMUSHclientApp::PopulateDatabase (void)
                                         AlphaGlobalOptionsTable [i].pName, 
                                         strDefault);     
 
-    strValue.Replace ("'", "''");  // fix up quotes
-
-    db_rc = db_execute ((LPCTSTR) CFormat ("INSERT INTO prefs (name, value) VALUES ('%s', '%s')",
-                        AlphaGlobalOptionsTable [i].pName, (LPCTSTR) strValue), true);
+    db_rc = db_write_string ("prefs", AlphaGlobalOptionsTable [i].pName, strValue);
 
     if (db_rc != SQLITE_OK)
       return db_rc;
@@ -194,7 +220,12 @@ void CMUSHclientApp::LoadGlobalsFromDatabase (void)
           true,
           strDefault);
 
-    * (CString *) p = db_value.c_str ();
+    CString strValue = MakeGlobalOptionPathsRelative (AlphaGlobalOptionsTable [i].pName,
+                                                      db_value.c_str ());
+    if (strValue != db_value.c_str ())
+      db_write_string ("prefs", AlphaGlobalOptionsTable [i].pName, strValue);
+
+    * (CString *) p = strValue;
 
     };
 
