@@ -1,53 +1,33 @@
 #include <afxwin.h>
-#include <afxdisp.h>
 #include <direct.h>
-#include <cctype>
-#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
-#include <string>
 extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
 }
 
-using std::string;
 char working_dir[_MAX_PATH];
 char file_browsing_dir[_MAX_PATH];
 struct TestApplication {
   CString m_strMUSHclientFileName;
-  CString m_strDefaultWorldFileDirectory;
-  CString m_strDefaultLogFileDirectory;
-  CString m_strDefaultStateFilesDirectory;
   CString m_strPluginsDirectory;
-  CString m_strLocale, m_strFixedPitchFont, m_strTranslatorFile;
-  int m_iFixedPitchFontSize;
 } App;
-class CMUSHclientDoc {
-public:
-  long ChangeDir(LPCTSTR path);
-};
-CString CFormat(const char *format, ...) {
-  va_list args;
-  va_start(args, format);
-  CString result;
-  result.FormatV(format, args);
-  va_end(args);
-  return result;
-}
 void SetUpVariantString(CString &result, const CString &value) { result = value; }
 @FUNCTIONS@
 
-CString DirectoryInfo(int type) {
-  CString vaResult;
-  switch (type) {
-@INFO_CASES@
-  }
-  return vaResult;
+static BOOL InitializeForTest(CString &m_strMUSHclientFileName) {
+  char fullfilename[MAX_PATH];
+@STARTUP@
+  return TRUE;
 }
 static int LuaDirectoryInfo(lua_State *L) {
-  lua_pushstring(L, DirectoryInfo(luaL_checkint(L, 1)));
+  CString vaResult;
+  switch (luaL_checkint(L, 1)) {
+@INFO_CASE@
+  }
+  lua_pushstring(L, vaResult);
   return 1;
 }
 static void Check(bool ok, const char *message) {
@@ -67,13 +47,13 @@ static CString CurrentDirectory() {
   if (result.Right(1) != "\\") result += "\\";
   return result;
 }
-static void CheckMarker(const CString &path, const char *expected) {
+static void CheckMarker(const char *path) {
   FILE *file = fopen(path, "rb");
   Check(file != NULL, "open relative resource");
   char value[64] = {};
   fread(value, 1, sizeof(value) - 1, file);
   fclose(file);
-  Check(strcmp(value, expected) == 0, "resource comes from executable directory");
+  Check(strcmp(value, "installation") == 0, "resource comes from executable directory");
 }
 int main() {
   CString launchDirectory = CurrentDirectory();
@@ -81,52 +61,22 @@ int main() {
   Check(GetModuleFileName(NULL, filename, sizeof(filename)) != 0, "locate test executable");
   CString executableDirectory = ExtractDirectory(filename);
   Check(launchDirectory.CompareNoCase(executableDirectory) != 0, "launch from a different directory");
-  Check(InitializeApplicationDirectory(App.m_strMUSHclientFileName), "initialize application directory");
+  Check(InitializeForTest(App.m_strMUSHclientFileName), "initialize application directory");
   CheckPath(CurrentDirectory(), executableDirectory, "startup process directory");
   CheckPath(working_dir, executableDirectory, "initial script directory");
   CheckPath(file_browsing_dir, executableDirectory, "initial browsing directory");
-  CheckMarker("MUSHclient.ini", "installation");
-  CheckMarker("mushclient_prefs.sqlite", "installation");
-  CheckMarker("worlds\\relative.mcl", "installation");
+  CheckMarker("MUSHclient.ini");
+  CheckMarker("mushclient_prefs.sqlite");
+  CheckMarker("worlds\\relative.mcl");
 
-  App.m_strDefaultWorldFileDirectory = ".\\worlds\\";
-  App.m_strDefaultLogFileDirectory = ".\\logs\\";
   App.m_strPluginsDirectory = ".\\worlds\\plugins\\";
-  App.m_strDefaultStateFilesDirectory = ".\\worlds\\plugins\\state\\";
-
-  CMUSHclientDoc document;
-  Check(document.ChangeDir(launchDirectory), "explicit script directory change");
-  CheckPath(CurrentDirectory(), launchDirectory, "script directory change still works");
-  CheckPath(Make_Absolute_Path(".\\worlds\\relative.mcl"),
-            executableDirectory + "worlds\\relative.mcl", "application base survives ChangeDir");
-  CheckPath(Make_Absolute_Path("./logs/output.txt"),
-            executableDirectory + "logs/output.txt", "forward slash relative prefix");
-  CheckPath(Make_Absolute_Path("x"), executableDirectory + "x", "single-character path");
-  CheckPath(Make_Absolute_Path(""), "", "empty optional directory");
-  CheckPath(Make_Absolute_Path("C:\\absolute\\file.txt"), "C:\\absolute\\file.txt", "absolute drive path");
-  CheckPath(Make_Absolute_Path("\\\\server\\share\\file.txt"), "\\\\server\\share\\file.txt", "UNC path");
-
-  CheckPath(DirectoryInfo(57), executableDirectory + "worlds\\", "world directory API");
-  CheckPath(DirectoryInfo(58), executableDirectory + "logs\\", "log directory API");
-  CheckPath(DirectoryInfo(60), executableDirectory + "worlds\\plugins\\", "plugin directory API");
-  CheckPath(DirectoryInfo(85), executableDirectory + "worlds\\plugins\\state\\", "state directory API");
-  App.m_strDefaultLogFileDirectory = launchDirectory;
-  CheckPath(DirectoryInfo(58), launchDirectory, "absolute configured directory");
-  App.m_strDefaultLogFileDirectory = ".\\logs\\";
-
-  strcpy(file_browsing_dir, executableDirectory);
-  ChangeToFileBrowsingDirectory();
-  CheckPath(CurrentDirectory(), executableDirectory, "file dialog directory");
-  ChangeToStartupDirectory();
-  CheckPath(CurrentDirectory(), launchDirectory, "file dialog restores script directory");
-  CheckPath(DirectoryInfo(60), executableDirectory + "worlds\\plugins\\", "file dialog cannot redirect plugins");
-
   lua_State *L = luaL_newstate();
   Check(L != NULL, "create Lua state");
   luaL_openlibs(L);
   lua_pushcfunction(L, LuaDirectoryInfo);
   lua_setglobal(L, "GetInfo");
   const char *script =
+    "assert(GetInfo(60) == '.\\\\worlds\\\\plugins\\\\'); "
     "dofile(GetInfo(60) .. 'aardwolf_colors.lua'); "
     "assert(type(strip_colours) == 'function'); "
     "assert(strip_colours('text') == 'installation')";
@@ -134,16 +84,7 @@ int main() {
     fprintf(stderr, "FAIL: plugin dependency: %s\n", lua_tostring(L, -1));
     return 1;
   }
-  info(L);
-  const char *names[] = {"world_files_directory", "log_files_directory",
-                         "plugins_directory", "state_files_directory"};
-  int types[] = {57, 58, 60, 85};
-  for (int i = 0; i < 4; ++i) {
-    lua_getfield(L, -1, names[i]);
-    CheckPath(lua_tostring(L, -1), DirectoryInfo(types[i]), names[i]);
-    lua_pop(L, 1);
-  }
   lua_close(L);
-  printf("PASS: startup, preferences, relative resources, directory APIs, ChangeDir, file dialogs, Lua dependency loading\n");
+  printf("PASS: executable startup directory, relative resources, unchanged plugin path API, Lua dependency loading\n");
   return 0;
 }

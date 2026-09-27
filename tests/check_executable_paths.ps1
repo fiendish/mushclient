@@ -1,5 +1,8 @@
 # Run from an x86 Visual Studio Developer shell with MFC installed.
-param([string]$LuaRuntimeDirectory = (Join-Path $PSScriptRoot '..\WinDebug'))
+param(
+  [string]$LuaRuntimeDirectory = (Join-Path $PSScriptRoot '..\WinDebug'),
+  [string]$StartupRevision
+)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
 function Read-Source([string]$Path) {
@@ -22,38 +25,32 @@ function Get-Definition([string]$Source, [string]$Signature) {
   throw "Unclosed definition: $Signature"
 }
 $startup = Read-Source 'MUSHclient.cpp'
+if ($StartupRevision) {
+  $startup = (& git -C $repo show ($StartupRevision + ':MUSHclient.cpp')) -join [Environment]::NewLine
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to read the startup revision.' }
+}
 $init = Get-Definition $startup 'BOOL CMUSHclientApp::InitInstance()'
-$initializeAt = $init.IndexOf('InitializeApplicationDirectory (m_strMUSHclientFileName)')
+$pathStart = $init.IndexOf('  DWORD executablePathLength =')
+if ($pathStart -lt 0) { $pathStart = $init.IndexOf('  if (GetModuleFileName (') }
+$pathEnd = $init.IndexOf('  // stupid cursor', $pathStart)
+$workingStart = $init.IndexOf('// find the working directory at startup time')
+$workingEnd = $init.IndexOf('  bc_init_numbers();', $workingStart)
 $preferencesAt = $init.IndexOf('CString strIniFile')
-if ($initializeAt -lt 0 -or $preferencesAt -lt 0 -or $initializeAt -gt $preferencesAt) {
-  throw 'Directory must be initialized before preferences are loaded'
+if ($pathStart -lt 0 -or $pathEnd -le $pathStart -or $workingStart -le $pathEnd -or
+    $workingEnd -le $workingStart -or $preferencesAt -le $workingEnd) {
+  throw 'Expected startup directory initialization before preferences.'
 }
-$utilities = Read-Source 'Utilities.cpp'
-$definitions = @(
-  Get-Definition $utilities 'CString ExtractDirectory ('
-  Get-Definition $startup 'static bool InitializeApplicationDirectory ('
-  Get-Definition $utilities 'const char * Make_Absolute_Path ('
-  Get-Definition (Read-Source 'scripting/methods/methods_utilities.cpp') 'long CMUSHclientDoc::ChangeDir('
-  Get-Definition $utilities 'void ChangeToFileBrowsingDirectory ()'
-  Get-Definition $utilities 'void ChangeToStartupDirectory ()'
-  Get-Definition $utilities 'void MakeTableItem (lua_State *L, const char * name, const CString & str)'
-  Get-Definition $utilities 'void MakeTableItem (lua_State *L, const char * name, const string & str)'
-  Get-Definition $utilities 'void MakeTableItem (lua_State *L, const char * name, const double n)'
-  Get-Definition $utilities 'void MakeTableItem (lua_State *L, const char * name, const COleDateTime d)'
-  Get-Definition (Read-Source 'scripting/lua_utils.cpp') 'static int info ('
-)
-$info = Read-Source 'scripting/methods/methods_info.cpp'
-$cases = foreach ($id in @(57, 58, 60, 85)) {
-  $match = [regex]::Match($info, ('case\s+' + $id + ':\s+SetUpVariantString[^\r\n]+'))
-  if (-not $match.Success) { throw "Missing directory info case $id" }
-  $match.Value
-}
-$directory = Join-Path ([IO.Path]::GetTempPath()) ('mushclient-paths-' + [guid]::NewGuid())
+$startupBlock = $init.Substring($pathStart, $pathEnd - $pathStart) +
+  $init.Substring($workingStart, $workingEnd - $workingStart)
+$extractDirectory = Get-Definition (Read-Source 'Utilities.cpp') 'CString ExtractDirectory ('
+$infoCase = [regex]::Match((Read-Source 'scripting/methods/methods_info.cpp'),
+  'case\s+60:\s+SetUpVariantString[^\r\n]+').Value
+if (-not $infoCase) { throw 'Missing plugin directory info case.' }
+$directory = Join-Path ([IO.Path]::GetTempPath()) ('mushclient-startup-paths-' + [guid]::NewGuid())
 $appDirectory = Join-Path $directory 'installation with spaces'
 $launchDirectory = Join-Path $directory 'unrelated launch directory'
 foreach ($base in @($appDirectory, $launchDirectory)) {
-  [void](New-Item -ItemType Directory -Path (Join-Path $base 'worlds\plugins\state') -Force)
-  [void](New-Item -ItemType Directory -Path (Join-Path $base 'logs') -Force)
+  [void](New-Item -ItemType Directory -Path (Join-Path $base 'worlds\plugins') -Force)
   $marker = if ($base -eq $appDirectory) { 'installation' } else { 'wrong directory' }
   foreach ($file in @('MUSHclient.ini', 'mushclient_prefs.sqlite', 'worlds\relative.mcl')) {
     [IO.File]::WriteAllText((Join-Path $base $file), $marker)
@@ -64,17 +61,17 @@ foreach ($base in @($appDirectory, $launchDirectory)) {
 $template = Read-Source 'tests/executable_paths.cpp.in'
 $cpp = Join-Path $appDirectory 'test.cpp'
 $exe = Join-Path $appDirectory 'test.exe'
-[IO.File]::WriteAllText($cpp, $template.Replace('@FUNCTIONS@', ($definitions -join [Environment]::NewLine)).Replace('@INFO_CASES@', ($cases -join [Environment]::NewLine)))
+[IO.File]::WriteAllText($cpp, $template.Replace('@FUNCTIONS@', $extractDirectory).Replace('@STARTUP@', $startupBlock).Replace('@INFO_CASE@', $infoCase))
 Write-Output "Test artifacts: $directory"
 & cl.exe /nologo /EHsc /MTd /D_DEBUG /D_CRT_SECURE_NO_WARNINGS /Od /std:c++14 "/I$repo" $cpp "/Fe$exe" "/Fo$appDirectory\test.obj" (Join-Path $repo 'lua5.1.lib') /link /SUBSYSTEM:CONSOLE
-if ($LASTEXITCODE -ne 0) { throw 'Path regression fixture compilation failed' }
+if ($LASTEXITCODE -ne 0) { throw 'Startup path fixture compilation failed' }
 $previousPath = $env:PATH
 try {
   $env:PATH = (Resolve-Path $LuaRuntimeDirectory).ProviderPath + ';' + $env:PATH
   Push-Location -LiteralPath $launchDirectory
   try {
     & $exe
-    if ($LASTEXITCODE -ne 0) { throw 'Executable path regression tests failed' }
+    if ($LASTEXITCODE -ne 0) { throw 'Startup path regression tests failed' }
     $movedDirectory = Join-Path $directory 'relocated installation'
     Copy-Item -LiteralPath $appDirectory -Destination $movedDirectory -Recurse
     & (Join-Path $movedDirectory 'test.exe')

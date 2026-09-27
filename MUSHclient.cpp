@@ -60,7 +60,7 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 static TCHAR BASED_CODE szCtrlBars[] = _T("CtrlBars");
 
-// Script working directory, initially the executable directory
+// working directory at login time
 
 char working_dir [_MAX_PATH];
 char file_browsing_dir [_MAX_PATH];
@@ -224,30 +224,6 @@ static const CLSID clsid =
 
 CString MUSHCLIENT_VERSION;
 
-// Establish a predictable base before loading preferences, worlds, or Lua.
-static bool InitializeApplicationDirectory (CString & strDirectory)
-  {
-  char fullfilename [MAX_PATH];
-  DWORD length = GetModuleFileName (NULL, fullfilename, sizeof (fullfilename));
-  if (length == 0 || length >= sizeof (fullfilename))
-    {
-    ::AfxMessageBox ("Unable to determine the executable directory.");
-    return false;
-    }
-
-  strDirectory = ExtractDirectory (CString (fullfilename));
-  if (_chdir (strDirectory) != 0)
-    {
-    ::AfxMessageBox (CFormat ("Unable to use the executable directory: %s",
-                             (LPCTSTR) strDirectory));
-    return false;
-    }
-
-  strcpy (working_dir, (LPCTSTR) strDirectory);
-  strcpy (file_browsing_dir, working_dir);
-  return true;
-  }
-
 /////////////////////////////////////////////////////////////////////////////
 // CMUSHclientApp initialization
 
@@ -256,17 +232,43 @@ BOOL CMUSHclientApp::InitInstance()
 
   m_whenClientStarted = CTime::GetCurrentTime();
 
+  char fullfilename [MAX_PATH];
+
   MUSHCLIENT_VERSION = VERSION_STRING;
 
 #ifdef PRE_RELEASE
   MUSHCLIENT_VERSION += "-pre";
 #endif
 
-  if (!InitializeApplicationDirectory (m_strMUSHclientFileName))
+  DWORD executablePathLength = GetModuleFileName (NULL, fullfilename, sizeof (fullfilename));
+  if (executablePathLength == 0 || executablePathLength >= sizeof (fullfilename))
+    {
+    ::AfxMessageBox ("Unable to determine the executable directory.");
     return FALSE;
+    }
+  m_strMUSHclientFileName = ExtractDirectory (CString (fullfilename));
+
+  // Resolve startup files from this installation, regardless of the launcher.
+  if (_chdir (m_strMUSHclientFileName) != 0)
+    AfxThrowFileException (CFileException::genericException, errno, m_strMUSHclientFileName);
 
   // stupid cursor disappears under Parallels
-  g_hCursorIbeam = CopyCursor(AfxGetApp()->LoadCursor (IDC_MY_IBEAM));
+  g_hCursorIbeam = CopyCursor(AfxGetApp()->LoadCursor (IDC_MY_IBEAM));  
+
+// find the working directory at startup time
+
+  if (!_getdcwd (0, working_dir, sizeof (working_dir) - 1))
+    AfxThrowFileException (CFileException::genericException, errno);
+
+// make sure directory name ends in a slash
+
+  working_dir [sizeof (working_dir) - 2] = 0;
+
+  if (working_dir [strlen (working_dir) - 1] != '\\')
+    strcat (working_dir, "\\");  
+
+  // where we do file browsing from
+  strcpy (file_browsing_dir, working_dir);
 
   bc_init_numbers();
 
@@ -290,9 +292,26 @@ BOOL CMUSHclientApp::InitInstance()
   // open SQLite database for preferences
 
   int rc;
-  // Preferences belong to this installation, independent of the launcher.
-  m_PreferencesDatabaseName = m_strMUSHclientFileName;
+  CFileStatus	status;
+
+  // initially look in MUSHclient working directory for database
+  m_PreferencesDatabaseName = working_dir;
   m_PreferencesDatabaseName += PREFERENCES_DATABASE_FILE;
+
+  // if not there, try application directory
+  if (!CFile::GetStatus(m_PreferencesDatabaseName.c_str (), status))
+    {
+    CString strTemp;
+    strTemp = ExtractDirectory (App.m_strMUSHclientFileName);
+    strTemp += PREFERENCES_DATABASE_FILE;
+
+    // if actually in the application directory, switch to using that
+    if (CFile::GetStatus(strTemp, status))
+      m_PreferencesDatabaseName = strTemp;
+
+    // if not, leave in the working directory
+    }
+
 
   db = NULL;
 

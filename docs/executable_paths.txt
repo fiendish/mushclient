@@ -1,33 +1,17 @@
-Executable-relative paths
+Startup working directory
 =========================
 
-MUSHclient establishes its executable directory as the process working directory
-before opening preferences, worlds, plugins, or Lua scripts. Relative paths no
-longer depend on the launcher's working directory or a shortcut's "Start in"
-setting. MUSHclient.ini and mushclient_prefs.sqlite are read beside the executable.
+MUSHclient changes its working directory to the executable folder before loading
+preferences, worlds, plugins, or Lua. A shortcut's "Start in" setting or another
+launch directory no longer redirects startup file lookup.
 
-Configured relative world, plugin, log, and plugin-state directories are resolved
-against the executable directory. GetInfo(57), GetInfo(58), GetInfo(60), GetInfo(85),
-and the corresponding utils.info() fields return the resolved paths. Absolute
-configured paths remain unchanged. Preferences retain their relative values so
-the installation can be moved.
+MUSHclient.ini and mushclient_prefs.sqlite are consequently read beside the
+executable. Move those preferences there if they were previously kept in a
+separate launch directory.
 
-Scripts may still explicitly use ChangeDir to change the working directory used
-by their own relative file operations. That does not change the base used for
-application directories or the resolved directory paths returned to plugins.
+Directory APIs and explicit ChangeDir behavior are unchanged.
 
-Installations previously launched with preferences in a separate working
-directory should move those preferences beside the executable. Set absolute
-paths for any world, plugin, state, or log directories kept elsewhere.
-
-Regression check
-----------------
-
-From an x86 Visual Studio Developer shell with MFC installed, run:
+To check startup lookup from a conflicting launch folder and a relocated
+installation, run from an x86 Visual Studio Developer shell with MFC installed:
 
     powershell -NoProfile -File tests/check_executable_paths.ps1
-
-The check compiles the production path routines and launches them from a separate
-directory containing conflicting files. It checks preferences and resource
-lookup, plugin dependency loading through Lua, script directory changes, file
-dialog restoration, absolute paths, and a relocated installation.
