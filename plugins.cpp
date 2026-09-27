@@ -6,6 +6,7 @@
 #include "MUSHclient.h"
 
 #include "doc.h"
+#include <direct.h>
 #include "dialogs\plugins\PluginWizardSheet.h"
 
 #ifdef _DEBUG
@@ -158,6 +159,7 @@ string PluginCallbacksNames [] = {
 CPlugin::CPlugin (CMUSHclientDoc * pDoc) 
   { 
   m_pDoc = pDoc;
+  strcpy (m_WorkingDirectory, App.m_strMUSHclientFileName);
   m_iPluginInstanceNumber = App.GetUniqueNumber ();
   m_ScriptEngine = NULL;
   m_bEnabled = true;
@@ -178,6 +180,84 @@ CPlugin::CPlugin (CMUSHclientDoc * pDoc)
   m_iSequence = DEFAULT_PLUGIN_SEQUENCE;
 
   } // end of constructor
+
+extern char working_dir [_MAX_PATH];
+
+static char s_WorldWorkingDirectory [_MAX_PATH];
+static char * s_pScriptWorkingDirectory = NULL;
+
+static bool SetScriptDirectory (const char * directory)
+  {
+  // Most callbacks share the installation directory. Avoid reopening it.
+  char current [_MAX_PATH];
+  if (_getdcwd (0, current, sizeof (current) - 1))
+    {
+    if (current [strlen (current) - 1] != '\\')
+      strcat (current, "\\");
+    if (_stricmp (current, directory) == 0)
+      return true;
+    }
+  return _chdir (directory) == 0;
+  }
+
+CPluginDirectoryGuard::CPluginDirectoryGuard (CPlugin * pPlugin, const bool bCleanup)
+  : m_pDirectory (pPlugin ? pPlugin->m_WorkingDirectory : s_WorldWorkingDirectory),
+    m_pPreviousDirectory (s_pScriptWorkingDirectory),
+    m_bSwitched (false),
+    m_bRestoreWorkingDirectory (false)
+  {
+  char * pPrevious = m_pPreviousDirectory ? m_pPreviousDirectory : s_WorldWorkingDirectory;
+
+  if (!_getdcwd (0, m_SavedDirectory, sizeof (m_SavedDirectory) - 1))
+    AfxThrowFileException (CFileException::genericException, errno);
+
+  if (m_SavedDirectory [strlen (m_SavedDirectory) - 1] != '\\')
+    strcat (m_SavedDirectory, "\\");
+  m_bRestoreWorkingDirectory = _stricmp (m_SavedDirectory, working_dir) == 0;
+  if (m_pDirectory == pPrevious && m_bRestoreWorkingDirectory)
+    return; // re-entering the same plugin must preserve its directory changes
+
+  strcpy (pPrevious, working_dir);
+  if (!SetScriptDirectory (m_pDirectory))
+    {
+    if (!bCleanup)
+      AfxThrowFileException (CFileException::genericException, errno, m_pDirectory);
+
+    // Finalizers still need to run if the plugin's directory was removed.
+    if (SetScriptDirectory (App.m_strMUSHclientFileName))
+      strcpy (m_pDirectory, App.m_strMUSHclientFileName);
+    else
+      strcpy (m_pDirectory, m_SavedDirectory);
+    }
+
+  strcpy (working_dir, m_pDirectory);
+  s_pScriptWorkingDirectory = m_pDirectory;
+  m_bSwitched = true;
+  }
+
+CPluginDirectoryGuard::~CPluginDirectoryGuard ()
+  {
+  if (!m_bSwitched)
+    return;
+
+  strcpy (m_pDirectory, working_dir);
+  char * pPrevious = m_pPreviousDirectory ? m_pPreviousDirectory : s_WorldWorkingDirectory;
+  strcpy (working_dir, pPrevious);
+  s_pScriptWorkingDirectory = m_pPreviousDirectory;
+
+  // A nested call back into the caller may have changed its directory.
+  // Preserve a temporary browsing directory when that was active on entry.
+  const char * pRestore = m_bRestoreWorkingDirectory ? working_dir : m_SavedDirectory;
+  if (!SetScriptDirectory (pRestore))
+    {
+    TRACE ("Unable to restore script directory: %s\n", pRestore);
+    if (!SetScriptDirectory (working_dir) && SetScriptDirectory (App.m_strMUSHclientFileName))
+      {
+      strcpy (working_dir, App.m_strMUSHclientFileName);
+      strcpy (pPrevious, working_dir);
+      }
+    }
+  }
 
 CPluginContextGuard::CPluginContextGuard (CMUSHclientDoc * pDoc,
                                           CPlugin * pPlugin,
@@ -230,8 +310,9 @@ CPluginNotesGuard::~CPluginNotesGuard ()
   }
 
 // destructor
-CPlugin::~CPlugin () 
+CPlugin::~CPlugin ()
   {
+  CPluginDirectoryGuard directoryGuard (this, true);
   ASSERT (m_iActiveScriptCalls == 0);
   {
   CPluginContextGuard contextGuard (m_pDoc, this);

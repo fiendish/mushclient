@@ -1104,9 +1104,14 @@ static int L_CallPlugin (lua_State *L)
     // Lookup and argument conversion can run finalizers or __index callbacks
     // too. Keep the plugin alive for these operations, not just the call.
     CPluginCallGuard callGuard (pPlugin);
+    int lookupError;
+    {
+    CPluginDirectoryGuard directoryGuard (pPlugin);
     lua_pushcfunction (pL, L_FindPluginRoutine);
     lua_pushlightuserdata (pL, const_cast<char *> (sRoutine));
-    if (lua_pcall (pL, 1, 1, 0))
+    lookupError = lua_pcall (pL, 1, 1, 0);
+    }
+    if (lookupError)
       {
       const char * error = lua_tostring (pL, -1);
       CString strLookupError = error ? error : "Non-string Lua error during routine lookup";
@@ -1154,6 +1159,7 @@ static int L_CallPlugin (lua_State *L)
           {
           size_t len;
           const char * s = lua_tolstring (L, i + 2, &len);
+          CPluginDirectoryGuard directoryGuard (pPlugin);
           lua_pushlstring (pL, s, len);
           }
           break;
@@ -1176,6 +1182,7 @@ static int L_CallPlugin (lua_State *L)
     CString strLuaError;
     {
     CPluginContextGuard contextGuard (pDoc, pPlugin, true, true);
+    CPluginDirectoryGuard directoryGuard (pPlugin);
     
     // now call the routine in the plugin
 

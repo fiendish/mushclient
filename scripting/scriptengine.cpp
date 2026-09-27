@@ -41,6 +41,7 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // If Lua, we may have been called with no arguments, so just do that
   if (L)
@@ -272,6 +273,7 @@ STDMETHODIMP CActiveScriptSite::OnScriptError(IActiveScriptError *pscripterror)
 
 bool CScriptEngine::CreateScriptEngine (void)
   {
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
   
  // Lua does not use scripting engine
   if (m_strLanguage.CompareNoCase ("Lua") == 0)
@@ -416,6 +418,7 @@ bool CScriptEngine::Parse (const CString & strCode, const CString & strWhat)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   CValueStateGuard<CString> procedureGuard (strProcedure, CString ());
   CValueStateGuard<CString> typeGuard (strType, CString ());
@@ -493,6 +496,8 @@ SCRIPTSTATE ss;
 
 DISPID CScriptEngine::GetDispid (const CString & strName)
     {
+    CPluginCallGuard callGuard (m_pPlugin, true);
+    CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
  // Do Lua differently
   if (L)
@@ -600,6 +605,7 @@ CString str;
 
 void CScriptEngine::DisableScripting (void)
   {
+  CPluginDirectoryGuard directoryGuard (m_pPlugin, true);
 
   // Do Lua differently
   if (L)

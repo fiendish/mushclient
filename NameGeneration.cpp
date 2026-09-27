@@ -30,7 +30,7 @@ void ReadNames (const LPCTSTR sName, const bool bNoDialog)
 
     // if file name not specified, take one from last time
     if (strFileName.IsEmpty () || strFileName == "*")
-      strFileName = App.m_strDefaultNameGenerationFile;
+      strFileName = Make_Absolute_Path (App.m_strDefaultNameGenerationFile);
 
     bool bFoundFile = false;
     if (strcmp (sName, "*"))  // don't check if forced reload wanted

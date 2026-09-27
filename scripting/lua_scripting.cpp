@@ -267,6 +267,7 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // safety check ;)
   if (!L)
@@ -327,6 +328,7 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
 
 DISPID CScriptEngine::GetLuaDispid (const CString & strName)
   {
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
   return (L && FindLuaFunction (L, strName))
           ? 1 : DISPID_UNKNOWN;  // if known 1 is flag, otherwise DISPID_UNKNOWN
        
@@ -429,7 +431,7 @@ void LuaError (lua_State *L,
   // if option "log_script_errors" is active, append to the error log file
   if (pDoc && pDoc->m_bLogScriptErrors)
     {
-    string fileName = App.m_strDefaultLogFileDirectory;
+    string fileName = Make_Absolute_Path (App.m_strDefaultLogFileDirectory);
     fileName += "script_error_log.txt";
 
     FILE * errorLogFile = fopen (fileName.c_str(), "a+");
@@ -482,6 +484,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // safety check ;)
   if (!L)
@@ -717,6 +720,7 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
+  CPluginDirectoryGuard directoryGuard (m_pPlugin);
 
   // safety check ;)
   if (!L)

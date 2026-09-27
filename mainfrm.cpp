@@ -2019,11 +2019,13 @@ void CMainFrame::OpenAndConnectToWorldsInStartupList (const bool bConnect)
     int i = strWorldList.Find ('*');
     if (i == -1)
       {
-      pDoc = App.OpenDocumentFile (strWorldList);
+      CString strPath = Make_Absolute_Path (strWorldList);
+      pDoc = App.OpenDocumentFile (strPath);
       }
     else
       {
-      pDoc = App.OpenDocumentFile (strWorldList.Left (i));
+      CString strPath = Make_Absolute_Path (strWorldList.Left (i));
+      pDoc = App.OpenDocumentFile (strPath);
       strWorldList = strWorldList.Mid (i + 1);
       }
 
@@ -2198,7 +2200,7 @@ void CMainFrame::AddTrayIcon (void)
         !App.m_strTrayIconFileName.IsEmpty ())
       m_niData.hIcon = (HICON)::LoadImage(
                       NULL,
-                      App.m_strTrayIconFileName,
+                      Make_Absolute_Path (App.m_strTrayIconFileName),
                       IMAGE_ICON,
                       GetSystemMetrics(SM_CXSMICON),
                       GetSystemMetrics(SM_CYSMICON),

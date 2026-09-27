@@ -2546,7 +2546,7 @@ Basically the idea here is, that if the user has specified:
   * the default log file directory
 
   to have a *relative* path (eg. ./logs), then we will prepend the MUSHclient
-  *startup* directory to the file name.
+  executable directory to the file name.
 
   Otherwise, if they happen to change directories, and then go to log something
   the default log file directory (if a relative path) won't work as expected.
@@ -2560,7 +2560,7 @@ const char * Make_Absolute_Path (CString strFileName)
 //    x:  (ie. a drive);
 //    /something (ie. a top level directory) ; or
 //    \something (ie. a top level directory)
-//  then we prepend the MUSHclient working directory
+//  then we prepend the MUSHclient executable directory
 
   if (!(
       isalpha ((unsigned char) strFileName [0]) &&
@@ -2577,7 +2577,7 @@ const char * Make_Absolute_Path (CString strFileName)
         strFileName.Left (2) == ".\\")
       strFileName = strFileName.Mid (2);
 
-    strFileName = working_dir +  strFileName;
+    strFileName = App.m_strMUSHclientFileName + strFileName;
     }
 
 // this is declared static for a very good reason - some of the places this is used

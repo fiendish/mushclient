@@ -789,7 +789,10 @@ BOOL CMUSHclientApp::InitInstance()
     StringToVector ((const char *) m_strWorldList, v, "*");
 
     for (vector<string>::const_iterator i = v.begin (); i != v.end (); i++)
-      m_pWorldDocTemplate->OpenDocumentFile (i->c_str ());
+      {
+      CString strPath = Make_Absolute_Path (i->c_str ());
+      m_pWorldDocTemplate->OpenDocumentFile (strPath);
+      }
 
     }
 

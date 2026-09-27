@@ -727,31 +727,31 @@ BOOL CMUSHclientDoc::OnNewDocument()
     if (!App.m_strDefaultColoursFile.IsEmpty ())
       {
       m_bUseDefaultColours = true;
-      Load_Set (COLOUR, App.m_strDefaultColoursFile, &Frame);
+      Load_Set (COLOUR, Make_Absolute_Path (App.m_strDefaultColoursFile), &Frame);
       }
 
     if (!App.m_strDefaultTriggersFile.IsEmpty ())
       {
       m_bUseDefaultTriggers = true;
-      Load_Set (TRIGGER, App.m_strDefaultTriggersFile, &Frame);
+      Load_Set (TRIGGER, Make_Absolute_Path (App.m_strDefaultTriggersFile), &Frame);
       }
 
     if (!App.m_strDefaultAliasesFile.IsEmpty ())
       {
       m_bUseDefaultAliases = true;
-      Load_Set (ALIAS, App.m_strDefaultAliasesFile, &Frame);
+      Load_Set (ALIAS, Make_Absolute_Path (App.m_strDefaultAliasesFile), &Frame);
       }
 
     if (!App.m_strDefaultTimersFile.IsEmpty ())
       {
       m_bUseDefaultTimers = true;
-      Load_Set (TIMER, App.m_strDefaultTimersFile, &Frame);
+      Load_Set (TIMER, Make_Absolute_Path (App.m_strDefaultTimersFile), &Frame);
       }
 
     if (!App.m_strDefaultMacrosFile.IsEmpty ())
       {
       m_bUseDefaultMacros = true;
-      Load_Set (MACRO, App.m_strDefaultMacrosFile, &Frame);
+      Load_Set (MACRO, Make_Absolute_Path (App.m_strDefaultMacrosFile), &Frame);
       }
 
     if (!App.m_strDefaultInputFont.IsEmpty ())

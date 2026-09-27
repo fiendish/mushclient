@@ -77,6 +77,7 @@ class CPlugin :public CObject
   CString m_strLanguage;      // script language (eg. vbscript)
   CString m_strSource;        // include file that contains this plugin
   CString m_strDirectory;     // directory source is in (m_strSource minus the actual filename)
+  char m_WorkingDirectory [_MAX_PATH]; // this plugin's ChangeDir state
   CString m_strID;            // unique ID
   __int64 m_iPluginInstanceNumber; // identifies this loaded plugin instance
   CTime   m_tDateWritten;     // date written
@@ -140,6 +141,24 @@ class CPlugin :public CObject
   void ExecutePluginScriptRtn (CScriptCallInfo & callinfo,
                             CString & strResult);  // taking and returning a string
 
+  };
+
+// Script engines share a process, so switch directories at execution boundaries.
+class CPluginDirectoryGuard
+  {
+  public:
+  explicit CPluginDirectoryGuard (CPlugin * pPlugin, const bool bCleanup = false);
+  ~CPluginDirectoryGuard ();
+
+  private:
+  CPluginDirectoryGuard (const CPluginDirectoryGuard &);
+  CPluginDirectoryGuard & operator= (const CPluginDirectoryGuard &);
+
+  char * m_pDirectory;
+  char * m_pPreviousDirectory;
+  char m_SavedDirectory [_MAX_PATH];
+  bool m_bSwitched;
+  bool m_bRestoreWorkingDirectory;
   };
 
 class CPluginCallGuard
