@@ -1013,13 +1013,13 @@ static int info (lua_State *L)
     }
 
   MakeTableItem (L, "app_directory", ExtractDirectory (App.m_strMUSHclientFileName));
-  MakeTableItem (L, "world_files_directory", App.m_strDefaultWorldFileDirectory);
-  MakeTableItem (L, "state_files_directory", App.m_strDefaultStateFilesDirectory);
+  MakeTableItem (L, "world_files_directory", CString (Make_Absolute_Path (App.m_strDefaultWorldFileDirectory)));
+  MakeTableItem (L, "state_files_directory", CString (Make_Absolute_Path (App.m_strDefaultStateFilesDirectory)));
   MakeTableItem (L, "locale", App.m_strLocale);
   MakeTableItem (L, "fixed_pitch_font", App.m_strFixedPitchFont);
   MakeTableItem (L, "fixed_pitch_font_size", App.m_iFixedPitchFontSize);
-  MakeTableItem (L, "log_files_directory", App.m_strDefaultLogFileDirectory);
-  MakeTableItem (L, "plugins_directory", App.m_strPluginsDirectory);
+  MakeTableItem (L, "log_files_directory", CString (Make_Absolute_Path (App.m_strDefaultLogFileDirectory)));
+  MakeTableItem (L, "plugins_directory", CString (Make_Absolute_Path (App.m_strPluginsDirectory)));
   MakeTableItem (L, "startup_directory", CString (working_dir));
   MakeTableItem (L, "translator_file", App.m_strTranslatorFile);
 

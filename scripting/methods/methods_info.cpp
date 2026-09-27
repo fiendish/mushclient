@@ -491,8 +491,8 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
     case   55: SetUpVariantString (vaResult, GetTitle ()); break;
 
     case   56: SetUpVariantString (vaResult, App.m_strMUSHclientFileName); break;
-    case   57: SetUpVariantString (vaResult, App.m_strDefaultWorldFileDirectory); break;
-    case   58: SetUpVariantString (vaResult, App.m_strDefaultLogFileDirectory); break;
+    case   57: SetUpVariantString (vaResult, Make_Absolute_Path (App.m_strDefaultWorldFileDirectory)); break;
+    case   58: SetUpVariantString (vaResult, Make_Absolute_Path (App.m_strDefaultLogFileDirectory)); break;
     case   59:   // scripts are in the execution directory at present
               {
               char fullfilename[MAX_PATH];
@@ -506,7 +506,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
               break;
               }
 
-    case   60: SetUpVariantString (vaResult, App.m_strPluginsDirectory); break;
+    case   60: SetUpVariantString (vaResult, Make_Absolute_Path (App.m_strPluginsDirectory)); break;
     case   61: SetUpVariantString (vaResult, inet_ntoa (m_sockAddr.sin_addr)); break;
     case   62: SetUpVariantString (vaResult, inet_ntoa (m_ProxyAddr.sin_addr)); break;
     case   63:
@@ -564,7 +564,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
     case   82: SetUpVariantString (vaResult, App.m_PreferencesDatabaseName.c_str ()); break;
     case   83: SetUpVariantString (vaResult, sqlite3_libversion ()); break;
     case   84: SetUpVariantString (vaResult, file_browsing_dir); break;
-    case   85: SetUpVariantString (vaResult, App.m_strDefaultStateFilesDirectory); break;
+    case   85: SetUpVariantString (vaResult, Make_Absolute_Path (App.m_strDefaultStateFilesDirectory)); break;
     case   86: SetUpVariantString (vaResult, m_strWordUnderMenu); break;
     case   87: SetUpVariantString (vaResult, m_strLastCommandSent); break;
     case   88: SetUpVariantString (vaResult, m_strWindowTitle); break;
