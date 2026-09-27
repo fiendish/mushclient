@@ -281,8 +281,6 @@ public:
   void SaveGlobalsToDatabase (void);
   int PopulateDatabase (void);
   CString MakeGlobalOptionPathsRelative (LPCTSTR name, CString value);
-  virtual CString GetProfileString (LPCTSTR section, LPCTSTR entry, LPCTSTR defaultValue = NULL);
-  virtual BOOL WriteProfileString (LPCTSTR section, LPCTSTR entry, LPCTSTR value);
   void ShowGlobalOptions (CMUSHclientDoc * pDoc);
   VARIANT GetGlobalOption(LPCTSTR Name);
   VARIANT GetGlobalOptionList();
