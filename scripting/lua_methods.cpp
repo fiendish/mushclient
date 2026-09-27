@@ -1104,6 +1104,8 @@ static int L_CallPlugin (lua_State *L)
     // Lookup and argument conversion can run finalizers or __index callbacks
     // too. Keep the plugin alive for these operations, not just the call.
     CPluginCallGuard callGuard (pPlugin);
+    try
+      {
     int lookupError;
     {
     CPluginDirectoryGuard directoryGuard (pPlugin);
@@ -1300,17 +1302,36 @@ static int L_CallPlugin (lua_State *L)
       // keeps potentially large strings alive even after both states run GC.
       lua_settop (pL, targetBase);
       return ret_n + 1;  // eOK plus all returned values
+      }
+    catch (CFileException * e)
+      {
+      e->Delete ();
+      lua_settop (pL, targetBase);
+      lua_pushnumber (L, eErrorCallingPluginRoutine);
+      lua_pushliteral (L, "Unable to access plugin working directory");
+      return 2;
+      }
     }  // end if Lua calling Lua
 
   // ------------- end stuff added for version 4.55 -------------------
 
   // old fashioned way ...
-  lua_pushnumber (L, pDoc->CallPlugin (
-                  sPluginID,
-                  sRoutine,
-                  my_optstring   (L, 3, "")   // Argument - optional
-                  ));
-  return 1;  // number of result fields
+  try
+    {
+    lua_pushnumber (L, pDoc->CallPlugin (
+                    sPluginID,
+                    sRoutine,
+                    my_optstring   (L, 3, "")   // Argument - optional
+                    ));
+    return 1;  // number of result fields
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    lua_pushnumber (L, eErrorCallingPluginRoutine);
+    lua_pushliteral (L, "Unable to access plugin working directory");
+    return 2;
+    }
   } // end of L_CallPlugin
 
 //----------------------------------------

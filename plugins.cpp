@@ -185,18 +185,26 @@ extern char working_dir [_MAX_PATH];
 
 static char s_WorldWorkingDirectory [_MAX_PATH];
 static char * s_pScriptWorkingDirectory = NULL;
+static char * s_pDirectoryCleanup = NULL;
+
+static bool GetScriptDirectory (char * directory)
+  {
+  if (!_getdcwd (0, directory, _MAX_PATH - 1))
+    {
+    directory [0] = 0; // the process directory is unknown
+    return false;
+    }
+  if (directory [strlen (directory) - 1] != '\\')
+    strcat (directory, "\\");
+  return true;
+  }
 
 static bool SetScriptDirectory (const char * directory)
   {
   // Most callbacks share the installation directory. Avoid reopening it.
   char current [_MAX_PATH];
-  if (_getdcwd (0, current, sizeof (current) - 1))
-    {
-    if (current [strlen (current) - 1] != '\\')
-      strcat (current, "\\");
-    if (_stricmp (current, directory) == 0)
-      return true;
-    }
+  if (GetScriptDirectory (current) && _stricmp (current, directory) == 0)
+    return true;
   return _chdir (directory) == 0;
   }
 
@@ -204,23 +212,33 @@ CPluginDirectoryGuard::CPluginDirectoryGuard (CPlugin * pPlugin, const bool bCle
   : m_pDirectory (pPlugin ? pPlugin->m_WorkingDirectory : s_WorldWorkingDirectory),
     m_pPreviousDirectory (s_pScriptWorkingDirectory),
     m_bSwitched (false),
-    m_bRestoreWorkingDirectory (false)
+    m_bRestoreWorkingDirectory (false),
+    m_pPreviousCleanup (s_pDirectoryCleanup)
   {
   char * pPrevious = m_pPreviousDirectory ? m_pPreviousDirectory : s_WorldWorkingDirectory;
+  // Close callbacks and finalizers can re-enter this plugin's script guards.
+  const bool bCleanupActive = bCleanup || m_pDirectory == s_pDirectoryCleanup;
 
-  if (!_getdcwd (0, m_SavedDirectory, sizeof (m_SavedDirectory) - 1))
-    AfxThrowFileException (CFileException::genericException, errno);
-
-  if (m_SavedDirectory [strlen (m_SavedDirectory) - 1] != '\\')
-    strcat (m_SavedDirectory, "\\");
-  m_bRestoreWorkingDirectory = _stricmp (m_SavedDirectory, working_dir) == 0;
-  if (m_pDirectory == pPrevious && m_bRestoreWorkingDirectory)
-    return; // re-entering the same plugin must preserve its directory changes
+  if (!GetScriptDirectory (m_SavedDirectory))
+    {
+    if (!bCleanupActive)
+      AfxThrowFileException (CFileException::genericException, errno);
+    m_bRestoreWorkingDirectory = true;
+    }
+  else
+    {
+    m_bRestoreWorkingDirectory = _stricmp (m_SavedDirectory, working_dir) == 0;
+    if (m_pDirectory == pPrevious && m_bRestoreWorkingDirectory)
+      {
+      s_pDirectoryCleanup = bCleanupActive ? m_pDirectory : m_pPreviousCleanup;
+      return; // re-entering the same plugin must preserve its directory changes
+      }
+    }
 
   strcpy (pPrevious, working_dir);
   if (!SetScriptDirectory (m_pDirectory))
     {
-    if (!bCleanup)
+    if (!bCleanupActive)
       AfxThrowFileException (CFileException::genericException, errno, m_pDirectory);
 
     // Finalizers still need to run if the plugin's directory was removed.
@@ -232,11 +250,13 @@ CPluginDirectoryGuard::CPluginDirectoryGuard (CPlugin * pPlugin, const bool bCle
 
   strcpy (working_dir, m_pDirectory);
   s_pScriptWorkingDirectory = m_pDirectory;
+  s_pDirectoryCleanup = bCleanupActive ? m_pDirectory : m_pPreviousCleanup;
   m_bSwitched = true;
   }
 
 CPluginDirectoryGuard::~CPluginDirectoryGuard ()
   {
+  s_pDirectoryCleanup = m_pPreviousCleanup;
   if (!m_bSwitched)
     return;
 
@@ -251,11 +271,14 @@ CPluginDirectoryGuard::~CPluginDirectoryGuard ()
   if (!SetScriptDirectory (pRestore))
     {
     TRACE ("Unable to restore script directory: %s\n", pRestore);
-    if (!SetScriptDirectory (working_dir) && SetScriptDirectory (App.m_strMUSHclientFileName))
-      {
+    if (pRestore != working_dir && SetScriptDirectory (working_dir))
+      return;
+    if (SetScriptDirectory (App.m_strMUSHclientFileName))
       strcpy (working_dir, App.m_strMUSHclientFileName);
-      strcpy (pPrevious, working_dir);
-      }
+    else if (!GetScriptDirectory (working_dir))
+      TRACE ("Unable to determine the process directory after failed restoration.\n");
+    // Keep the tracked state honest, including an empty value if it is unknown.
+    strcpy (pPrevious, working_dir);
     }
   }
 

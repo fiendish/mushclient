@@ -159,6 +159,7 @@ class CPluginDirectoryGuard
   char m_SavedDirectory [_MAX_PATH];
   bool m_bSwitched;
   bool m_bRestoreWorkingDirectory;
+  char * m_pPreviousCleanup;
   };
 
 class CPluginCallGuard
