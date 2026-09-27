@@ -2488,6 +2488,53 @@ lua_State *MakeLuaState (void) {
   return L;
 }
 
+CString Make_Relative_Path (CString strFileName)
+  {
+  CString strPath = strFileName;
+  strPath.Replace ('/', '\\');
+
+  // Only absolute paths can be rebased without changing their meaning.
+  if (!((strPath.GetLength () >= 3 &&
+         isalpha ((unsigned char) strPath [0]) &&
+         strPath [1] == ':' && strPath [2] == '\\') ||
+        strPath.Left (2) == "\\\\"))
+    return strFileName;
+
+  CString strDirectory = App.m_strMUSHclientFileName;
+  if (strDirectory.IsEmpty ())
+    return strFileName;
+
+  // Resolve dot components before checking the directory boundary.
+  DWORD length = GetFullPathName (strPath, 0, NULL, NULL);
+  if (length == 0)
+    return strFileName;
+  vector<char> path (length);
+  DWORD result = GetFullPathName (strPath, length, &path [0], NULL);
+  if (result == 0 || result >= length)
+    return strFileName;
+  strPath = &path [0];
+
+  length = GetFullPathName (strDirectory, 0, NULL, NULL);
+  if (length == 0)
+    return strFileName;
+  vector<char> directory (length);
+  result = GetFullPathName (strDirectory, length, &directory [0], NULL);
+  if (result == 0 || result >= length)
+    return strFileName;
+  strDirectory = &directory [0];
+  strDirectory.TrimRight ('\\');
+
+  if (strPath.CompareNoCase (strDirectory) == 0)
+    return ".\\";
+
+  strDirectory += '\\';
+  if (strPath.Left (strDirectory.GetLength ()).CompareNoCase (strDirectory) == 0)
+    return ".\\" + strPath.Mid (strDirectory.GetLength ());
+
+  return strFileName;
+  } // end of Make_Relative_Path
+
+
 // see lengthy forum post at: http://www.gammon.com.au/forum/?id=7776
 //    (hello, Shadowfyr!)
 
@@ -2499,7 +2546,7 @@ Basically the idea here is, that if the user has specified:
   * the default log file directory
 
   to have a *relative* path (eg. ./logs), then we will prepend the MUSHclient
-  *startup* directory to the file name.
+  executable directory to the file name.
 
   Otherwise, if they happen to change directories, and then go to log something
   the default log file directory (if a relative path) won't work as expected.
@@ -2513,7 +2560,7 @@ const char * Make_Absolute_Path (CString strFileName)
 //    x:  (ie. a drive);
 //    /something (ie. a top level directory) ; or
 //    \something (ie. a top level directory)
-//  then we prepend the MUSHclient working directory
+//  then we prepend the MUSHclient executable directory
 
   if (!(
       isalpha ((unsigned char) strFileName [0]) &&
@@ -2530,7 +2577,7 @@ const char * Make_Absolute_Path (CString strFileName)
         strFileName.Left (2) == ".\\")
       strFileName = strFileName.Mid (2);
 
-    strFileName = working_dir +  strFileName;
+    strFileName = App.m_strMUSHclientFileName + strFileName;
     }
 
 // this is declared static for a very good reason - some of the places this is used

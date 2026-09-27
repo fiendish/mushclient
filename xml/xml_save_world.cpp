@@ -284,6 +284,8 @@ void CMUSHclientDoc::Save_World_Single_Line_Alpha_Options_XML (CArchive& ar)
                           CFormat ("%s_base64", (LPCTSTR) AlphaOptionsTable [i].pName), 
                           true);
         }
+      if (AlphaOptionsTable [i].iFlags & OPT_PATH)
+        strValue = Make_Relative_Path (strValue);
       Save_XML_string (ar, AlphaOptionsTable [i].pName, strValue);
       }    // end of looping through each option
 
@@ -422,7 +424,7 @@ void CMUSHclientDoc::Save_One_Trigger_XML (CArchive& ar, CTrigger * t)
   Save_XML_string  (ar, "script",            t->strProcedure);
   Save_XML_number  (ar, "send_to",           t->iSendTo);
   Save_XML_number  (ar, "sequence",          t->iSequence);
-  Save_XML_string  (ar, "sound",             t->sound_to_play);
+  Save_XML_string  (ar, "sound",             Make_Relative_Path (t->sound_to_play));
   Save_XML_boolean (ar, "sound_if_inactive", t->bSoundIfInactive);
   Save_XML_boolean (ar, "lowercase_wildcard", t->bLowercaseWildcard);
   Save_XML_boolean (ar, "temporary",          t->bTemporary);
@@ -767,7 +769,7 @@ CString strFileName;
 
   for (POSITION pos = m_strIncludeFileList.GetHeadPosition (); pos; )
     {
-    strFileName = m_strIncludeFileList.GetNext (pos);
+    strFileName = Make_Relative_Path (m_strIncludeFileList.GetNext (pos));
     ar.WriteString   ("<include ");
     Save_XML_string  (ar, "name", strFileName, true);
     ar.WriteString   ("/>" NL);
@@ -799,7 +801,7 @@ void CMUSHclientDoc::Save_Plugins_XML (CArchive& ar)
            strSource = strSource.Mid (strPluginsPath.GetLength ());
 
       ar.WriteString   ("<include ");
-      Save_XML_string  (ar, "name", strSource, true);
+      Save_XML_string  (ar, "name", Make_Relative_Path (strSource), true);
       Save_XML_boolean (ar, "plugin", true, true);
       ar.WriteString   ("/>" NL);
       }  // end of local plugin

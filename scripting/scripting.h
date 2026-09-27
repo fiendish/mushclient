@@ -23,14 +23,18 @@ void LuaError (lua_State *L,
                LPCTSTR strReason = "",
                CMUSHclientDoc * pDoc = NULL);
 
+class CPlugin;
+
 class CScriptEngine : public CObject
   {
 
   public:
     CScriptEngine (CMUSHclientDoc * pDoc,
-                   const CString strLanguage) // constructor
+                   const CString strLanguage,
+                   CPlugin * pPlugin = NULL) // constructor
       {
       m_pDoc = pDoc;
+      m_pPlugin = pPlugin;
       m_strLanguage = strLanguage;
       m_IActiveScript = NULL;
       m_IActiveScriptParse = NULL;
@@ -47,8 +51,8 @@ class CScriptEngine : public CObject
   bool CreateScriptEngine (void);
   bool Parse (const CString & strCode, const CString & strWhat);
 
-  DISPID GetDispid (const CString & strName);
-  DISPID GetLuaDispid (const CString & strName);
+  DISPID GetDispid (const CString & strName, bool * pLookupError = NULL);
+  DISPID GetLuaDispid (const CString & strName, bool * pLookupError = NULL);
 
   // returns true if script error
   bool Execute (DISPID & dispid,  // dispatch ID, will be set to DISPID_UNKNOWN on an error
@@ -107,6 +111,7 @@ class CScriptEngine : public CObject
   IDispatch           * m_pDispatch;              // script engine dispatch pointer
 
   CMUSHclientDoc      * m_pDoc;                   // related MUSHclient document
+  CPlugin            * m_pPlugin;                // owner, NULL for world scripts
 
   CString               m_strLanguage;        // language, (vbscript, jscript, perlscript)
 

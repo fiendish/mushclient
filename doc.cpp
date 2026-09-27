@@ -841,7 +841,7 @@ void CMUSHclientDoc::SetUpOutputWindow (void)
 
     for (vector<string>::const_iterator i = v.begin (); i != v.end (); i++)
       {
-      strPath = i->c_str ();
+      strPath = Make_Absolute_Path (i->c_str ());
       string sGlobalPluginPath (Make_Absolute_Path (strPath));
       bool bAlreadyLoaded = false;
 

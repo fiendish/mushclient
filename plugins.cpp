@@ -6,6 +6,7 @@
 #include "MUSHclient.h"
 
 #include "doc.h"
+#include <direct.h>
 #include "dialogs\plugins\PluginWizardSheet.h"
 
 #ifdef _DEBUG
@@ -158,6 +159,7 @@ string PluginCallbacksNames [] = {
 CPlugin::CPlugin (CMUSHclientDoc * pDoc) 
   { 
   m_pDoc = pDoc;
+  strcpy (m_WorkingDirectory, App.m_strMUSHclientFileName);
   m_iPluginInstanceNumber = App.GetUniqueNumber ();
   m_ScriptEngine = NULL;
   m_bEnabled = true;
@@ -178,6 +180,107 @@ CPlugin::CPlugin (CMUSHclientDoc * pDoc)
   m_iSequence = DEFAULT_PLUGIN_SEQUENCE;
 
   } // end of constructor
+
+extern char working_dir [_MAX_PATH];
+
+static char s_WorldWorkingDirectory [_MAX_PATH];
+static char * s_pScriptWorkingDirectory = NULL;
+static char * s_pDirectoryCleanup = NULL;
+
+static bool GetScriptDirectory (char * directory)
+  {
+  if (!_getdcwd (0, directory, _MAX_PATH - 1))
+    {
+    directory [0] = 0; // the process directory is unknown
+    return false;
+    }
+  if (directory [strlen (directory) - 1] != '\\')
+    strcat (directory, "\\");
+  return true;
+  }
+
+static bool SetScriptDirectory (const char * directory)
+  {
+  // Most callbacks share the installation directory. Avoid reopening it.
+  char current [_MAX_PATH];
+  if (GetScriptDirectory (current) && _stricmp (current, directory) == 0)
+    return true;
+  return _chdir (directory) == 0;
+  }
+
+CPluginDirectoryGuard::CPluginDirectoryGuard (CPlugin * pPlugin, const bool bCleanup)
+  : m_pDirectory (pPlugin ? pPlugin->m_WorkingDirectory : s_WorldWorkingDirectory),
+    m_pPreviousDirectory (s_pScriptWorkingDirectory),
+    m_bSwitched (false),
+    m_bRestoreWorkingDirectory (false),
+    m_pPreviousCleanup (s_pDirectoryCleanup)
+  {
+  char * pPrevious = m_pPreviousDirectory ? m_pPreviousDirectory : s_WorldWorkingDirectory;
+  // Close callbacks and finalizers can re-enter this plugin's script guards.
+  const bool bCleanupActive = bCleanup || m_pDirectory == s_pDirectoryCleanup;
+
+  if (!GetScriptDirectory (m_SavedDirectory))
+    {
+    if (!bCleanupActive)
+      AfxThrowFileException (CFileException::genericException, errno);
+    m_bRestoreWorkingDirectory = true;
+    }
+  else
+    {
+    m_bRestoreWorkingDirectory = _stricmp (m_SavedDirectory, working_dir) == 0;
+    if (m_pDirectory == pPrevious && m_bRestoreWorkingDirectory)
+      {
+      s_pDirectoryCleanup = bCleanupActive ? m_pDirectory : m_pPreviousCleanup;
+      return; // re-entering the same plugin must preserve its directory changes
+      }
+    }
+
+  strcpy (pPrevious, working_dir);
+  if (!SetScriptDirectory (m_pDirectory))
+    {
+    if (!bCleanupActive)
+      AfxThrowFileException (CFileException::genericException, errno, m_pDirectory);
+
+    // Finalizers still need to run if the plugin's directory was removed.
+    if (SetScriptDirectory (App.m_strMUSHclientFileName))
+      strcpy (m_pDirectory, App.m_strMUSHclientFileName);
+    else
+      strcpy (m_pDirectory, m_SavedDirectory);
+    }
+
+  strcpy (working_dir, m_pDirectory);
+  s_pScriptWorkingDirectory = m_pDirectory;
+  s_pDirectoryCleanup = bCleanupActive ? m_pDirectory : m_pPreviousCleanup;
+  m_bSwitched = true;
+  }
+
+CPluginDirectoryGuard::~CPluginDirectoryGuard ()
+  {
+  s_pDirectoryCleanup = m_pPreviousCleanup;
+  if (!m_bSwitched)
+    return;
+
+  strcpy (m_pDirectory, working_dir);
+  char * pPrevious = m_pPreviousDirectory ? m_pPreviousDirectory : s_WorldWorkingDirectory;
+  strcpy (working_dir, pPrevious);
+  s_pScriptWorkingDirectory = m_pPreviousDirectory;
+
+  // A nested call back into the caller may have changed its directory.
+  // Preserve a temporary browsing directory when that was active on entry.
+  const char * pRestore = m_bRestoreWorkingDirectory ? working_dir : m_SavedDirectory;
+  if (!SetScriptDirectory (pRestore))
+    {
+    TRACE ("Unable to restore script directory: %s\n", pRestore);
+    if (pRestore != working_dir && SetScriptDirectory (working_dir))
+      return;
+    if (SetScriptDirectory (App.m_strMUSHclientFileName))
+      strcpy (working_dir, App.m_strMUSHclientFileName);
+    else if (!GetScriptDirectory (working_dir))
+      TRACE ("Unable to determine the process directory after failed restoration.\n");
+    // Keep the tracked state honest, including an empty value if it is unknown.
+    strcpy (pPrevious, working_dir);
+    }
+  }
 
 CPluginContextGuard::CPluginContextGuard (CMUSHclientDoc * pDoc,
                                           CPlugin * pPlugin,
@@ -230,8 +333,9 @@ CPluginNotesGuard::~CPluginNotesGuard ()
   }
 
 // destructor
-CPlugin::~CPlugin () 
+CPlugin::~CPlugin ()
   {
+  CPluginDirectoryGuard directoryGuard (this, true);
   ASSERT (m_iActiveScriptCalls == 0);
   {
   CPluginContextGuard contextGuard (m_pDoc, this);
@@ -340,7 +444,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       list<string> sparams;
       sparams.push_back (sText);
       bool result;
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                    callinfo._name.c_str (), 
                                    eDontChangeAction,
                                    strType, 
@@ -349,7 +453,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                    sparams, 
                                    nInvocationCount,
                                    NULL, NULL, NULL,
-                                   &result);
+                                   &result))
+        return false;
       return result;
       }   // end of Lua
     else
@@ -369,14 +474,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
 
       COleVariant result;
 
-      m_ScriptEngine->Execute (iRoutine, 
+      if (m_ScriptEngine->Execute (iRoutine,
                                callinfo._name.c_str (), 
                                eDontChangeAction,
                                strType,
                                strReason,
                                params, 
                                nInvocationCount, 
-                               &result);
+                               &result))
+        return false;
 
       // see what result was
       if (result.vt != VT_EMPTY)
@@ -422,7 +528,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       list<string> sparams;
       nparams.push_back (arg1);
       sparams.push_back (sText);
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                   callinfo._name.c_str (), 
                                   eDontChangeAction,
                                   strType, 
@@ -431,7 +537,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult); 
+                                  &bResult))
+        return false;
       return bResult;
       }   // end of Lua
 
@@ -462,14 +569,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
     
     COleVariant result;
 
-    m_ScriptEngine->Execute (iRoutine, 
+    if (m_ScriptEngine->Execute (iRoutine,
                              callinfo._name.c_str (), 
                              eDontChangeAction,
                              strType,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result);
+                             &result))
+        return false;
 
     // see what result was
     if (result.vt != VT_EMPTY)
@@ -514,7 +622,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       nparams.push_back (arg1);
       nparams.push_back (arg2);
       sparams.push_back (sText);
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                   callinfo._name.c_str (), 
                                   eDontChangeAction,
                                   strType, 
@@ -523,7 +631,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult); 
+                                  &bResult))
+        return false;
       return bResult;
       }   // end of Lua
 
@@ -549,14 +658,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
     
     COleVariant result;
 
-    m_ScriptEngine->Execute (iRoutine, 
+    if (m_ScriptEngine->Execute (iRoutine,
                              callinfo._name.c_str (), 
                              eDontChangeAction,
                              strType,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result);
+                             &result))
+        return false;
 
     // see what result was
     if (result.vt != VT_EMPTY)
@@ -604,7 +714,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
       sparams.push_back ((LPCTSTR) arg2);
       sparams.push_back ((LPCTSTR) arg3);
       sparams.push_back ((LPCTSTR) arg4);
-      m_ScriptEngine->ExecuteLua (iRoutine, 
+      if (m_ScriptEngine->ExecuteLua (iRoutine,
                                   callinfo._name.c_str (), 
                                   eDontChangeAction,
                                   strType, 
@@ -613,7 +723,8 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult); 
+                                  &bResult))
+        return false;
       return bResult;
       }   // end of Lua
 
@@ -641,14 +752,15 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
     
     COleVariant result;
 
-    m_ScriptEngine->Execute (iRoutine, 
+    if (m_ScriptEngine->Execute (iRoutine,
                              callinfo._name.c_str (), 
                              eDontChangeAction,
                              strType,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result);
+                             &result))
+        return false;
 
     // see what result was
     if (result.vt != VT_EMPTY)

@@ -1104,9 +1104,16 @@ static int L_CallPlugin (lua_State *L)
     // Lookup and argument conversion can run finalizers or __index callbacks
     // too. Keep the plugin alive for these operations, not just the call.
     CPluginCallGuard callGuard (pPlugin);
+    try
+      {
+    int lookupError;
+    {
+    CPluginDirectoryGuard directoryGuard (pPlugin);
     lua_pushcfunction (pL, L_FindPluginRoutine);
     lua_pushlightuserdata (pL, const_cast<char *> (sRoutine));
-    if (lua_pcall (pL, 1, 1, 0))
+    lookupError = lua_pcall (pL, 1, 1, 0);
+    }
+    if (lookupError)
       {
       const char * error = lua_tostring (pL, -1);
       CString strLookupError = error ? error : "Non-string Lua error during routine lookup";
@@ -1154,6 +1161,7 @@ static int L_CallPlugin (lua_State *L)
           {
           size_t len;
           const char * s = lua_tolstring (L, i + 2, &len);
+          CPluginDirectoryGuard directoryGuard (pPlugin);
           lua_pushlstring (pL, s, len);
           }
           break;
@@ -1176,6 +1184,7 @@ static int L_CallPlugin (lua_State *L)
     CString strLuaError;
     {
     CPluginContextGuard contextGuard (pDoc, pPlugin, true, true);
+    CPluginDirectoryGuard directoryGuard (pPlugin);
     
     // now call the routine in the plugin
 
@@ -1293,17 +1302,36 @@ static int L_CallPlugin (lua_State *L)
       // keeps potentially large strings alive even after both states run GC.
       lua_settop (pL, targetBase);
       return ret_n + 1;  // eOK plus all returned values
+      }
+    catch (CFileException * e)
+      {
+      e->Delete ();
+      lua_settop (pL, targetBase);
+      lua_pushnumber (L, eErrorCallingPluginRoutine);
+      lua_pushliteral (L, "Unable to access plugin working directory");
+      return 2;
+      }
     }  // end if Lua calling Lua
 
   // ------------- end stuff added for version 4.55 -------------------
 
   // old fashioned way ...
-  lua_pushnumber (L, pDoc->CallPlugin (
-                  sPluginID,
-                  sRoutine,
-                  my_optstring   (L, 3, "")   // Argument - optional
-                  ));
-  return 1;  // number of result fields
+  try
+    {
+    lua_pushnumber (L, pDoc->CallPlugin (
+                    sPluginID,
+                    sRoutine,
+                    my_optstring   (L, 3, "")   // Argument - optional
+                    ));
+    return 1;  // number of result fields
+    }
+  catch (CFileException * e)
+    {
+    e->Delete ();
+    lua_pushnumber (L, eErrorCallingPluginRoutine);
+    lua_pushliteral (L, "Unable to access plugin working directory");
+    return 2;
+    }
   } // end of L_CallPlugin
 
 //----------------------------------------

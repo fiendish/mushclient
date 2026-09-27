@@ -781,6 +781,7 @@ void GetButtonSize (CWnd & ctlWnd, int & iHeight, int & iWidth);
 void metaphone (const char *name, char * metaph, int metalen);
 int EditDistance (const string source, const string target);
 
+CString Make_Relative_Path (CString strFileName);
 const char * Make_Absolute_Path (CString strFileName);
 const CString Convert_PCRE_Runtime_Error (const int iError);
 

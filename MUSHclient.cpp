@@ -6,6 +6,7 @@
 
 #include "stdafx.h"
 #include "MUSHclient.h"
+#include <afxadv.h>
 #include "doc.h"
 #include "ActivityDoc.h"
 #include "TextDocument.h"
@@ -59,6 +60,33 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 #endif
 
 static TCHAR BASED_CODE szCtrlBars[] = _T("CtrlBars");
+
+// Keep full paths in memory and portable paths in the saved recent-file list.
+class CRelativeRecentFileList : public CRecentFileList
+  {
+  public:
+    explicit CRelativeRecentFileList (const int size)
+      : CRecentFileList (0, _T ("Recent File List"), _T ("File%d"), size)
+      {
+      }
+
+    virtual void ReadList ()
+      {
+      CRecentFileList::ReadList ();
+      for (int i = 0; i < GetSize (); i++)
+        if (!(*this) [i].IsEmpty ())
+          (*this) [i] = Make_Absolute_Path ((*this) [i]);
+      }
+
+    virtual void WriteList ()
+      {
+      // Save a copy so persistence never changes the live list.
+      CRelativeRecentFileList storedFiles (GetSize ());
+      for (int i = 0; i < GetSize (); i++)
+        storedFiles [i] = Make_Relative_Path ((*this) [i]);
+      storedFiles.CRecentFileList::WriteList ();
+      }
+  };
 
 // working directory at login time
 
@@ -508,6 +536,14 @@ BOOL CMUSHclientApp::InitInstance()
 
 	LoadStdProfileSettings(10);  // Load standard INI file options (including MRU)
 
+  if (m_pRecentFileList)
+    {
+    CRecentFileList * oldList = m_pRecentFileList;
+    m_pRecentFileList = new CRelativeRecentFileList (oldList->GetSize ());
+    delete oldList;
+    m_pRecentFileList->ReadList ();
+    }
+
   if (!bWine)
     AfxEnableControlContainer ();   // not needed?
 
@@ -789,7 +825,12 @@ BOOL CMUSHclientApp::InitInstance()
     StringToVector ((const char *) m_strWorldList, v, "*");
 
     for (vector<string>::const_iterator i = v.begin (); i != v.end (); i++)
-      m_pWorldDocTemplate->OpenDocumentFile (i->c_str ());
+      {
+      if (i->empty ())
+        continue;
+      CString strPath = Make_Absolute_Path (i->c_str ());
+      m_pWorldDocTemplate->OpenDocumentFile (strPath);
+      }
 
     }
 
@@ -2315,6 +2356,8 @@ int CMUSHclientApp::db_write_string (LPCTSTR lpszSection, LPCTSTR lpszEntry, LPC
   CString strEntry = lpszEntry;
   CString strValue = lpszValue;
 
+  if (strcmp (lpszSection, "prefs") == 0)
+    strValue = MakeGlobalOptionPathsRelative (lpszEntry, strValue);
 
   strEntry.Replace ("'", "''");  // fix up quotes
   strValue.Replace ("'", "''");  // fix up quotes

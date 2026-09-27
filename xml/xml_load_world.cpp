@@ -732,7 +732,7 @@ LONGLONG iCounterFrequency = large_int_frequency.QuadPart;
       if (!m_CurrentPlugin->m_strScript.IsEmpty () || m_CurrentPlugin->m_bSendToScriptUsed)
         {
 
-        m_CurrentPlugin->m_ScriptEngine = new CScriptEngine (this, m_CurrentPlugin->m_strLanguage);
+        m_CurrentPlugin->m_ScriptEngine = new CScriptEngine (this, m_CurrentPlugin->m_strLanguage, m_CurrentPlugin);
 
         if (m_CurrentPlugin->m_ScriptEngine->CreateScriptEngine ())
           ThrowErrorException ("Could not initialise script engine");
@@ -1084,6 +1084,10 @@ bool bPlugin;
                                RemoveFinalSlash (ExtractDirectory (m_CurrentPlugin->m_strSource)));
 
 
+    // Explicit dot-relative includes are stored relative to the executable.
+    if (strFileName.Left (2) == ".\\" || strFileName.Left (2) == "./")
+      strFileName = Make_Absolute_Path (strFileName);
+
     // use relative path if required ...
 
     if (!(
@@ -1344,6 +1348,10 @@ void CMUSHclientDoc::Load_World_Single_Line_Alpha_Options_XML (CXMLelement & par
             strValue.MakeLower ();
             }   // end of world ID
 
+          if ((AlphaOptionsTable [i].iFlags & OPT_PATH) &&
+              (strValue.Left (2) == ".\\" || strValue.Left (2) == "./"))
+            strValue = Make_Absolute_Path (strValue);
+
       // found it - set value
           SetAlphaOptionItem (i, strValue, true, (iFlags & LOAD_INCLUDE) != 0);
           } // end of found
@@ -1510,6 +1518,8 @@ CString strVariable;
     GET_USHORT       ("send_to",           t->iSendTo, 0, eSendToLast - 1);
     GET_USHORT       ("sequence",          t->iSequence, 0, 10000);
     GET_STRING_TRIM  ("sound",             t->sound_to_play);
+    if (t->sound_to_play.Left (2) == ".\\" || t->sound_to_play.Left (2) == "./")
+      t->sound_to_play = Make_Absolute_Path (t->sound_to_play);
     GET_BOOL_USHORT  ("sound_if_inactive", t->bSoundIfInactive);
     GET_BOOL         ("lowercase_wildcard", t->bLowercaseWildcard);
     GET_BOOL         ("temporary",         t->bTemporary);

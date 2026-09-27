@@ -280,6 +280,7 @@ public:
   void LoadGlobalsFromDatabase (void);
   void SaveGlobalsToDatabase (void);
   int PopulateDatabase (void);
+  CString MakeGlobalOptionPathsRelative (LPCTSTR name, CString value);
   void ShowGlobalOptions (CMUSHclientDoc * pDoc);
   VARIANT GetGlobalOption(LPCTSTR Name);
   VARIANT GetGlobalOptionList();
@@ -368,12 +369,15 @@ typedef struct
   int     iDefault;   // original (default) value
   }  tGlobalConfigurationNumericOption;
 
+enum GlobalOptionPathType { eNoPath, eFilePath, eFilePathList };
+
 // for global alpha options
 typedef struct
   {
   int    iOffset;    // offset in CMUSHclientApp
   char * pName;      // name, eg. "AsciiArtFont"
   const char * sDefault;   // original (default) value
+  GlobalOptionPathType pathType;
   }  tGlobalConfigurationAlphaOption;
 
 
