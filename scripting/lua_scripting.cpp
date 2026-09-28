@@ -278,7 +278,7 @@ bool CScriptEngine::CollectLuaGarbage (DWORD now)
   const int top = lua_gettop (L);
   try
     {
-    CPluginDirectoryGuard directoryGuard (m_pPlugin);
+    CPluginDirectoryGuard directoryGuard (m_pPlugin, true);
     const int result = m_idleGC.Collect (L, now);
     if (result < 0)
       LuaError (L, "Garbage collection error", "", "", "", m_pDoc);

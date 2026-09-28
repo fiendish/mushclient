@@ -3,13 +3,16 @@
 class CLuaIdleGC
   {
   public:
-    CLuaIdleGC () : m_bPending (true), m_iCycles (0), m_dwLastCollection (0) {}
+    CLuaIdleGC () : m_bPending (true), m_bPassActive (false), m_iCycles (0),
+      m_dwLastCollection (0), m_dwPassStarted (0) {}
 
     void Activity () { m_bPending = true; }
     bool Ready (unsigned long now) const
-      { return m_iCycles || (m_bPending && now - m_dwLastCollection >= 5000); }
+      { return m_bPassActive ||
+               ((m_iCycles || m_bPending) && now - m_dwLastCollection >= 5000); }
     void Cancel (unsigned long now)
-      { m_iCycles = 0; m_bPending = false; m_dwLastCollection = now; }
+      { m_iCycles = 0; m_bPending = false; m_bPassActive = false;
+        m_dwLastCollection = now; }
 
     // Returns -1 with a Lua error on the stack, 0 if skipped, or 1 if stepped.
     int Collect (lua_State * L, unsigned long now)
@@ -18,6 +21,11 @@ class CLuaIdleGC
       // return -1; leave their collector alone rather than restart a stopped GC.
       if (!L || !Ready (now) || lua_gc (L, 9, 0) != 1)
         return 0;
+      if (!m_bPassActive)
+        {
+        m_bPassActive = true;
+        m_dwPassStarted = now;
+        }
       if (!m_iCycles)
         {
         // Objects marked before their last reference was dropped can survive
@@ -33,8 +41,13 @@ class CLuaIdleGC
         }
       const bool finished = lua_toboolean (L, -1) != 0;
       lua_pop (L, 1);
-      if (finished && --m_iCycles == 0)
+      // Automatic GC can finish cycles between idle steps. Limit each active
+      // window, preserving unfinished cycles through the cooldown.
+      if ((finished && --m_iCycles == 0) || now - m_dwPassStarted >= 1000)
+        {
+        m_bPassActive = false;
         m_dwLastCollection = now;
+        }
       return 1;
       }
 
@@ -45,6 +58,8 @@ class CLuaIdleGC
       return 1;
       }
     bool m_bPending;
+    bool m_bPassActive;
     unsigned int m_iCycles;
     unsigned long m_dwLastCollection;
+    unsigned long m_dwPassStarted;
   };
