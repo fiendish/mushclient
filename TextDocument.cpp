@@ -528,19 +528,15 @@ BOOL CTextDocument::DoSave(LPCTSTR lpszPathName, BOOL bReplace)
 
 void CTextDocument::CreateMonitoringThread(const char * sName)
 {
-  // kill any old thread
-  StopMonitoringThread (m_iMonitorToken);
-  m_bFileChangedPending = false;
-
-  // find when the file was last modified
-
-	CFileStatus	status;
-	CFile::GetStatus(sName, status);
-  m_timeFileMod = status.m_mtime;
-
-  // create the thread
-  m_iMonitorToken = ::CreateMonitoringThread
+  CFileStatus status;
+  CFile::GetStatus (sName, status);
+  __int64 token = ::CreateMonitoringThread
     (sName, m_iTextDocumentNumber, WM_USER_FILE_CONTENTS_CHANGED);
+
+  StopMonitoringThread (m_iMonitorToken);
+  m_iMonitorToken = token;
+  m_timeFileMod = status.m_mtime;
+  m_bFileChangedPending = false;
 
   UpdateAllViews  (NULL);     // force window title to be redrawn
 }
