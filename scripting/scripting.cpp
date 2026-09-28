@@ -315,11 +315,9 @@ void CMUSHclientDoc::DisableScripting (void)
 // Both document types use the same independently owned monitor.
 void CMUSHclientDoc::CreateMonitoringThread()
   {
-  __int64 token = ::CreateMonitoringThread
-    (m_strScriptFilename, m_iUniqueDocumentNumber, WM_USER_SCRIPT_FILE_CONTENTS_CHANGED);
-
-  StopMonitoringThread (m_iMonitorToken);
-  m_iMonitorToken = token;
+  m_iMonitorToken = ::CreateMonitoringThread
+    (m_strScriptFilename, m_iUniqueDocumentNumber,
+     WM_USER_SCRIPT_FILE_CONTENTS_CHANGED, m_iMonitorToken);
   m_bScriptFileChangedPending = false;
   }
 

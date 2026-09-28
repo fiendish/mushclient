@@ -526,7 +526,8 @@ struct CTLSFallbackNotification
 
 void StopMonitoringThread (__int64 & token);
 void CollectMonitoringThreads ();
-__int64 CreateMonitoringThread (const char * name, __int64 document, UINT message);
+__int64 CreateMonitoringThread (const char * name, __int64 document, UINT message,
+                                  __int64 token = 0);
 
 #define WM_USER_FILE_CONTENTS_CHANGED (WM_USER + 1002)
 

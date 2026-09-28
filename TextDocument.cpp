@@ -191,6 +191,8 @@ struct CMonitorContext
   HANDLE thread;
   HANDLE change;
   volatile LONG stopped;
+  volatile LONG ready;
+  bool replacement;
   unsigned reported;
   unsigned pending;
   const char * operations[9];
@@ -244,11 +246,15 @@ static unsigned __stdcall MonitorThread (void * parameter)
     return 0;
     }
 
+  InterlockedExchange (&context->ready, 1);
+  bool firstNotification = true;
   HANDLE handles[2] = { context->stopEvent, context->change };
   while (!MonitorStopped (context))
     {
     // The finite wait also observes stopped if SetEvent fails.
-    DWORD result = WaitForMultipleObjects (2, handles, FALSE, 250);
+    // Recheck the file once the watch exists, including edits during startup.
+    DWORD result = firstNotification ? WAIT_OBJECT_0 + 1 :
+      WaitForMultipleObjects (2, handles, FALSE, 250);
     if (MonitorStopped (context) || result == WAIT_OBJECT_0)
       break;
     if (result == WAIT_TIMEOUT)
@@ -294,7 +300,9 @@ static unsigned __stdcall MonitorThread (void * parameter)
       }
     if (MonitorStopped (context))
       break;
-    if (!FindNextChangeNotification (context->change))
+    if (firstNotification)
+      firstNotification = false;
+    else if (!FindNextChangeNotification (context->change))
       {
       RecordMonitorWorkerError (context, "FindNextChangeNotification", GetLastError ());
       break;
@@ -302,6 +310,13 @@ static unsigned __stdcall MonitorThread (void * parameter)
     }
   // Only the collector closes handles, after confirming thread exit.
   return 0;
+  }
+
+static void StopMonitor (CMonitorContext * context)
+  {
+  InterlockedExchange (&context->stopped, 1);
+  if (context->thread && context->stopEvent && !SetEvent (context->stopEvent))
+    RecordMonitorError (context, 0, "SetEvent", GetLastError ());
   }
 
 void StopMonitoringThread (__int64 & token)
@@ -312,12 +327,7 @@ void StopMonitoringThread (__int64 & token)
     return;
   for (CMonitorContext * context = monitors; context; context = context->next)
     if (context->token == oldToken)
-      {
-      InterlockedExchange (&context->stopped, 1);
-      if (context->thread && context->stopEvent && !SetEvent (context->stopEvent))
-        RecordMonitorError (context, 0, "SetEvent", GetLastError ());
-      return;
-      }
+      StopMonitor (context);
   }
 
 void CollectMonitoringThreads ()
@@ -335,6 +345,14 @@ void CollectMonitoringThreads ()
       exited = result == WAIT_OBJECT_0;
       if (!exited && result != WAIT_TIMEOUT)
         RecordMonitorError (context, 1, "WaitForSingleObject", GetLastError ());
+      }
+    if (!exited && context->replacement && !MonitorStopped (context) &&
+        InterlockedCompareExchange (&context->ready, 0, 0))
+      {
+      context->replacement = false;
+      for (CMonitorContext * old = monitors; old; old = old->next)
+        if (old != context && old->token == context->token)
+          StopMonitor (old);
       }
     if (InterlockedCompareExchange (&context->postErrorReady, 0, 0))
       RecordMonitorError (context, 7, "PostMessage", context->postError);
@@ -411,7 +429,8 @@ static CString GetFileDirectory (LPCTSTR name)
   return &path [0];
   }
 
-__int64 CreateMonitoringThread (const char * name, __int64 document, UINT message)
+__int64 CreateMonitoringThread (const char * name, __int64 document, UINT message,
+                                  __int64 token)
   {
   CString directory = GetFileDirectory (name);
   CMonitorContext * context = (CMonitorContext *) calloc (1, sizeof *context);
@@ -425,7 +444,8 @@ __int64 CreateMonitoringThread (const char * name, __int64 document, UINT messag
     }
   strcpy (context->directory, directory);
   context->document = document;
-  context->token = App.GetUniqueNumber ();
+  // Share the token during handoff so the old watch's queued changes stay valid.
+  context->token = token ? token : App.GetUniqueNumber ();
   if (!context->token)
     context->token = App.GetUniqueNumber ();
   context->window = Frame.GetSafeHwnd ();
@@ -447,6 +467,14 @@ __int64 CreateMonitoringThread (const char * name, __int64 document, UINT messag
     }
   if (!SetThreadPriority (context->thread, THREAD_PRIORITY_IDLE))
     RecordMonitorError (context, 6, "SetThreadPriority", GetLastError ());
+  context->replacement = true;
+  for (CMonitorContext * old = context->next; old; old = old->next)
+    if (old->token == context->token)
+      {
+      old->replacement = false;
+      if (!InterlockedCompareExchange (&old->ready, 0, 0))
+        StopMonitor (old);
+      }
   return context->token;
   }
 
@@ -530,11 +558,8 @@ void CTextDocument::CreateMonitoringThread(const char * sName)
 {
   CFileStatus status;
   CFile::GetStatus (sName, status);
-  __int64 token = ::CreateMonitoringThread
-    (sName, m_iTextDocumentNumber, WM_USER_FILE_CONTENTS_CHANGED);
-
-  StopMonitoringThread (m_iMonitorToken);
-  m_iMonitorToken = token;
+  m_iMonitorToken = ::CreateMonitoringThread
+    (sName, m_iTextDocumentNumber, WM_USER_FILE_CONTENTS_CHANGED, m_iMonitorToken);
   m_timeFileMod = status.m_mtime;
   m_bFileChangedPending = false;
 
