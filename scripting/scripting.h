@@ -91,7 +91,8 @@ class CScriptEngine : public CObject
                    const t_regexp * regexp = NULL,  // regular expression (for triggers, aliases)
                    map<string, string> * table = NULL, // map of other things
                    CPaneLine * paneline = NULL,        // and the line (for triggers)
-                   bool * result = NULL);              // where to put result
+                   bool * result = NULL,               // where to put result
+                   bool bMarkActivity = true);
 
   // returns true if script error
   bool ExecuteLua (DISPID & dispid,          // dispatch ID, will be set to DISPID_UNKNOWN on an error

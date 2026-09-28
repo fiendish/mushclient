@@ -8,8 +8,8 @@ class CLuaIdleGC
 
     void Activity () { m_bPending = true; }
     bool Ready (unsigned long now) const
-      { return m_bPassActive ||
-               ((m_iCycles || m_bPending) && now - m_dwLastCollection >= 5000); }
+      { return m_bPassActive || now - m_dwLastCollection >=
+               ((m_iCycles || m_bPending) ? 5000 : 30000); }
     void Cancel (unsigned long now)
       { m_iCycles = 0; m_bPending = false; m_bPassActive = false;
         m_dwLastCollection = now; }

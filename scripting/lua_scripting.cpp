@@ -537,7 +537,8 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
                                 const t_regexp * regexp,  // regular expression (for triggers, aliases)
                                 map<string, string> * table,   // map of other things
                                 CPaneLine * paneline,     // and the line (for triggers)
-                                bool * result)            // where to put result
+                                bool * result,            // where to put result
+                                bool bMarkActivity)
 
 
   {
@@ -545,7 +546,8 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
   if (result)
     *result = false;
-  LuaActivity ();
+  if (bMarkActivity)
+    LuaActivity ();
   const int savedTop = L ? lua_gettop (L) : 0;
   try
     {

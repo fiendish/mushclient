@@ -400,7 +400,8 @@ void CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo)
                                    strReason,
                                    nparams,
                                    sparams, 
-                                   nInvocationCount); 
+                                   nInvocationCount, NULL, NULL, NULL, NULL,
+                                   callinfo._name != ON_PLUGIN_TICK);
       }   // end of Lua
     else
       {
