@@ -451,7 +451,6 @@ struct CMUSHclientApp : CWinApp {
     void DeferTextDocumentClose(__int64);
     bool HasActiveDocumentOperations() const;
     BOOL OnIdle(LONG);
-    void CollectIdleLuaGarbage() {}
 } App;
 struct CMUSHclientDoc : CDocument {
     __int64 m_iUniqueDocumentNumber = identity;

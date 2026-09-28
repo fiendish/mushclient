@@ -1137,7 +1137,12 @@ void CMUSHclientApp::CollectIdleLuaGarbage ()
   {
   const DWORD now = GetTickCount ();
   if (now - m_dwLastLuaGC < 100 || HasActiveDocumentOperations () ||
-      CProgressDlg::IsPumpingMessages ())
+      CProgressDlg::IsPumpingMessages () ||
+      !m_DeferredMessages.empty () || !m_DeferredWorldDocumentCloses.empty () ||
+      !m_DeferredTextDocumentCloses.empty ())
+    return;
+  MSG pending;
+  if (PeekMessage (&pending, NULL, 0, 0, PM_NOREMOVE))
     return;
   m_dwLastLuaGC = now;
 
@@ -1312,8 +1317,6 @@ BOOL CMUSHclientApp::OnIdle(LONG lCount)
       return 1;
       }
     }
-
-  CollectIdleLuaGarbage ();
 
 HWND hwndForeground = ::GetForegroundWindow( );
 
