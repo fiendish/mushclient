@@ -182,7 +182,7 @@ void CTextDocument::EndOperation (void)
 struct CMonitorContext
   {
   CMonitorContext * next;
-  char * filename;
+  char * directory;
   HWND window;
   UINT message;
   __int64 document;
@@ -236,14 +236,8 @@ static unsigned __stdcall MonitorThread (void * parameter)
   if (MonitorStopped (context))
     return 0;
 
-  char * p = strrchr (context->filename, '\\');
-  if (!p)
-    p = strrchr (context->filename, ':');
-  if (p)
-    *p = 0;
-
   context->change = FindFirstChangeNotification
-    (context->filename, TRUE, FILE_NOTIFY_CHANGE_LAST_WRITE);
+    (context->directory, TRUE, FILE_NOTIFY_CHANGE_LAST_WRITE);
   if (context->change == INVALID_HANDLE_VALUE)
     {
     RecordMonitorWorkerError (context, "FindFirstChangeNotification", GetLastError ());
@@ -388,7 +382,7 @@ void CollectMonitoringThreads ()
       continue;
       }
     *link = context->next;
-    free (context->filename);
+    free (context->directory);
     free (context);
     }
   // A modal callback can stop/start monitors or enter this collector again.
@@ -401,18 +395,35 @@ void CollectMonitoringThreads ()
     }
   }
 
+static CString GetFileDirectory (LPCTSTR name)
+  {
+  DWORD size = GetFullPathName (name, 0, NULL, NULL);
+  if (!size)
+    AfxThrowFileException (CFileException::badPath, GetLastError (), name);
+  std::vector<TCHAR> path (size);
+  LPTSTR filePart = NULL;
+  DWORD length = GetFullPathName (name, size, &path [0], &filePart);
+  if (!length)
+    AfxThrowFileException (CFileException::badPath, GetLastError (), name);
+  if (length >= size || !filePart)
+    AfxThrowFileException (CFileException::badPath, ERROR_INVALID_NAME, name);
+  *filePart = 0;
+  return &path [0];
+  }
+
 __int64 CreateMonitoringThread (const char * name, __int64 document, UINT message)
   {
+  CString directory = GetFileDirectory (name);
   CMonitorContext * context = (CMonitorContext *) calloc (1, sizeof *context);
   if (!context)
     AfxThrowResourceException ();
-  context->filename = (char *) malloc (strlen (name) + 1);
-  if (!context->filename)
+  context->directory = (char *) malloc (directory.GetLength () + 1);
+  if (!context->directory)
     {
     free (context);
     AfxThrowResourceException ();
     }
-  strcpy (context->filename, name);
+  strcpy (context->directory, directory);
   context->document = document;
   context->token = App.GetUniqueNumber ();
   if (!context->token)
