@@ -4258,6 +4258,52 @@ BOOL CMUSHclientDoc::OnOpenDocument(LPCTSTR lpszPathName)
 
 
 
+void CMUSHclientDoc::FontWarning (const CString & strMessage)
+  {
+  CString strWarning = m_CurrentPlugin
+    ? TFormat ("Warning in plugin '%s' (%s): %s",
+               (LPCTSTR) m_CurrentPlugin->m_strName,
+               (LPCTSTR) m_CurrentPlugin->m_strID, (LPCTSTR) strMessage)
+    : TFormat ("Warning: %s", (LPCTSTR) strMessage);
+
+  if (m_FontWarnings.insert ((LPCTSTR) strWarning).second)
+    ColourNote (SCRIPTERRORFORECOLOUR, "", strWarning);
+  }
+
+static int CALLBACK FontFound (const LOGFONT *, const TEXTMETRIC *,
+                               DWORD, LPARAM param)
+  {
+  *reinterpret_cast<bool *> (param) = true;
+  return 0;
+  }
+
+void CMUSHclientDoc::WarnIfFontMissing (LPCTSTR FontName, LPCTSTR Purpose)
+  {
+  if (FontName [0] == 0)
+    return;
+
+  CDC dc;
+  if (!dc.CreateCompatibleDC (NULL))
+    {
+    FontWarning (TFormat ("Unable to check %s font '%s'.", Purpose, FontName));
+    return;
+    }
+
+  LOGFONT lf = {};
+  lf.lfCharSet = DEFAULT_CHARSET;
+  bool bFound = false;
+  if (strlen (FontName) < LF_FACESIZE)
+    {
+    strcpy (lf.lfFaceName, FontName);
+    EnumFontFamiliesEx (dc.GetSafeHdc (), &lf, FontFound,
+                        reinterpret_cast<LPARAM> (&bFound), 0);
+    }
+
+  if (!bFound)
+    FontWarning (TFormat ("The %s font '%s' was not found. Windows will use a substitute font.",
+                          Purpose, FontName));
+  }
+
 void CMUSHclientDoc::ChangeFont (const int nHeight, 
                                  const char * lpszFacename,
                                  const int nWeight, 
@@ -4272,6 +4318,7 @@ void CMUSHclientDoc::ChangeFont (const int nHeight,
 
 int i;
 std::unique_ptr<CFont> newFonts [NUMITEMS (m_font)];
+CString strRequestedFont (lpszFacename);
 
   CDC dc;
 
@@ -4347,7 +4394,7 @@ std::unique_ptr<CFont> newFonts [NUMITEMS (m_font)];
     	  }	
       }
 
-    
+    WarnIfFontMissing (strRequestedFont, "output");
 
 } // end of CMUSHclientDoc::ChangeFont
 
@@ -4358,6 +4405,8 @@ void CMUSHclientDoc::ChangeInputFont (const int nHeight,
                             const BYTE bItalic)
 {
 // Load the font we want to use.
+
+CString strPluginFont = m_CurrentPlugin ? lpszFacename : "";
 
    CFont * pNewInputFont = new CFont;    // create new font
 
@@ -4468,6 +4517,7 @@ if (!dc.CreateCompatibleDC (NULL))
       }
 
     delete pOldInputFont;         // get rid of old font
+    WarnIfFontMissing (strPluginFont, "input");
 
 } // end of CMUSHclientDoc::ChangeInputFont
 
@@ -9445,8 +9495,11 @@ long CMUSHclientDoc::AddSpecialFont (LPCTSTR PathName)
                                pbFont);      // Reserved. Must be 0.
 
 
-  if (cFonts == 0) 
+  if (cFonts == 0)
+    {
+    FontWarning (TFormat ("Unable to load font file '%s'.", PathName));
     return eFileNotFound;
+    }
 
   m_strSpecialFontName.insert (PathName);  // remember, so we can remove it
 	return eOK;

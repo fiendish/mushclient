@@ -1407,6 +1407,10 @@ public:
 
   ci_set m_strSpecialFontName;  // all the special fonts we loaded (could be none)
 
+  ci_set m_FontWarnings;
+  void FontWarning (const CString & strMessage);
+  void WarnIfFontMissing (LPCTSTR FontName, LPCTSTR Purpose);
+
   long AddSpecialFont (LPCTSTR PathName);
   void RemoveSpecialFonts (void);
 

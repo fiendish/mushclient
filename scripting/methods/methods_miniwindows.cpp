@@ -239,10 +239,15 @@ long CMUSHclientDoc::WindowFont(LPCTSTR Name,        // which window
   if (it == m_MiniWindows.end ())
     return eNoSuchWindow;
 
-  return it->second->Font (FontId, FontName,
-                           Size, 
-                           Bold, Italic, Underline, Strikeout, 
-                           Charset, PitchAndFamily);
+  long iResult = it->second->Font (FontId, FontName,
+                                  Size,
+                                  Bold, Italic, Underline, Strikeout,
+                                  Charset, PitchAndFamily);
+  if (iResult == eOK)
+    WarnIfFontMissing (FontName, "miniwindow");
+  else if (iResult == eCannotAddFont)
+    FontWarning (TFormat ("Unable to load miniwindow font '%s'.", FontName));
+  return iResult;
 }    // end of CMUSHclientDoc::WindowFont
 
 // output text, ordinary or UTF8 - returns length of text
