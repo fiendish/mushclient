@@ -257,6 +257,43 @@ CString MUSHCLIENT_VERSION;
 /////////////////////////////////////////////////////////////////////////////
 // CMUSHclientApp initialization
 
+static void LoadLocalFonts (const CString & strDirectory)
+  {
+  static const ci_set fontExtensions =
+    { ".fon", ".fnt", ".ttf", ".ttc", ".otf", ".otc", ".fot" };
+
+  const auto reportSearchError = [&strDirectory] ()
+    {
+    DWORD dwError = GetLastError ();
+    ::AfxMessageBox (CFormat ("Unable to search for local fonts in %s (error %lu)",
+                             (LPCTSTR) strDirectory, dwError));
+    };
+
+  CFileFind finder;
+  BOOL bMore = finder.FindFile (strDirectory + "*.*");
+  if (!bMore && GetLastError () != ERROR_FILE_NOT_FOUND)
+    return reportSearchError ();
+
+  while (bMore)
+    {
+    bMore = finder.FindNextFile ();
+    if (!bMore && GetLastError () != ERROR_NO_MORE_FILES)
+      return reportSearchError ();
+
+    if (finder.IsDirectory ())
+      continue;
+
+    CString strName = finder.GetFileName ();
+    int iDot = strName.ReverseFind ('.');
+    if (iDot == -1 || !fontExtensions.count ((LPCTSTR) strName.Mid (iDot)))
+      continue;
+
+    CString strPath = finder.GetFilePath ();
+    if (AddFontResourceEx (strPath, FR_PRIVATE, NULL) == 0)
+      ::AfxMessageBox (CFormat ("Unable to load local font: %s", (LPCTSTR) strPath));
+    }
+  }
+
 BOOL CMUSHclientApp::InitInstance()
 {
 
@@ -285,6 +322,8 @@ BOOL CMUSHclientApp::InitInstance()
                              (LPCTSTR) m_strMUSHclientFileName));
     return FALSE;
     }
+
+  LoadLocalFonts (m_strMUSHclientFileName);
 
   // stupid cursor disappears under Parallels
   g_hCursorIbeam = CopyCursor(AfxGetApp()->LoadCursor (IDC_MY_IBEAM));  
