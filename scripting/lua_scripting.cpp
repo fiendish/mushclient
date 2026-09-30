@@ -552,7 +552,8 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
                                 map<string, string> * table,   // map of other things
                                 CPaneLine * paneline,     // and the line (for triggers)
                                 bool * result,            // where to put result
-                                bool bMarkActivity)
+                                bool bMarkActivity,
+                                const bool pluginCallback)
 
 
   {
@@ -591,14 +592,14 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
                 finish;
 
   const bool traceOrigin = m_pDoc->m_bTraceOutputRedraw;
-  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType);
+  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType, pluginCallback);
   const bool traceCalls = m_pDoc->m_bTrace && !m_pDoc->m_bInTrace &&
     (m_pDoc->m_iTraceCategories & traceCategory) &&
     !traceOrigin;
-  const bool continuation = strcmp (szType, "alias") == 0 ||
-    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0;
+  const bool continuation = !pluginCallback && (strcmp (szType, "alias") == 0 ||
+    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0);
   CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, continuation, false, szProcedure);
-  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType);
+  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType, pluginCallback);
 
   if (App.m_iCounterFrequency)
     QueryPerformanceCounter (&start);
@@ -823,7 +824,8 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
                                LPCTSTR szReason,         // eg. trigger subroutine XXX
                                CString strParam,         // string parameter
                                long & nInvocationCount,  // count of invocations
-                               CString & result)         // where to put result
+                               CString & result,         // where to put result
+                               const bool pluginCallback)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
@@ -852,14 +854,14 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
                 finish;
 
   const bool traceOrigin = m_pDoc->m_bTraceOutputRedraw;
-  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType);
+  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType, pluginCallback);
   const bool traceCalls = m_pDoc->m_bTrace && !m_pDoc->m_bInTrace &&
     (m_pDoc->m_iTraceCategories & traceCategory) &&
     !traceOrigin;
-  const bool continuation = strcmp (szType, "alias") == 0 ||
-    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0;
+  const bool continuation = !pluginCallback && (strcmp (szType, "alias") == 0 ||
+    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0);
   CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, continuation, false, szProcedure);
-  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType);
+  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType, pluginCallback);
 
   if (App.m_iCounterFrequency)
     QueryPerformanceCounter (&start);

@@ -1319,10 +1319,15 @@ __int64 iOutputGeneration = m_iOutputGeneration;
           trigger_item->iClipboardArg < MAX_WILDCARDS)
          putontoclipboard (trigger_item->wildcards [trigger_item->iClipboardArg].c_str (), m_bUTF_8);
 
-      if (trigger_item->strLabel.IsEmpty ())
-        Trace ("Matched trigger \"%s\"", (LPCTSTR) trigger_item->trigger);
-      else
-        Trace ("Matched trigger %s", (LPCTSTR) trigger_item->strLabel);
+      if (m_bTrace && !m_bInTrace && !m_bTraceOutputRedraw && (m_iTraceCategories & eTraceOther))
+        {
+        CString message;
+        if (trigger_item->strLabel.IsEmpty ())
+          message.Format ("Matched trigger \"%s\"", (LPCTSTR) trigger_item->trigger);
+        else
+          message.Format ("Matched trigger %s", (LPCTSTR) trigger_item->strLabel);
+        TraceForCategory (eTraceOther, message, true);
+        }
       const size_t traceParent = m_traceOutput.MetadataParent
         (m_CurrentPlugin ? (LPCTSTR) m_CurrentPlugin->m_strName : "", eTraceOther);
 

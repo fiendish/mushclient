@@ -898,8 +898,11 @@ void CMUSHView::OnUpdate(CView* pSender, LPARAM lHint, CObject* pHint)
   CMUSHclientDoc* pDoc = GetDocument();
   ASSERT_VALID(pDoc);
 
-  // Invalidation must preserve the trace origin of an already pending paint.
-  // Ordinary output clears that origin in addedstuff.
+  // Ordinary redraw requests take precedence over later trace invalidations.
+  // Requests from draw callbacks retain the current frame's origin.
+  if (!pDoc->m_bInTrace && !pDoc->m_bTraceOutputRedraw && !pDoc->m_bTraceDeferredRepaint &&
+      pDoc->m_iOutputPaintDepth == 0 && !pDoc->m_bInBufferedRepaint)
+    m_bOrdinaryRedrawPending = true;
   m_bTraceRedrawPending = !m_bOrdinaryRedrawPending &&
     (m_bTraceRedrawPending || pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw || pDoc->m_bTraceDeferredRepaint);
   if (pDoc->m_bBufferedRepaintPending && !m_bTraceRedrawPending)

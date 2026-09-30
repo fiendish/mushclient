@@ -37,7 +37,7 @@ CString strMsg;
   TraceForCategory (eTraceOther, strMsg);
 }  // end of CMUSHclientDoc::Trace
 
-void CMUSHclientDoc::TraceForCategory (const unsigned int category, const CString & message, const bool continuation)
+void CMUSHclientDoc::TraceForCategory (const unsigned int category, const CString & message, const bool heading)
 {
   if (!m_bTrace || m_bInTrace || m_bTraceOutputRedraw || !(m_iTraceCategories & category))
     return;
@@ -45,7 +45,7 @@ void CMUSHclientDoc::TraceForCategory (const unsigned int category, const CStrin
   CWorldDocumentOperationGuard operationGuard (this);
   CTraceEventGuard eventGuard (this);
   const string plugin = m_CurrentPlugin ? string ((LPCTSTR) m_CurrentPlugin->m_strName) : "";
-  m_traceOutput.Add (plugin, category, (LPCTSTR) message);
+  m_traceOutput.Add (plugin, category, (LPCTSTR) message, heading);
 }  // end of CMUSHclientDoc::TraceForCategory
 
 void CMUSHclientDoc::BeginTraceEvent ()
@@ -270,12 +270,12 @@ unsigned int CMUSHclientDoc::GetTimerTraceCategory (const CTimer & timer) const
   return timer.bOneShot ? eTraceOther : eTraceRepeatingTimers;
 }
 
-unsigned int CMUSHclientDoc::GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR type) const
+unsigned int CMUSHclientDoc::GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR type, bool pluginCallback) const
 {
-  if (strcmp (type, "timer") == 0)
+  if (!pluginCallback && strcmp (type, "timer") == 0)
     return m_iTimerTraceCategory;
 
-  if (strncmp (type, "Plugin ", 7) == 0)
+  if (pluginCallback)
     {
     if (ON_PLUGIN_TICK == procedure)
       return eTraceIdleTicks;
@@ -290,23 +290,23 @@ unsigned int CMUSHclientDoc::GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR 
 }
 
 CTraceScriptGuard::CTraceScriptGuard (CMUSHclientDoc * pDoc,
-                                    LPCTSTR procedure, LPCTSTR type) :
+                                    LPCTSTR procedure, LPCTSTR type, bool pluginCallback) :
   m_pDoc (pDoc), m_pPlugin (pDoc->m_CurrentPlugin),
   m_bSavedRedraw (pDoc->m_bTraceOutputRedraw),
   m_bSavedDeferredRepaint (pDoc->m_bTraceDeferredRepaint),
   m_iRedrawRequests (pDoc->m_iTraceRedrawRequests),
   m_iTraceOutputRequests (pDoc->m_iTraceOutputRedrawRequests),
-  m_bDisplay (pDoc->GetScriptTraceCategory (procedure, type) == CMUSHclientDoc::eTraceDisplay)
+  m_bDisplay (pDoc->GetScriptTraceCategory (procedure, type, pluginCallback) == CMUSHclientDoc::eTraceDisplay)
   {
   if (!m_pPlugin)
     return;
   const bool traceOutput = pDoc->m_bInTrace || m_bSavedRedraw;
-  const bool periodic = strcmp (type, "timer") == 0 ||
-    (strncmp (type, "Plugin ", 7) == 0 && ON_PLUGIN_TICK == procedure);
+  const bool periodic = (!pluginCallback && strcmp (type, "timer") == 0) ||
+    (pluginCallback && ON_PLUGIN_TICK == procedure);
   if (traceOutput)
     m_pPlugin->m_bTraceRedrawPending = true;
   else if (!periodic &&
-           !(strncmp (type, "Plugin ", 7) == 0 && ON_PLUGIN_DRAW_OUTPUT_WINDOW == procedure))
+           !(pluginCallback && ON_PLUGIN_DRAW_OUTPUT_WINDOW == procedure))
     m_pPlugin->m_bTraceRedrawPending = false;
   // Deferred origin applies to display requests, not ordinary timer activity.
   pDoc->m_bTraceDeferredRepaint = m_bSavedDeferredRepaint ||
@@ -333,15 +333,15 @@ CTraceScriptGuard::~CTraceScriptGuard ()
   }
 
 
-void CMUSHclientDoc::TraceScript (LPCTSTR procedure, LPCTSTR type)
+void CMUSHclientDoc::TraceScript (LPCTSTR procedure, LPCTSTR type, bool pluginCallback)
 {
-  const unsigned int category = GetScriptTraceCategory (procedure, type);
+  const unsigned int category = GetScriptTraceCategory (procedure, type, pluginCallback);
   // Display callbacks can request further updates while showing trace output.
   if (m_bTraceOutputRedraw)
     return;
   if (m_bTrace && !m_bInTrace && (m_iTraceCategories & category))
     {
-    LPCTSTR traceType = m_CurrentPlugin && strncmp (type, "Plugin ", 7) == 0 ? "plugin" : type;
+    LPCTSTR traceType = m_CurrentPlugin && pluginCallback ? "plugin" : type;
     TraceForCategory (category, TFormat ("Executing %s script \"%s\"", traceType, procedure));
     }
 }

@@ -200,7 +200,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
       TraceForCategory (traceCategory,
                         TFormat ("Fired %stimer %s (%s)",
                                  timer_item->strLabel.IsEmpty () ? "unlabelled " : "",
-                                 (LPCTSTR) strTimerLabel, (LPCTSTR) schedule));
+                                 (LPCTSTR) strTimerLabel, (LPCTSTR) schedule), true);
       }
 
 //    TRACE1 ("Fire time = %10.8f\n", timer_item->tFireTime.m_dt);

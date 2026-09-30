@@ -402,7 +402,7 @@ void CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo)
                                    nparams,
                                    sparams, 
                                    nInvocationCount, NULL, NULL, NULL, NULL,
-                                   callinfo._name != ON_PLUGIN_TICK);
+                                   callinfo._name != ON_PLUGIN_TICK, true);
       }   // end of Lua
     else
       {
@@ -413,7 +413,7 @@ void CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo)
                                strType,
                                strReason,
                                params, 
-                               nInvocationCount, NULL);
+                               nInvocationCount, NULL, true);
       } // end of not Lua
     }   // end of having a script engine
 
@@ -455,7 +455,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                    sparams, 
                                    nInvocationCount,
                                    NULL, NULL, NULL,
-                                   &result))
+                                   &result, true, true))
         return false;
       return result;
       }   // end of Lua
@@ -483,7 +483,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                strReason,
                                params, 
                                nInvocationCount, 
-                               &result))
+                               &result, true))
         return false;
 
       // see what result was
@@ -539,7 +539,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult))
+                                  &bResult, true, true))
         return false;
       return bResult;
       }   // end of Lua
@@ -578,7 +578,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result))
+                             &result, true))
         return false;
 
     // see what result was
@@ -633,7 +633,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult))
+                                  &bResult, true, true))
         return false;
       return bResult;
       }   // end of Lua
@@ -667,7 +667,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result))
+                             &result, true))
         return false;
 
     // see what result was
@@ -725,7 +725,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult))
+                                  &bResult, true, true))
         return false;
       return bResult;
       }   // end of Lua
@@ -761,7 +761,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result))
+                             &result, true))
         return false;
 
     // see what result was
@@ -809,7 +809,7 @@ void CPlugin::ExecutePluginScriptRtn (CScriptCallInfo & callinfo,
                                   strReason,
                                   strText,
                                   nInvocationCount,
-                                  strText);
+                                  strText, true);
       } // end of Lua
     else
       {
@@ -835,7 +835,7 @@ void CPlugin::ExecutePluginScriptRtn (CScriptCallInfo & callinfo,
                                strReason,
                                params, 
                                nInvocationCount, 
-                               &result);
+                               &result, true);
 
 
       // if they returned a string, give it back

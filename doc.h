@@ -2261,13 +2261,13 @@ public:
     };
 
   void Trace (LPCTSTR lpszFormat, ...);
-  void TraceForCategory (const unsigned int category, const CString & message, const bool continuation = false);
+  void TraceForCategory (const unsigned int category, const CString & message, const bool heading = false);
   void BeginTraceEvent ();
   void EndTraceEvent ();
   void FlushTraceEvent ();
   unsigned int GetTimerTraceCategory (const CTimer & timer) const;
-  unsigned int GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR type) const;
-  void TraceScript (LPCTSTR procedure, LPCTSTR type);
+  unsigned int GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false) const;
+  void TraceScript (LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false);
 
   void Screendraw  (const long iType,
                     const long iLog,
@@ -3278,7 +3278,7 @@ class CTraceScope
 class CTraceScriptGuard
   {
   public:
-    CTraceScriptGuard (CMUSHclientDoc * pDoc, LPCTSTR procedure, LPCTSTR type);
+    CTraceScriptGuard (CMUSHclientDoc * pDoc, LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false);
     ~CTraceScriptGuard ();
     void BeginCallback ();
 

@@ -1193,13 +1193,13 @@ static int L_CallPlugin (lua_State *L)
     // now call the routine in the plugin
 
     const bool traceOrigin = pDoc->m_bTraceOutputRedraw;
-    const unsigned int traceCategory = pDoc->GetScriptTraceCategory (sRoutine, "Plugin ");
+    const unsigned int traceCategory = pDoc->GetScriptTraceCategory (sRoutine, "Plugin ", true);
     const bool traceCalls = pDoc->m_bTrace && !pDoc->m_bInTrace &&
       (pDoc->m_iTraceCategories & traceCategory) &&
       !traceOrigin;
     CValueStateGuard<string> callerGuard (pDoc->m_traceOutput.caller, traceCaller);
     CTraceScope traceScope (pDoc, traceCategory, traceCalls, false, false, sRoutine);
-    CTraceScriptGuard traceScriptGuard (pDoc, sRoutine, "Plugin ");
+    CTraceScriptGuard traceScriptGuard (pDoc, sRoutine, "Plugin ", true);
     CLuaCallTrace callTrace (pL, traceCalls, sRoutine, n, &pDoc->m_bInTrace);
     iCallError = CallLuaWithTraceBack (pL, n, LUA_MULTRET, &callTrace);
     if (traceCalls)

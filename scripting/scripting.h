@@ -63,8 +63,8 @@ class CScriptEngine : public CObject
                 LPCTSTR szReason, // eg. trigger subroutine XXX
                 DISPPARAMS & params,  // parameters
                 long & nInvocationCount,  // count of invocations
-                COleVariant * result    // result of call
-                );
+                COleVariant * result,   // result of call
+                const bool pluginCallback = false);
   bool ShowError (const HRESULT result, const CString strMsg);
   void DisableScripting (void);
 
@@ -92,7 +92,8 @@ class CScriptEngine : public CObject
                    map<string, string> * table = NULL, // map of other things
                    CPaneLine * paneline = NULL,        // and the line (for triggers)
                    bool * result = NULL,               // where to put result
-                   bool bMarkActivity = true);
+                   bool bMarkActivity = true,
+                   const bool pluginCallback = false);
 
   // returns true if script error
   bool ExecuteLua (DISPID & dispid,          // dispatch ID, will be set to DISPID_UNKNOWN on an error
@@ -102,7 +103,8 @@ class CScriptEngine : public CObject
                    LPCTSTR szReason,         // eg. trigger subroutine XXX
                    CString strParam,         // string parameter
                    long & nInvocationCount,  // count of invocations
-                   CString & result);        // where to put result
+                   CString & result,         // where to put result
+                   const bool pluginCallback = false);
 
   // return value is return from call
 

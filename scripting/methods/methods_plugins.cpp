@@ -444,7 +444,7 @@ long nInvocationCount = 0;
                                          strReason, 
                                          nparams,
                                          sparams, 
-                                         nInvocationCount); 
+                                         nInvocationCount, NULL, NULL, NULL, NULL, true, true);
     }   // end of Lua
   else
     {
@@ -469,7 +469,7 @@ long nInvocationCount = 0;
                              strReason,                             
                              params, 
                              nInvocationCount, 
-                             NULL);
+                             NULL, true);
     } // not Lua
 
   if (iDispid == DISPID_UNKNOWN)

@@ -70,11 +70,9 @@ struct CTraceOutput
     return entries.size () - 1;
     }
 
-  void Add (const std::string & plugin, unsigned int category, const std::string & message)
+  void Add (const std::string & plugin, unsigned int category,
+            const std::string & message, bool heading = false)
     {
-    const bool heading = message.find ("Matched alias ") == 0 ||
-      message.find ("Matched trigger ") == 0 || message.find ("Fired timer ") == 0 ||
-      message.find ("Fired unlabelled timer ") == 0;
     entries.push_back (Entry (parent, plugin, category, message, heading));
     }
   };
