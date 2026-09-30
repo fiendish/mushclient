@@ -4808,45 +4808,48 @@ int iDeltaY = m_scroll_position.y - pt.y;
   if (m_nLastToolTipLine || m_nLastToolTipColumn)
     RemoveToolTip ();
   GetClientRect (&r);
-  // if we can do a smooth scroll, well let's do it!
-  if (abs (iDeltaY) < GetOutputWindowHeight ())
+  if (pt.x != m_scroll_position.x || pt.y != m_scroll_position.y)
     {
-// very smooth scrolling
-
-    int iSmoothDelta = iDeltaY < 0 ? -1 : 1;
-
-    if (App.m_bSmoothScrolling)
+    // if we can do a smooth scroll, well let's do it!
+    if (abs (iDeltaY) < GetOutputWindowHeight ())
       {
-      for (int i = 0; i < abs (iDeltaY); i++)
+  // very smooth scrolling
+
+      int iSmoothDelta = iDeltaY < 0 ? -1 : 1;
+
+      if (App.m_bSmoothScrolling)
         {
-        m_scroll_position.y -= iSmoothDelta;
-        // update scroll bar
-        GetScrollInfo (SB_VERT, &ScrollInfo, SIF_POS);
-        ScrollInfo.nPos = m_scroll_position.y;
-        if (pDoc->m_bScrollBarWanted)
-          SetScrollInfo (SB_VERT, &ScrollInfo, pDoc->m_bScrollBarWanted);
-        m_ScrollbarPosition = ScrollInfo.nPos;
-        ScrollWindow (0, iSmoothDelta);
-        UpdateWindow ();
-        }
-      } // end of smooth scrolling
+        for (int i = 0; i < abs (iDeltaY); i++)
+          {
+          m_scroll_position.y -= iSmoothDelta;
+          // update scroll bar
+          GetScrollInfo (SB_VERT, &ScrollInfo, SIF_POS);
+          ScrollInfo.nPos = m_scroll_position.y;
+          if (pDoc->m_bScrollBarWanted)
+            SetScrollInfo (SB_VERT, &ScrollInfo, pDoc->m_bScrollBarWanted);
+          m_ScrollbarPosition = ScrollInfo.nPos;
+          ScrollWindow (0, iSmoothDelta);
+          UpdateWindow ();
+          }
+        } // end of smooth scrolling
+      else
+        {
+        Invalidate ();
+        m_scroll_position = pt;
+        if (App.m_bSmootherScrolling)
+          UpdateWindow ();    // redraw immediately if wanted
+        } // end of not smooth scrolling
+      }
     else
+      // more than a screenfull away? just redraw the whole lot
       {
       Invalidate ();
-      m_scroll_position = pt;
-      if (App.m_bSmootherScrolling)
-        UpdateWindow ();    // redraw immediately if wanted
-      } // end of not smooth scrolling
-    }
-  else
-    // more than a screenfull away? just redraw the whole lot
-    {
-    Invalidate ();
-#if REDRAW_DEBUG
-    RECT r;
-    GetClientRect (&r);
-    ShowInvalidatedRect (this, r);
-#endif
+  #if REDRAW_DEBUG
+      RECT r;
+      GetClientRect (&r);
+      ShowInvalidatedRect (this, r);
+  #endif
+      }
     }
 
 #if REDRAW_DEBUG

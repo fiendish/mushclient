@@ -98,7 +98,8 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
   CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, continuation, false, szProcedure);
   CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType, pluginCallback);
   LPCTSTR traceType = m_pDoc->m_CurrentPlugin && pluginCallback ? "plugin" : szType;
-  traceScope.Function (TFormat ("Executing %s script \"%s\"", traceType, szProcedure));
+  if (traceCalls)
+    traceScope.Function (TFormat ("Executing %s script \"%s\"", traceType, szProcedure));
   traceScriptGuard.BeginCallback ();
 
   //  Frame.SetStatusMessageNow (TFormat ("Executing %s subroutine \"%s\"", szType, szProcedure));
