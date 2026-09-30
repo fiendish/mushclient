@@ -109,6 +109,7 @@ int i;
   m_bWorldClosePending = false;
   m_iActiveProgressOperations = 0;
   m_bBufferedRepaintPending = false;
+  m_bBufferedRepaintFollowup = false;
   m_bBufferedRepaintTraceOnly = false;
   m_bInBufferedRepaint = false;
   m_bBufferedRepaintPaused = false;

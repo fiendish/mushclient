@@ -1228,6 +1228,7 @@ public:
   void RequestBufferedRepaint (double minInterval);
   void FlushBufferedRepaint (bool intervalOnly = false);
   bool m_bBufferedRepaintPending;
+  bool m_bBufferedRepaintFollowup;
   bool m_bBufferedRepaintTraceOnly;
   bool m_bInBufferedRepaint;
   bool m_bBufferedRepaintPaused;

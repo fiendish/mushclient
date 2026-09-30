@@ -655,6 +655,8 @@ void CMUSHclientDoc::RequestBufferedRepaint (const double minInterval)
   m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
     min (m_fBufferedRepaintInterval, minInterval) : minInterval;
   m_bBufferedRepaintPending = true;
+  if (!m_bInBufferedRepaint && m_iOutputPaintDepth == 0)
+    m_bBufferedRepaintFollowup = false;
   FlushBufferedRepaint (m_iActiveProgressOperations != 0);
 }
 
@@ -663,16 +665,16 @@ void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
   if (!m_bBufferedRepaintPending || m_bInBufferedRepaint || m_bBufferedRepaintPaused ||
       m_iOutputPaintDepth != 0 || m_bWorldClosePending || m_bWorldClosing)
     return;
-  if (intervalOnly &&
+  if ((intervalOnly || m_bBufferedRepaintFollowup) &&
       GetRepaintTime () - m_fLastRepaintTime < m_fBufferedRepaintInterval)
     return;
 
   CValueStateGuard<bool> repaintGuard (m_bInBufferedRepaint, true);
   CValueStateGuard<int> operationGuard
     (m_iActiveProgressOperations, m_iActiveProgressOperations + 1);
-  // Complete any further request after the current frame has reached the screen.
-  while (m_bBufferedRepaintPending && !m_bBufferedRepaintPaused &&
-         !m_bWorldClosePending && !m_bWorldClosing)
+  // Complete one follow-up frame, then leave further work for a later boundary.
+  for (int frames = 0; frames < 2 && m_bBufferedRepaintPending && !m_bBufferedRepaintPaused &&
+       !m_bWorldClosePending && !m_bWorldClosing; ++frames)
     {
     const bool traceOnly = m_bBufferedRepaintTraceOnly;
     const double minInterval = m_fBufferedRepaintInterval;
@@ -692,12 +694,14 @@ void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
       throw;
       }
     }
+  m_bBufferedRepaintFollowup = m_bBufferedRepaintPending;
 }
 
 void CMUSHclientDoc::Repaint() 
 {
   CWorldDocumentOperationGuard operationGuard (this);
   m_bBufferedRepaintPending = false;
+  m_bBufferedRepaintFollowup = false;
   UpdateAllViews (NULL);
 
   for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
