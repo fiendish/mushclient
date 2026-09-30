@@ -1004,6 +1004,8 @@ assemble the full text of the original line.
       }
 
     CPluginContextGuard contextGuard (this, pPlugin, false, false);
+    CValueStateGuard<size_t> traceParentGuard
+      (m_traceOutput.parent, deferred_it->iTraceParent);
     
     // if Lua, add style info to script space
     if (GetScriptEngine () && GetScriptEngine ()->L)
@@ -1062,6 +1064,8 @@ assemble the full text of the original line.
         trigger_item->nCreationNumber != trigger_it->iCreationNumber)
       continue;
 
+    CValueStateGuard<size_t> traceParentGuard
+      (m_traceOutput.parent, trigger_it->iTraceParent);
     ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
     }  // end of doing each trigger that had a script
 
@@ -1319,6 +1323,8 @@ __int64 iOutputGeneration = m_iOutputGeneration;
         Trace ("Matched trigger \"%s\"", (LPCTSTR) trigger_item->trigger);
       else
         Trace ("Matched trigger %s", (LPCTSTR) trigger_item->strLabel);
+      const size_t traceParent = m_traceOutput.MetadataParent
+        (m_CurrentPlugin ? (LPCTSTR) m_CurrentPlugin->m_strName : "", eTraceOther);
 
     // play the trigger sound, if we matched on a trigger
 
@@ -1368,7 +1374,7 @@ __int64 iOutputGeneration = m_iOutputGeneration;
         mapDeferredScripts.push_back (
             ScriptItem (m_CurrentPlugin, 
                         (const char *) strResponse, 
-                        (const char *) strScriptSource));
+                        (const char *) strScriptSource, traceParent));
         }
       else
         {
@@ -1684,7 +1690,7 @@ __int64 iOutputGeneration = m_iOutputGeneration;
          triggerList.push_back
            (OneShotItem (m_CurrentPlugin,
                          (const char *) trigger_item->strInternalName,
-                         trigger_item->nCreationNumber));
+                         trigger_item->nCreationNumber, traceParent));
 
       if (!trigger_item->bKeepEvaluating) // exit loop if no more evaluation wanted
         break;

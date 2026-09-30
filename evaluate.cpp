@@ -174,6 +174,8 @@ OneShotItemMap AliasList;
         alias_item->nCreationNumber != alias_it->iCreationNumber)
       continue;
 
+    CValueStateGuard<size_t> traceParentGuard
+      (m_traceOutput.parent, alias_it->iTraceParent);
     ExecuteAliasScript (alias_item, input);
     }       // end of list of aliass that fired
 
@@ -1150,6 +1152,8 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
       Trace ("Matched alias \"%s\"", (LPCTSTR) alias_item->name);
     else
       Trace ("Matched alias %s", (LPCTSTR) alias_item->strLabel);
+    const size_t traceParent = m_traceOutput.MetadataParent
+      (m_CurrentPlugin ? (LPCTSTR) m_CurrentPlugin->m_strName : "", eTraceOther);
   
     // get unlabelled alias's internal name
     const char * pLabel = strAliasLabel;
@@ -1184,7 +1188,7 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
     AliasList.push_back
       (OneShotItem (m_CurrentPlugin,
                     (const char *) alias_item->strInternalName,
-                    alias_item->nCreationNumber));
+                    alias_item->nCreationNumber, traceParent));
 
     CString strExtraOutput;
 

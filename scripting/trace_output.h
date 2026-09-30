@@ -23,6 +23,34 @@ struct CTraceOutput
   std::vector<Entry> entries;
   CTraceOutput () : events (0), parent (noParent) {}
 
+  std::vector<size_t> DisplayOrder () const
+    {
+    std::vector<size_t> firstChild (entries.size () + 1, static_cast<size_t> (noParent));
+    std::vector<size_t> nextSibling (entries.size (), static_cast<size_t> (noParent));
+    for (size_t i = entries.size (); i > 0; --i)
+      {
+      const size_t ancestor = entries [i - 1].parent == noParent ?
+        entries.size () : entries [i - 1].parent;
+      nextSibling [i - 1] = firstChild [ancestor];
+      firstChild [ancestor] = i - 1;
+      }
+    std::vector<size_t> order;
+    order.reserve (entries.size ());
+    for (size_t i = firstChild [entries.size ()]; i != noParent; )
+      {
+      order.push_back (i);
+      if (firstChild [i] != noParent)
+        i = firstChild [i];
+      else
+        {
+        while (nextSibling [i] == noParent && entries [i].parent != noParent)
+          i = entries [i].parent;
+        i = nextSibling [i];
+        }
+      }
+    return order;
+    }
+
   size_t MetadataParent (const std::string & plugin, unsigned int category) const
     {
     size_t ancestor = parent;

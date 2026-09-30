@@ -77,12 +77,17 @@ void CMUSHclientDoc::FlushTraceEvent ()
   CValueStateGuard<bool> groupGuard (m_bTraceGroupHasOutput, false);
   CValueStateGuard<bool> separatorGuard (m_bTraceGroupNeedsSeparator, false);
   CValueStateGuard<bool> queuedGuard (m_bTraceGroupOutputQueued, false);
-  size_t last = entries.size ();
-  while (last && entries [last - 1].message.empty ())
+  CTraceOutput display;
+  entries.swap (display.entries);
+  const vector<size_t> order = display.DisplayOrder ();
+  entries.swap (display.entries);
+  size_t last = order.size ();
+  while (last && entries [order [last - 1]].message.empty ())
     --last;
   vector<unsigned int> depths (entries.size (), 0);
-  for (size_t i = 0; i < last; ++i)
+  for (size_t position = 0; position < last; ++position)
     {
+    const size_t i = order [position];
     const CTraceOutput::Entry & entry = entries [i];
     if (entry.parent != CTraceOutput::noParent)
       depths [i] = depths [entry.parent] + (entries [entry.parent].message.empty () ? 0 : 1);
@@ -117,7 +122,7 @@ void CMUSHclientDoc::FlushTraceEvent ()
       strMsg += ENDLINE;
       }
     // The final message also separates this event in trace receivers that log it.
-    if (i + 1 == last && strMsg.Right (4) != "\r\n\r\n")
+    if (position + 1 == last && strMsg.Right (4) != "\r\n\r\n")
       strMsg += ENDLINE;
     if (!SendToFirstPluginCallbacks (ON_PLUGIN_TRACE, strMsg))
       {
@@ -176,7 +181,10 @@ CTraceScope::CTraceScope (CMUSHclientDoc * pDoc, unsigned int category,
   m_event (pDoc), m_pDoc (pDoc), m_previous (pDoc->m_traceOutput.parent),
   m_slot (CTraceOutput::noParent), m_caller (enabled ? pDoc->m_traceOutput.caller : ""),
   m_plugin (enabled && pDoc->m_CurrentPlugin ? string ((LPCTSTR) pDoc->m_CurrentPlugin->m_strName) : ""),
-  m_category (category), m_enabled (enabled), m_continuation (continuation)
+  m_category (category), m_iRedrawRequests (pDoc->m_iTraceRedrawRequests),
+  m_enabled (enabled), m_continuation (continuation),
+  m_deferredRepaint (pDoc->m_bTraceDeferredRepaint && procedure &&
+                     strcmp (procedure, "BufferedRepaint") == 0)
   {
   pDoc->m_traceOutput.caller.clear ();
   if (enabled)
@@ -218,6 +226,28 @@ void CTraceScope::FirstLuaCall (void * scope)
 
 CTraceScope::~CTraceScope ()
   {
+  // A deferred paint helper must not create another trace-driven paint request.
+  if (m_deferredRepaint && m_slot != CTraceOutput::noParent &&
+      m_pDoc->m_iTraceRedrawRequests != m_iRedrawRequests)
+    {
+    vector<CTraceOutput::Entry> & entries = m_pDoc->m_traceOutput.entries;
+    const string & message = entries [m_slot].message;
+    if (message.find ("Function: ") == 0 || message.find ("Executing ") == 0)
+      {
+      bool hasActivity = false;
+      for (size_t i = m_slot + 1; i < entries.size () && !hasActivity; ++i)
+        if (!entries [i].message.empty ())
+          for (size_t ancestor = entries [i].parent; ancestor != CTraceOutput::noParent;
+               ancestor = entries [ancestor].parent)
+            if (ancestor == m_slot)
+              {
+              hasActivity = true;
+              break;
+              }
+      if (!hasActivity)
+        entries [m_slot].message.clear ();
+      }
+    }
   m_pDoc->m_traceOutput.parent = m_previous;
   }
 
@@ -263,13 +293,13 @@ CTraceScriptGuard::CTraceScriptGuard (CMUSHclientDoc * pDoc,
                                     LPCTSTR procedure, LPCTSTR type) :
   m_pDoc (pDoc), m_pPlugin (pDoc->m_CurrentPlugin),
   m_bSavedRedraw (pDoc->m_bTraceOutputRedraw),
+  m_bSavedDeferredRepaint (pDoc->m_bTraceDeferredRepaint),
   m_iRedrawRequests (pDoc->m_iTraceRedrawRequests),
   m_iTraceOutputRequests (pDoc->m_iTraceOutputRedrawRequests),
   m_bDisplay (pDoc->GetScriptTraceCategory (procedure, type) == CMUSHclientDoc::eTraceDisplay)
   {
   if (!m_pPlugin)
     return;
-
   const bool traceOutput = pDoc->m_bInTrace || m_bSavedRedraw;
   const bool periodic = strcmp (type, "timer") == 0 ||
     (strncmp (type, "Plugin ", 7) == 0 && ON_PLUGIN_TICK == procedure);
@@ -278,9 +308,9 @@ CTraceScriptGuard::CTraceScriptGuard (CMUSHclientDoc * pDoc,
   else if (!periodic &&
            !(strncmp (type, "Plugin ", 7) == 0 && ON_PLUGIN_DRAW_OUTPUT_WINDOW == procedure))
     m_pPlugin->m_bTraceRedrawPending = false;
-
-  if (periodic && m_pPlugin->m_bTraceRedrawPending)
-    pDoc->m_bTraceOutputRedraw = true;
+  // Deferred origin applies to display requests, not ordinary timer activity.
+  pDoc->m_bTraceDeferredRepaint = m_bSavedDeferredRepaint ||
+    (periodic && m_pPlugin->m_bTraceRedrawPending);
   }
 
 void CTraceScriptGuard::BeginCallback ()
@@ -296,9 +326,9 @@ void CTraceScriptGuard::BeginCallback ()
 
 CTraceScriptGuard::~CTraceScriptGuard ()
   {
-  // A repaint consumes deferred work; an idle tick does not.
   if (m_pPlugin && m_pDoc->m_iTraceRedrawRequests != m_iRedrawRequests)
     m_pPlugin->m_bTraceRedrawPending = false;
+  m_pDoc->m_bTraceDeferredRepaint = m_bSavedDeferredRepaint;
   m_pDoc->m_bTraceOutputRedraw = m_bSavedRedraw;
   }
 

@@ -101,6 +101,7 @@ public:
   BOOL m_mousedover;
   bool m_bInSelectionChanged;
   bool m_bTraceRedrawPending;
+  bool m_bOrdinaryRedrawPending;
   int m_iMXPMenuAction;
   CMXPMenuItemList m_MXPMenuItems;
 

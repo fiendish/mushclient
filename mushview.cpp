@@ -313,6 +313,7 @@ CMUSHView::CMUSHView()
   m_mousedover = false;
   m_bInSelectionChanged = false;
   m_bTraceRedrawPending = false;
+  m_bOrdinaryRedrawPending = false;
   m_iMXPMenuAction = 0;
   m_bottomview = NULL;
 
@@ -899,13 +900,14 @@ void CMUSHView::OnUpdate(CView* pSender, LPARAM lHint, CObject* pHint)
 
   // Invalidation must preserve the trace origin of an already pending paint.
   // Ordinary output clears that origin in addedstuff.
-  m_bTraceRedrawPending = m_bTraceRedrawPending || pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw;
+  m_bTraceRedrawPending = !m_bOrdinaryRedrawPending &&
+    (m_bTraceRedrawPending || pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw || pDoc->m_bTraceDeferredRepaint);
   if (pDoc->m_bBufferedRepaintPending && !m_bTraceRedrawPending)
     pDoc->m_bBufferedRepaintTraceOnly = false;
 
   if (pDoc->m_bInTrace)
     pDoc->m_iTraceOutputRedrawRequests++;
-  else if (pDoc->m_bTraceOutputRedraw)
+  else if (pDoc->m_bTraceOutputRedraw || pDoc->m_bTraceDeferredRepaint)
     pDoc->m_iTraceRedrawRequests++;
 
   CView::OnUpdate(pSender, lHint, pHint);
@@ -1098,8 +1100,10 @@ RECT r;
 
   // Trace output schedules a repaint, but the display callback still runs.
   {
-  const bool traceRedraw = m_bTraceRedrawPending || pDoc->m_bTraceOutputRedraw;
+  const bool traceRedraw = !m_bOrdinaryRedrawPending &&
+    (m_bTraceRedrawPending || pDoc->m_bTraceOutputRedraw);
   m_bTraceRedrawPending = false;
+  m_bOrdinaryRedrawPending = false;
   CValueStateGuard<bool> traceRedrawGuard (pDoc->m_bTraceOutputRedraw, traceRedraw);
   pDoc->SendToAllPluginCallbacks (ON_PLUGIN_DRAW_OUTPUT_WINDOW,
                                   startline + 1, pt.y - pDoc->m_iPixelOffset,
@@ -1845,7 +1849,9 @@ CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
 
   // Ordinary output starts a new display event; trace output does not.
-  m_bTraceRedrawPending = pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw;
+  const bool traceOutput = pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw;
+  m_bOrdinaryRedrawPending = m_bOrdinaryRedrawPending || !traceOutput;
+  m_bTraceRedrawPending = traceOutput && !m_bOrdinaryRedrawPending;
   if (pDoc->m_bBufferedRepaintPending && !m_bTraceRedrawPending)
     pDoc->m_bBufferedRepaintTraceOnly = false;
   if (pDoc->m_bInTrace)

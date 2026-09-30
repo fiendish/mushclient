@@ -21,6 +21,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
 
 // so we can see when it is likely to fire next 
 
+  timer_item->bTraceOutputRedraw = m_bInTrace || m_bTraceOutputRedraw;
   timer_item->tWhenFired = tNow;
 
 // for timers that go off "at" a time, find today's date, and move the time in
@@ -88,6 +89,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
   if (m_bWorldClosePending)
     return;
 
+  CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
   CWorldDocumentOperationGuard operationGuard (this);
 
   map <string, __int64> firedTimersList;
@@ -145,8 +147,9 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     if (timer_item->tFireTime > tNow)
       continue;
 
+    CValueStateGuard<bool> timerOriginGuard
+      (m_bTraceOutputRedraw, m_bInTrace || m_bTraceOutputRedraw || timer_item->bTraceOutputRedraw);
     CTraceEventGuard traceEvent (this, true);
-    CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
     const unsigned int traceCategory = GetTimerTraceCategory (*timer_item);
     CValueStateGuard<unsigned int> timerTraceGuard (m_iTimerTraceCategory, traceCategory);
     CString strTimerLabel = timer_item->strLabel;
@@ -217,6 +220,9 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
 
     if (timer_item->tFireTime <= tNow)
       ResetOneTimer (timer_item);
+
+    // Only the scheduled firing inherits trace output; later repetitions do not.
+    timer_item->bTraceOutputRedraw = false;
 
     // if one-shot, disable it, so if the timer routine finds it again while
     // it is still executing (eg. due to a syntax error dialog box) then

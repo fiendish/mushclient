@@ -35,6 +35,7 @@ int i;
   m_bInTrace = false;
   m_bTraceGroupHasOutput = m_bTraceGroupNeedsSeparator = m_bTraceGroupOutputQueued = false;
   m_bTraceOutputRedraw = false;
+  m_bTraceDeferredRepaint = false;
   m_iTraceRedrawRequests = 0;
   m_iTraceOutputRedrawRequests = 0;
 
@@ -111,6 +112,7 @@ int i;
   m_bBufferedRepaintPending = false;
   m_bBufferedRepaintFollowup = false;
   m_bBufferedRepaintTraceOnly = false;
+  m_bBufferedRepaintOrdinaryRequest = false;
   m_bInBufferedRepaint = false;
   m_bBufferedRepaintPaused = false;
   m_iOutputPaintDepth = 0;

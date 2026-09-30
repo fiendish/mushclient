@@ -645,13 +645,16 @@ void CMUSHclientDoc::SetBufferedRepaintPaused (const BOOL Paused)
 
 void CMUSHclientDoc::RequestBufferedRepaint (const double minInterval)
 {
-  const bool traceOnly = m_bInTrace || m_bTraceOutputRedraw;
+  const bool traceOnly = m_bInTrace || m_bTraceOutputRedraw || m_bTraceDeferredRepaint;
   if (m_bInTrace)
     ++m_iTraceOutputRedrawRequests;
-  else if (m_bTraceOutputRedraw)
+  else if (m_bTraceOutputRedraw || m_bTraceDeferredRepaint)
     ++m_iTraceRedrawRequests;
   m_bBufferedRepaintTraceOnly = m_bBufferedRepaintPending ?
     m_bBufferedRepaintTraceOnly && traceOnly : traceOnly;
+  m_bBufferedRepaintOrdinaryRequest =
+    (m_bBufferedRepaintPending && m_bBufferedRepaintOrdinaryRequest) ||
+    (!traceOnly && m_iOutputPaintDepth == 0);
   m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
     min (m_fBufferedRepaintInterval, minInterval) : minInterval;
   m_bBufferedRepaintPending = true;
@@ -662,7 +665,7 @@ void CMUSHclientDoc::RequestBufferedRepaint (const double minInterval)
 
 void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
 {
-  if (!m_bBufferedRepaintPending || m_bInBufferedRepaint || m_bBufferedRepaintPaused ||
+  if (!m_bBufferedRepaintPending || m_bInBufferedRepaint || m_bInTrace || m_bBufferedRepaintPaused ||
       m_iOutputPaintDepth != 0 || m_bWorldClosePending || m_bWorldClosing)
     return;
   if ((intervalOnly || m_bBufferedRepaintFollowup) &&
@@ -677,9 +680,11 @@ void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
        !m_bWorldClosePending && !m_bWorldClosing; ++frames)
     {
     const bool traceOnly = m_bBufferedRepaintTraceOnly;
+    const bool ordinaryRequest = m_bBufferedRepaintOrdinaryRequest;
     const double minInterval = m_fBufferedRepaintInterval;
     m_bBufferedRepaintPending = false;
     CValueStateGuard<bool> traceGuard (m_bTraceOutputRedraw, traceOnly);
+    CValueStateGuard<bool> deferredOriginGuard (m_bTraceDeferredRepaint, false);
     try
       {
       Repaint ();
@@ -690,6 +695,7 @@ void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
         m_bBufferedRepaintTraceOnly && traceOnly : traceOnly;
       m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
         min (m_fBufferedRepaintInterval, minInterval) : minInterval;
+      m_bBufferedRepaintOrdinaryRequest = m_bBufferedRepaintOrdinaryRequest || ordinaryRequest;
       m_bBufferedRepaintPending = true;
       throw;
       }
@@ -700,8 +706,21 @@ void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
 void CMUSHclientDoc::Repaint() 
 {
   CWorldDocumentOperationGuard operationGuard (this);
+  CValueStateGuard<bool> traceOriginGuard
+    (m_bTraceOutputRedraw, m_bTraceOutputRedraw || (m_bTraceDeferredRepaint && !m_bInBufferedRepaint));
+  // Draw callbacks cannot turn their own trace output into an ordinary frame.
+  const bool ordinaryRepaint = !m_bInTrace && !m_bTraceOutputRedraw &&
+    (!m_bInBufferedRepaint || m_bBufferedRepaintOrdinaryRequest);
   m_bBufferedRepaintPending = false;
   m_bBufferedRepaintFollowup = false;
+  m_bBufferedRepaintOrdinaryRequest = false;
+  if (ordinaryRepaint)
+    for (POSITION pos = GetFirstViewPosition(); pos != NULL; )
+      {
+      CView * pView = GetNextView (pos);
+      if (pView->IsKindOf (RUNTIME_CLASS (CMUSHView)))
+        static_cast<CMUSHView *> (pView)->m_bOrdinaryRedrawPending = true;
+      }
   UpdateAllViews (NULL);
 
   for(POSITION pos = GetFirstViewPosition(); pos != NULL; )

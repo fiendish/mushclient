@@ -524,17 +524,19 @@ class ScriptItem
   // constructor
   ScriptItem (CPlugin * pPlugin,
               const string sText, 
-              const string sSource) :
+              const string sSource,
+              const size_t traceParent = CTraceOutput::noParent) :
         sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
         iPluginInstanceNumber
           (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
         sScriptText   (sText), 
-        sScriptSource (sSource) {};
+        sScriptSource (sSource), iTraceParent (traceParent) {};
 
   const string sPluginID;        // which plugin, or empty for the world
   const __int64 iPluginInstanceNumber;
   const string sScriptText;      // the script to execute
   const string sScriptSource;    // what it is, eg. "Trigger X"
+  const size_t iTraceParent;     // match heading for the deferred callback
   };
 
 typedef list<ScriptItem> ScriptItemMap;
@@ -546,17 +548,19 @@ class OneShotItem
   // constructor
   OneShotItem (CPlugin * pPlugin,
               const string sKey,
-              const __int64 iCreationNumber) :
+              const __int64 iCreationNumber,
+              const size_t traceParent = CTraceOutput::noParent) :
         sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
         iPluginInstanceNumber
           (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
         sItemKey   (sKey),
-        iCreationNumber (iCreationNumber) {};
+        iCreationNumber (iCreationNumber), iTraceParent (traceParent) {};
 
   const string sPluginID;     // which plugin, or empty for the world
   const __int64 iPluginInstanceNumber;
   const string sItemKey;      // the key to delete
   const __int64 iCreationNumber; // exact object instance that fired
+  const size_t iTraceParent;     // match heading for the deferred callback
   };
 
 typedef list<OneShotItem> OneShotItemMap;
@@ -1230,6 +1234,7 @@ public:
   bool m_bBufferedRepaintPending;
   bool m_bBufferedRepaintFollowup;
   bool m_bBufferedRepaintTraceOnly;
+  bool m_bBufferedRepaintOrdinaryRequest;
   bool m_bInBufferedRepaint;
   bool m_bBufferedRepaintPaused;
   int m_iOutputPaintDepth;
@@ -1324,6 +1329,7 @@ public:
   CTraceOutput m_traceOutput;
   bool m_bTraceGroupHasOutput, m_bTraceGroupNeedsSeparator, m_bTraceGroupOutputQueued;
   bool m_bTraceOutputRedraw;
+  bool m_bTraceDeferredRepaint;
   unsigned int m_iTraceRedrawRequests;
   unsigned int m_iTraceOutputRedrawRequests;
   bool m_bInSendToScript;
@@ -3262,13 +3268,13 @@ class CTraceScope
     CMUSHclientDoc * m_pDoc;
     size_t m_previous, m_slot;
     std::string m_caller, m_plugin;
-    unsigned int m_category;
-    bool m_enabled, m_continuation;
+    unsigned int m_category, m_iRedrawRequests;
+    bool m_enabled, m_continuation, m_deferredRepaint;
     CTraceScope (const CTraceScope &);
     CTraceScope & operator= (const CTraceScope &);
   };
 
-// Carry trace display work through deferred plugin callbacks.
+// Keep trace display origin within the current callback.
 class CTraceScriptGuard
   {
   public:
@@ -3279,7 +3285,7 @@ class CTraceScriptGuard
   private:
     CMUSHclientDoc * m_pDoc;
     CPlugin * m_pPlugin;
-    bool m_bSavedRedraw;
+    bool m_bSavedRedraw, m_bSavedDeferredRepaint;
     unsigned int m_iRedrawRequests;
     unsigned int m_iTraceOutputRequests;
     bool m_bDisplay;
