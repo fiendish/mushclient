@@ -5721,7 +5721,7 @@ void CMUSHclientDoc::EndProgressOperation ()
 {
   ASSERT (m_iActiveProgressOperations > 0);
   --m_iActiveProgressOperations;
-  if (!std::uncaught_exception ())
+  if (std::uncaught_exceptions () == 0)
     FlushBufferedRepaint (m_iActiveProgressOperations != 0);
 }
 

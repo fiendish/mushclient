@@ -58,7 +58,7 @@ void CMUSHclientDoc::EndTraceEvent ()
   ASSERT (m_traceOutput.events > 0);
   if (--m_traceOutput.events == 0)
     {
-    if (std::uncaught_exception ())
+    if (std::uncaught_exceptions () != 0)
       m_traceOutput.entries.clear ();
     else
       FlushTraceEvent ();
