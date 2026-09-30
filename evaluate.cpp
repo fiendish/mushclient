@@ -18,6 +18,7 @@ BOOL CMUSHclientDoc::EvaluateCommand (const CString & full_input,
                                             bool & bOmitFromLog,
                                             const bool bTest)
   {
+  CTraceEventGuard traceEvent (this);
 CString str;
 CString input = full_input;
 OneShotItemMap AliasList;

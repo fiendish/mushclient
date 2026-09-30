@@ -6,6 +6,7 @@
 #include "..\..\MUSHclient.h"
 #include "..\..\doc.h"
 #include "..\errors.h"
+#include "..\lua_call_trace.h"
 
 // Implements:
 
@@ -422,6 +423,8 @@ CPlugin * pPlugin = GetPlugin (PluginID);
 
 long nInvocationCount = 0;
 
+  const string traceCaller = m_CurrentPlugin ? string ((LPCTSTR) m_CurrentPlugin->m_strName) : "";
+  CValueStateGuard<string> callerGuard (m_traceOutput.caller, traceCaller);
   CPluginContextGuard contextGuard (this, pPlugin, true);
 
   CString strType = TFormat ("Plugin %s", (LPCTSTR) pPlugin->m_strName); 
@@ -582,6 +585,12 @@ long CMUSHclientDoc::BroadcastPlugin(long Message, LPCTSTR Text)
 {
   CWorldDocumentOperationGuard operationGuard (this);
   CPlugin * pSavedPlugin = m_CurrentPlugin;
+  const bool traceCalls = m_bTrace && !m_bInTrace && !m_bTraceOutputRedraw &&
+    (m_iTraceCategories & eTraceOther);
+  CTraceScope traceScope (this, eTraceOther, traceCalls);
+  if (traceCalls)
+    traceScope.Function (TFormat ("BroadcastPlugin(%ld, %s)", Message,
+      LuaTraceString (Text, strlen (Text)).c_str ()));
   long iCount = 0;
 
   CString strCurrentID;

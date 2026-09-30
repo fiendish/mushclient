@@ -16,6 +16,7 @@
 #include "plugins.h"
 #include "version.h"
 #include "output_line_buffer.h"
+#include "scripting/trace_output.h"
 
 #define COMPRESS_BUFFER_LENGTH 10000   // size of decompression buffer
 extern CString MUSHCLIENT_VERSION;
@@ -1227,6 +1228,7 @@ public:
   void RequestBufferedRepaint (double minInterval);
   void FlushBufferedRepaint (bool intervalOnly = false);
   bool m_bBufferedRepaintPending;
+  bool m_bBufferedRepaintTraceOnly;
   bool m_bInBufferedRepaint;
   bool m_bBufferedRepaintPaused;
   int m_iOutputPaintDepth;
@@ -1315,6 +1317,14 @@ public:
   bool m_bSyntaxErrorOnly;
   bool m_bDisconnectOK;
   bool m_bTrace;
+  unsigned int m_iTraceCategories;
+  unsigned int m_iTimerTraceCategory;
+  bool m_bInTrace;
+  CTraceOutput m_traceOutput;
+  bool m_bTraceGroupHasOutput, m_bTraceGroupNeedsSeparator, m_bTraceGroupOutputQueued;
+  bool m_bTraceOutputRedraw;
+  unsigned int m_iTraceRedrawRequests;
+  unsigned int m_iTraceOutputRedrawRequests;
   bool m_bInSendToScript;
   LONGLONG m_iScriptTimeTaken;        // time taken to execute scripts
 
@@ -2234,7 +2244,23 @@ public:
   long DoSetVariable (LPCTSTR VariableName, LPCTSTR Contents)
     { return SetVariable (VariableName, Contents); };
 
+  enum TraceCategory
+    {
+    eTraceIdleTicks = 1,
+    eTraceDisplay = 2,
+    eTraceOther = 4,
+    eTraceRepeatingTimers = 8,
+    eTraceAll = eTraceIdleTicks | eTraceDisplay | eTraceOther | eTraceRepeatingTimers
+    };
+
   void Trace (LPCTSTR lpszFormat, ...);
+  void TraceForCategory (const unsigned int category, const CString & message, const bool continuation = false);
+  void BeginTraceEvent ();
+  void EndTraceEvent ();
+  void FlushTraceEvent ();
+  unsigned int GetTimerTraceCategory (const CTimer & timer) const;
+  unsigned int GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR type) const;
+  void TraceScript (LPCTSTR procedure, LPCTSTR type);
 
   void Screendraw  (const long iType,
                     const long iLog,
@@ -2485,6 +2511,8 @@ protected:
 	afx_msg void OnUpdateFileReloaddefaults(CCmdUI* pCmdUI);
 	afx_msg void OnGameTrace();
 	afx_msg void OnUpdateGameTrace(CCmdUI* pCmdUI);
+  afx_msg void OnGameTraceCategory(UINT id);
+  afx_msg void OnUpdateGameTraceCategory(CCmdUI* pCmdUI);
 	afx_msg void OnEditFliptonotepad();
 	afx_msg void OnFileOpen();
 	afx_msg void OnFileSave();
@@ -3203,6 +3231,60 @@ class timer
 
       }
   };    // end of class timer
+
+// Keep one native event together without tracing ordinary Lua helper calls.
+class CTraceEventGuard
+  {
+  public:
+    explicit CTraceEventGuard (CMUSHclientDoc * pDoc, bool independent = false);
+    ~CTraceEventGuard () noexcept(false);
+  private:
+    CMUSHclientDoc * m_pDoc;
+    bool m_independent;
+    CTraceOutput m_saved;
+    CTraceEventGuard (const CTraceEventGuard &);
+    CTraceEventGuard & operator= (const CTraceEventGuard &);
+  };
+
+class CTraceScope
+  {
+  public:
+    CTraceScope (CMUSHclientDoc * pDoc, unsigned int category, bool enabled,
+                 bool continuation = false, bool deferred = false,
+                 LPCTSTR procedure = NULL);
+    ~CTraceScope ();
+    void StartFunction ();
+    static void FirstLuaCall (void * scope);
+    void Function (const CString & message);
+  private:
+    CTraceEventGuard m_event;
+    CMUSHclientDoc * m_pDoc;
+    size_t m_previous, m_slot;
+    std::string m_caller, m_plugin;
+    unsigned int m_category;
+    bool m_enabled, m_continuation;
+    CTraceScope (const CTraceScope &);
+    CTraceScope & operator= (const CTraceScope &);
+  };
+
+// Carry trace display work through deferred plugin callbacks.
+class CTraceScriptGuard
+  {
+  public:
+    CTraceScriptGuard (CMUSHclientDoc * pDoc, LPCTSTR procedure, LPCTSTR type);
+    ~CTraceScriptGuard ();
+    void BeginCallback ();
+
+  private:
+    CMUSHclientDoc * m_pDoc;
+    CPlugin * m_pPlugin;
+    bool m_bSavedRedraw;
+    unsigned int m_iRedrawRequests;
+    unsigned int m_iTraceOutputRequests;
+    bool m_bDisplay;
+    CTraceScriptGuard (const CTraceScriptGuard &);
+    CTraceScriptGuard & operator= (const CTraceScriptGuard &);
+  };
 
 // Retain a world until a synchronous operation and its callbacks unwind.
 class CWorldDocumentOperationGuard

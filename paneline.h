@@ -51,16 +51,17 @@ class CPaneStyle
   COLORREF  m_cText;    // text colour
   COLORREF  m_cBack;    // background colour
   int       m_iStyle;   // bold/italic/underline - see define above
+  bool      m_bTraceOutput; // preserve the origin of queued trace notes
 
   // constructor
   CPaneStyle (const string sText,
           const COLORREF & cText = RGB_BLACK,
           const COLORREF & cBack = RGB_BLACK,
-          const int iStyle = NORMAL) :
+          const int iStyle = NORMAL, const bool traceOutput = false) :
             m_sText (sText), 
             m_cText (cText), 
             m_cBack (cBack), 
-            m_iStyle (iStyle)
+            m_iStyle (iStyle), m_bTraceOutput (traceOutput)
            {};
 
   // copy constructor
@@ -68,7 +69,7 @@ class CPaneStyle
             m_sText (s.m_sText), 
             m_cText (s.m_cText), 
             m_cBack (s.m_cBack), 
-            m_iStyle (s.m_iStyle)
+            m_iStyle (s.m_iStyle), m_bTraceOutput (s.m_bTraceOutput)
            {};
 
   // operator =
@@ -77,7 +78,8 @@ class CPaneStyle
     m_sText =   rhs.m_sText;  
     m_cText =   rhs.m_cText;  
     m_cBack =   rhs.m_cBack;  
-    m_iStyle =  rhs.m_iStyle; 
+    m_iStyle =  rhs.m_iStyle;
+    m_bTraceOutput = rhs.m_bTraceOutput;
     return *this;
     };  // end of operator =
 

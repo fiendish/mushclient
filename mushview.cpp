@@ -312,6 +312,7 @@ CMUSHView::CMUSHView()
   m_scroll_position = 0;
   m_mousedover = false;
   m_bInSelectionChanged = false;
+  m_bTraceRedrawPending = false;
   m_iMXPMenuAction = 0;
   m_bottomview = NULL;
 
@@ -891,6 +892,26 @@ void CMUSHView::DrawImage (CDC* pDC, CBitmap & bitmap, const short iMode)
 
   } // end of CMUSHView::DrawImage
 
+void CMUSHView::OnUpdate(CView* pSender, LPARAM lHint, CObject* pHint)
+{
+  CMUSHclientDoc* pDoc = GetDocument();
+  ASSERT_VALID(pDoc);
+
+  // Invalidation must preserve the trace origin of an already pending paint.
+  // Ordinary output clears that origin in addedstuff.
+  m_bTraceRedrawPending = m_bTraceRedrawPending || pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw;
+  if (pDoc->m_bBufferedRepaintPending && !m_bTraceRedrawPending)
+    pDoc->m_bBufferedRepaintTraceOnly = false;
+
+  if (pDoc->m_bInTrace)
+    pDoc->m_iTraceOutputRedrawRequests++;
+  else if (pDoc->m_bTraceOutputRedraw)
+    pDoc->m_iTraceRedrawRequests++;
+
+  CView::OnUpdate(pSender, lHint, pHint);
+}
+
+
 void CMUSHView::OnDraw(CDC* dc)
 {
 CMUSHclientDoc* pDoc = GetDocument();
@@ -1075,10 +1096,15 @@ RECT r;
   if (startline > lastline)
     startline = lastline - 20;
 
-  // give the user a chance to update miniwindows to match text in the output window
+  // Trace output schedules a repaint, but the display callback still runs.
+  {
+  const bool traceRedraw = m_bTraceRedrawPending || pDoc->m_bTraceOutputRedraw;
+  m_bTraceRedrawPending = false;
+  CValueStateGuard<bool> traceRedrawGuard (pDoc->m_bTraceOutputRedraw, traceRedraw);
   pDoc->SendToAllPluginCallbacks (ON_PLUGIN_DRAW_OUTPUT_WINDOW,
                                   startline + 1, pt.y - pDoc->m_iPixelOffset,
                                   "", false, false);
+  }
 
 POSITION pos = pDoc->GetLinePosition (startline);
 unsigned short style = 0;    // background (bleed) style
@@ -1817,6 +1843,15 @@ void CMUSHView::addedstuff (void)
   {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
+
+  // Ordinary output starts a new display event; trace output does not.
+  m_bTraceRedrawPending = pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw;
+  if (pDoc->m_bBufferedRepaintPending && !m_bTraceRedrawPending)
+    pDoc->m_bBufferedRepaintTraceOnly = false;
+  if (pDoc->m_bInTrace)
+    pDoc->m_iTraceOutputRedrawRequests++;
+  else if (pDoc->m_bTraceOutputRedraw)
+    pDoc->m_iTraceRedrawRequests++;
 
 // find page size
 

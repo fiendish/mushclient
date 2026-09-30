@@ -171,6 +171,8 @@ BEGIN_MESSAGE_MAP(CMUSHclientDoc, CDocument)
 	ON_UPDATE_COMMAND_UI(ID_FILE_RELOADDEFAULTS, OnUpdateFileReloaddefaults)
 	ON_COMMAND(ID_GAME_TRACE, OnGameTrace)
 	ON_UPDATE_COMMAND_UI(ID_GAME_TRACE, OnUpdateGameTrace)
+  ON_COMMAND_RANGE(ID_GAME_TRACE_IDLE_TICKS, ID_GAME_TRACE_REPEATING_TIMERS, OnGameTraceCategory)
+  ON_UPDATE_COMMAND_UI_RANGE(ID_GAME_TRACE_IDLE_TICKS, ID_GAME_TRACE_REPEATING_TIMERS, OnUpdateGameTraceCategory)
 	ON_COMMAND(ID_EDIT_FLIPTONOTEPAD, OnEditFliptonotepad)
 	ON_COMMAND(ID_FILE_OPEN, OnFileOpen)
 	ON_COMMAND(ID_FILE_SAVE, OnFileSave)
@@ -714,6 +716,8 @@ void CMUSHclientDoc::OutputOutstandingLines (void)
       m_iNoteColourFore = style.m_cText;
       m_iNoteColourBack = style.m_cBack;
       m_iNoteStyle = style.m_iStyle;
+      CValueStateGuard<bool> traceOriginGuard
+        (m_bTraceOutputRedraw, m_bTraceOutputRedraw || style.m_bTraceOutput);
       Tell (style.m_sText.c_str ());
       outstandingLines.pop_front ();
       }
@@ -2796,6 +2800,14 @@ CString strLine (lpszText, size);
   // cannot go very far without this - must be called at world loadup from a plugin OnPluginInstall
   if (m_pLinePositions == NULL)
     return;
+
+  if (m_bInTrace && (flags & COMMENT) && size > 0)
+    {
+    m_bTraceGroupHasOutput = true;
+    m_bTraceGroupOutputQueued = false;
+    m_bTraceGroupNeedsSeparator = size < 4 ||
+      memcmp (lpszText + size - 4, "\r\n\r\n", 4) != 0;
+    }
 
   // decompressed data has a size, not a null terminator.
   // Also, compressed data may have imbedded nulls.
@@ -9636,7 +9648,7 @@ void CMUSHclientDoc::OnGameTrace()
 
   if (m_bTrace)
     {
-    Trace ("Trace off");
+    TraceForCategory (eTraceAll, "Trace off");
     m_bTrace = false;
     }
   else
@@ -9645,7 +9657,7 @@ void CMUSHclientDoc::OnGameTrace()
     if (m_pCurrentLine && m_pCurrentLine->len > 0)
        StartNewLine (true, m_pCurrentLine->flags);
     m_bTrace = true;
-    Trace ("Trace on");
+    TraceForCategory (eTraceAll, "Trace on");
     }
 
 	
@@ -9655,8 +9667,22 @@ void CMUSHclientDoc::OnUpdateGameTrace(CCmdUI* pCmdUI)
 {	
   DoFixMenus (pCmdUI);  // remove accelerators from menus
   pCmdUI->Enable ();
-  pCmdUI->SetCheck (m_bTrace);
+  if (!pCmdUI->m_pSubMenu)
+    pCmdUI->SetCheck (m_bTrace);
 }   // end of CMUSHclientDoc::OnUpdateGameTrace
+
+void CMUSHclientDoc::OnGameTraceCategory(UINT id)
+{
+  const unsigned int category = 1U << (id - ID_GAME_TRACE_IDLE_TICKS);
+  m_iTraceCategories ^= category;
+}
+
+void CMUSHclientDoc::OnUpdateGameTraceCategory(CCmdUI* pCmdUI)
+{
+  const unsigned int category = 1U << (pCmdUI->m_nID - ID_GAME_TRACE_IDLE_TICKS);
+  pCmdUI->Enable ();
+  pCmdUI->SetCheck ((m_iTraceCategories & category) != 0);
+}
 
 
 // sorting for miniwindow z-order

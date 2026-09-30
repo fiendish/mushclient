@@ -645,6 +645,13 @@ void CMUSHclientDoc::SetBufferedRepaintPaused (const BOOL Paused)
 
 void CMUSHclientDoc::RequestBufferedRepaint (const double minInterval)
 {
+  const bool traceOnly = m_bInTrace || m_bTraceOutputRedraw;
+  if (m_bInTrace)
+    ++m_iTraceOutputRedrawRequests;
+  else if (m_bTraceOutputRedraw)
+    ++m_iTraceRedrawRequests;
+  m_bBufferedRepaintTraceOnly = m_bBufferedRepaintPending ?
+    m_bBufferedRepaintTraceOnly && traceOnly : traceOnly;
   m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
     min (m_fBufferedRepaintInterval, minInterval) : minInterval;
   m_bBufferedRepaintPending = true;
@@ -667,14 +674,18 @@ void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
   while (m_bBufferedRepaintPending && !m_bBufferedRepaintPaused &&
          !m_bWorldClosePending && !m_bWorldClosing)
     {
+    const bool traceOnly = m_bBufferedRepaintTraceOnly;
     const double minInterval = m_fBufferedRepaintInterval;
     m_bBufferedRepaintPending = false;
+    CValueStateGuard<bool> traceGuard (m_bTraceOutputRedraw, traceOnly);
     try
       {
       Repaint ();
       }
     catch (...)
       {
+      m_bBufferedRepaintTraceOnly = m_bBufferedRepaintPending ?
+        m_bBufferedRepaintTraceOnly && traceOnly : traceOnly;
       m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
         min (m_fBufferedRepaintInterval, minInterval) : minInterval;
       m_bBufferedRepaintPending = true;
@@ -824,6 +835,8 @@ CMUSHView * pScrollView = GetOutputView ();
         if (pt.y > highest)
           pt.y = highest;
 
+        // Clamping can leave the requested position unchanged.
+        will_scroll = pt.x != cur_pt.x || pt.y != cur_pt.y;
         pmyView->ScrollToPosition (pt, false);
       }
 

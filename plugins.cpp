@@ -177,6 +177,7 @@ CPlugin::CPlugin (CMUSHclientDoc * pDoc)
   m_iScriptTimeTaken = 0;
   m_bSavingStateNow = false;
   m_iActiveScriptCalls = 0;
+  m_bTraceRedrawPending = false;
   m_iSequence = DEFAULT_PLUGIN_SEQUENCE;
 
   } // end of constructor
@@ -1706,6 +1707,7 @@ bool CMUSHclientDoc::EndPluginListChangedDeferral (void)
 void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arguments
   {
   CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1735,6 +1737,7 @@ void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arg
 bool CMUSHclientDoc::SendToFirstPluginCallbacks (const string & sName, const char * sText)   // one argument
   {
   CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1775,6 +1778,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
   {
   bool bResult = true;    // assume they OK'd something
   CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1812,6 +1816,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
 void CMUSHclientDoc::SendToAllPluginCallbacksRtn (const string & sName, CString & strResult)  // taking and returning a string
   {
   CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1846,6 +1851,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnFalse)
   {
   CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1896,6 +1902,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnFalse)
   {
   CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);

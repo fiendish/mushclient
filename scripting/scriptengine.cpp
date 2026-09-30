@@ -90,10 +90,16 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
                 finish;
   SCRIPTSTATE ss;
 
-  // do not trace OnPluginDrawOutputWindow or OnPluginTick because they can spam the output window
-  if (ON_PLUGIN_DRAW_OUTPUT_WINDOW != szProcedure &&
-      ON_PLUGIN_TICK != szProcedure)
-    m_pDoc->Trace (TFormat ("Executing %s script \"%s\"", szType, szProcedure));
+  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType);
+  const bool traceCalls = m_pDoc->m_bTrace && !m_pDoc->m_bInTrace &&
+    !m_pDoc->m_bTraceOutputRedraw && (m_pDoc->m_iTraceCategories & traceCategory);
+  const bool continuation = strcmp (szType, "alias") == 0 ||
+    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0;
+  CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, continuation, false, szProcedure);
+  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType);
+  LPCTSTR traceType = m_pDoc->m_CurrentPlugin && strncmp (szType, "Plugin ", 7) == 0 ? "plugin" : szType;
+  traceScope.Function (TFormat ("Executing %s script \"%s\"", traceType, szProcedure));
+  traceScriptGuard.BeginCallback ();
 
   //  Frame.SetStatusMessageNow (TFormat ("Executing %s subroutine \"%s\"", szType, szProcedure));
 

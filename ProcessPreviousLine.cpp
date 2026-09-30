@@ -182,6 +182,7 @@ static vector<CLine *> ResolveTriggerLines (
 
 bool CMUSHclientDoc::ProcessPreviousLine (void)
   {
+  CTraceEventGuard traceEvent (this);
 POSITION pos, 
          prevpos = NULL;
 int flags = NOTE_OR_COMMAND;

@@ -145,7 +145,10 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     if (timer_item->tFireTime > tNow)
       continue;
 
+    CTraceEventGuard traceEvent (this, true);
     CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
+    const unsigned int traceCategory = GetTimerTraceCategory (*timer_item);
+    CValueStateGuard<unsigned int> timerTraceGuard (m_iTimerTraceCategory, traceCategory);
     CString strTimerLabel = timer_item->strLabel;
     if (strTimerLabel.IsEmpty ())
       strTimerLabel = strTimerName;
@@ -162,10 +165,40 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
 
 //    TRACE1 ("Fired at = %10.8f\n", timer_item->tWhenFired.m_dt);
 
-    if (timer_item->strLabel.IsEmpty ())
-      Trace ("Fired unlabelled timer ");
-    else
-      Trace ("Fired timer %s", (LPCTSTR) timer_item->strLabel);
+    if (m_bTrace && !m_bInTrace && (m_iTraceCategories & traceCategory))
+      {
+      CString schedule;
+      if (timer_item->iType == CTimer::eAtTime)
+        schedule = TFormat ("%s at %02i:%02i:%07.4f",
+                            timer_item->bOneShot ? "one-shot" : "daily",
+                            timer_item->iAtHour, timer_item->iAtMinute,
+                            timer_item->fAtSecond);
+      else
+        {
+        const double interval = timer_item->iEveryHour * 3600.0 +
+                                timer_item->iEveryMinute * 60.0 +
+                                timer_item->fEverySecond;
+        const double offset = timer_item->iOffsetHour * 3600.0 +
+                              timer_item->iOffsetMinute * 60.0 +
+                              timer_item->fOffsetSecond;
+        const double delay = timer_item->bOneShot ? interval - offset : interval;
+        schedule = TFormat ("%s %.15g %s",
+                            timer_item->bOneShot ? "one-shot after" : "repeating every",
+                            delay, delay == 1.0 ? "second" : "seconds");
+        if (offset != 0.0)
+          {
+          schedule += TFormat ("; initial offset %.15g %s", offset,
+                               offset == 1.0 ? "second" : "seconds");
+          if (timer_item->bOneShot)
+            schedule += TFormat ("; configured interval %.15g %s", interval,
+                                 interval == 1.0 ? "second" : "seconds");
+          }
+        }
+      TraceForCategory (traceCategory,
+                        TFormat ("Fired %stimer %s (%s)",
+                                 timer_item->strLabel.IsEmpty () ? "unlabelled " : "",
+                                 (LPCTSTR) strTimerLabel, (LPCTSTR) schedule));
+      }
 
 //    TRACE1 ("Fire time = %10.8f\n", timer_item->tFireTime.m_dt);
 
@@ -405,7 +438,10 @@ void CMUSHclientDoc::CheckTickTimers ()
   if (m_bWorldClosePending)
     return;
 
+  {
+  CTraceEventGuard traceEvent (this, true);
   SendToAllPluginCallbacks (ON_PLUGIN_TICK);
+  }
 
   if (m_bWorldClosePending)
     return;
