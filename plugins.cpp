@@ -1705,6 +1705,7 @@ bool CMUSHclientDoc::EndPluginListChangedDeferral (void)
 
 void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arguments
   {
+  CWorldDocumentOperationGuard operationGuard (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1733,6 +1734,7 @@ void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arg
 // this is for when we want the first available plugin to handle something (eg. Trace, Sound)
 bool CMUSHclientDoc::SendToFirstPluginCallbacks (const string & sName, const char * sText)   // one argument
   {
+  CWorldDocumentOperationGuard operationGuard (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1772,6 +1774,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnFalse)
   {
   bool bResult = true;    // assume they OK'd something
+  CWorldDocumentOperationGuard operationGuard (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1808,6 +1811,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
 // this sends a string to all plugins and allows them to modify it
 void CMUSHclientDoc::SendToAllPluginCallbacksRtn (const string & sName, CString & strResult)  // taking and returning a string
   {
+  CWorldDocumentOperationGuard operationGuard (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1841,6 +1845,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnTrue,
                                                const bool bStopOnFalse)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1890,6 +1895,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnTrue,
                                                const bool bStopOnFalse)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);

@@ -630,6 +630,8 @@ BEGIN_DISPATCH_MAP(CMUSHclientDoc, CDocument)
 	DISP_FUNCTION(CMUSHclientDoc, "GetCommandLineCount", GetCommandLineCount, VT_I4, VTS_NONE)
 	DISP_FUNCTION(CMUSHclientDoc, "SetCommandWindowAutoResizeSuppressed", SetCommandWindowAutoResizeSuppressed, VT_I4, VTS_BOOL)
 	DISP_FUNCTION(CMUSHclientDoc, "GetCommandWindowDesiredHeight", GetCommandWindowDesiredHeight, VT_I4, VTS_I4)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "BufferedRepaint", 423, BufferedRepaint, VT_EMPTY, VTS_NONE)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "SetBufferedRepaintPaused", 424, SetBufferedRepaintPaused, VT_EMPTY, VTS_BOOL)
 	//}}AFX_DISPATCH_MAP
 END_DISPATCH_MAP()
 
@@ -5707,6 +5709,8 @@ void CMUSHclientDoc::EndProgressOperation ()
 {
   ASSERT (m_iActiveProgressOperations > 0);
   --m_iActiveProgressOperations;
+  if (!std::uncaught_exception ())
+    FlushBufferedRepaint (m_iActiveProgressOperations != 0);
 }
 
 BOOL CMUSHclientDoc::SaveModified() 

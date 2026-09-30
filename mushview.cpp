@@ -893,6 +893,10 @@ void CMUSHView::DrawImage (CDC* pDC, CBitmap & bitmap, const short iMode)
 
 void CMUSHView::OnDraw(CDC* dc)
 {
+CMUSHclientDoc* pDoc = GetDocument();
+ASSERT_VALID(pDoc);
+CWorldDocumentOperationGuard operationGuard (pDoc);
+CValueStateGuard<int> paintGuard (pDoc->m_iOutputPaintDepth, pDoc->m_iOutputPaintDepth + 1);
 
 // this stuff stops the flicker when redawing stuff that is almost identical to last time
 CRect rcBounds;
@@ -909,8 +913,6 @@ int startline,
 
 long pixel;
 
-CMUSHclientDoc* pDoc = GetDocument();
-ASSERT_VALID(pDoc);
 
   if (!pDoc->m_FontHeight)
     return;
@@ -7796,6 +7798,16 @@ void CMUSHView::SelectionChanged (void)
 
 LRESULT CMUSHView::WindowProc(UINT message, WPARAM wParam, LPARAM lParam) 
 {
+  if (message == WM_PAINT && m_pDocument)
+    {
+    CMUSHclientDoc * pDoc = GetDocument ();
+    CWorldDocumentOperationGuard operationGuard (pDoc);
+    CValueStateGuard<int> paintGuard (pDoc->m_iOutputPaintDepth, pDoc->m_iOutputPaintDepth + 1);
+    const LRESULT result = CView::WindowProc (message, wParam, lParam);
+    pDoc->m_fLastRepaintTime = pDoc->GetRepaintTime ();
+    return result;
+    }
+
   switch (message)
    {
     case WM_MOUSELEAVE:

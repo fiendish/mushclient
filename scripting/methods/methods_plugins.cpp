@@ -396,6 +396,7 @@ GET_PLUGIN_STUFF (GetTimerInfo (TimerName, InfoType))
 
 long CMUSHclientDoc::CallPlugin(LPCTSTR PluginID, LPCTSTR Routine, LPCTSTR Argument) 
   {
+  CWorldDocumentOperationGuard operationGuard (this);
 
 CPlugin * pPlugin = GetPlugin (PluginID); 
 
@@ -579,6 +580,7 @@ GET_PLUGIN_STUFF (GetTimerOption (TimerName, OptionName))
 
 long CMUSHclientDoc::BroadcastPlugin(long Message, LPCTSTR Text) 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
   CPlugin * pSavedPlugin = m_CurrentPlugin;
   long iCount = 0;
 

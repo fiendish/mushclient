@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <cmath>
 #include "..\mainfrm.h"
 #include "..\MUSHclient.h"
 #include "..\doc.h"
@@ -5061,6 +5062,30 @@ static int L_SetRemoveMapReverses (lua_State *L)
   } // end of L_SetRemoveMapReverses
 
 //----------------------------------------
+//  world.BufferedRepaint
+//----------------------------------------
+static int L_BufferedRepaint (lua_State *L)
+  {
+  CMUSHclientDoc * pDoc = doc (L);
+  const double minInterval = my_optnumber (L, 1, 0.1);
+  luaL_argcheck (L, std::isfinite (minInterval) && minInterval >= 0, 1,
+                 "min_interval must be a finite nonnegative number");
+  pDoc->RequestBufferedRepaint (minInterval);
+  return 0;
+  } // end of L_BufferedRepaint
+
+//----------------------------------------
+//  world.SetBufferedRepaintPaused
+//----------------------------------------
+static int L_SetBufferedRepaintPaused (lua_State *L)
+  {
+  CMUSHclientDoc * pDoc = doc (L);
+  const BOOL paused = optboolean (L, 1, 0);
+  pDoc->SetBufferedRepaintPaused (paused);
+  return 0;
+  }
+
+//----------------------------------------
 //  world.Repaint
 //----------------------------------------
 static int L_Repaint (lua_State *L)
@@ -6914,6 +6939,8 @@ static const struct luaL_Reg worldlib [] =
   {"GetBoldColour", L_GetBoldColour},
   {"SetBoldColour", L_SetBoldColour},
   {"BroadcastPlugin", L_BroadcastPlugin},
+  {"BufferedRepaint", L_BufferedRepaint},
+  {"SetBufferedRepaintPaused", L_SetBufferedRepaintPaused},
   {"CallPlugin", L_CallPlugin},
   {"ChangeDir", L_ChangeDir},
   {"ChatAcceptCalls", L_ChatAcceptCalls},

@@ -3,6 +3,7 @@
 // General output (and frame) window management
 
 #include "stdafx.h"
+#include <chrono>
 #include "..\..\MUSHclient.h"
 #include "..\..\doc.h"
 #include "..\..\MUSHview.h"
@@ -624,8 +625,68 @@ long CMUSHclientDoc::SetBackgroundColour(long Colour)
 }   // end of CMUSHclientDoc::SetBackgroundColour
 
 
+double CMUSHclientDoc::GetRepaintTime () const
+{
+  return std::chrono::duration<double>
+    (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+}
+
+void CMUSHclientDoc::BufferedRepaint()
+{
+  RequestBufferedRepaint (0.1);
+}
+
+void CMUSHclientDoc::SetBufferedRepaintPaused (const BOOL Paused)
+{
+  m_bBufferedRepaintPaused = Paused != FALSE;
+  if (!m_bBufferedRepaintPaused)
+    FlushBufferedRepaint (m_iActiveProgressOperations != 0);
+}
+
+void CMUSHclientDoc::RequestBufferedRepaint (const double minInterval)
+{
+  m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
+    min (m_fBufferedRepaintInterval, minInterval) : minInterval;
+  m_bBufferedRepaintPending = true;
+  FlushBufferedRepaint (m_iActiveProgressOperations != 0);
+}
+
+void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
+{
+  if (!m_bBufferedRepaintPending || m_bInBufferedRepaint || m_bBufferedRepaintPaused ||
+      m_iOutputPaintDepth != 0 || m_bWorldClosePending || m_bWorldClosing)
+    return;
+  if (intervalOnly &&
+      GetRepaintTime () - m_fLastRepaintTime < m_fBufferedRepaintInterval)
+    return;
+
+  CValueStateGuard<bool> repaintGuard (m_bInBufferedRepaint, true);
+  CValueStateGuard<int> operationGuard
+    (m_iActiveProgressOperations, m_iActiveProgressOperations + 1);
+  // Complete any further request after the current frame has reached the screen.
+  while (m_bBufferedRepaintPending && !m_bBufferedRepaintPaused &&
+         !m_bWorldClosePending && !m_bWorldClosing)
+    {
+    const double minInterval = m_fBufferedRepaintInterval;
+    m_bBufferedRepaintPending = false;
+    try
+      {
+      Repaint ();
+      }
+    catch (...)
+      {
+      m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
+        min (m_fBufferedRepaintInterval, minInterval) : minInterval;
+      m_bBufferedRepaintPending = true;
+      throw;
+      }
+    }
+}
+
 void CMUSHclientDoc::Repaint() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
+  m_bBufferedRepaintPending = false;
   UpdateAllViews (NULL);
 
   for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
@@ -638,6 +699,7 @@ void CMUSHclientDoc::Repaint()
       pmyView->UpdateWindow ();
 	    }	  // end of being a CMUSHView
     }   // end of loop through views
+  m_fLastRepaintTime = GetRepaintTime ();
 
 }    // end of CMUSHclientDoc::Repaint
 

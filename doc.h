@@ -1224,6 +1224,15 @@ public:
   int   m_iActiveProgressOperations;
   void BeginProgressOperation ();
   void EndProgressOperation ();
+  void RequestBufferedRepaint (double minInterval);
+  void FlushBufferedRepaint (bool intervalOnly = false);
+  bool m_bBufferedRepaintPending;
+  bool m_bInBufferedRepaint;
+  bool m_bBufferedRepaintPaused;
+  int m_iOutputPaintDepth;
+  double m_fLastRepaintTime;
+  double GetRepaintTime () const;
+  double m_fBufferedRepaintInterval;
 
 // we save the current style here on any style change *from the mud*
 // we don't want to mix up notes/user input with mud-set styles
@@ -2902,6 +2911,8 @@ public:
 	afx_msg long WindowBlendImage(LPCTSTR Name, LPCTSTR ImageId, long Left, long Top, long Right, long Bottom, short Mode, double Opacity, long SrcLeft, long SrcTop, long SrcRight, long SrcBottom);
 	afx_msg long WindowImageFromWindow(LPCTSTR Name, LPCTSTR ImageId, LPCTSTR SourceWindow);
 	afx_msg void Repaint();
+	afx_msg void BufferedRepaint();
+	afx_msg void SetBufferedRepaintPaused(BOOL Paused);
 	afx_msg long TextRectangle(long Left, long Top, long Right, long Bottom, long BorderOffset, long BorderColour, long BorderWidth, long OutsideFillColour, long OutsideFillStyle);
 	afx_msg long WindowGradient(LPCTSTR Name, long Left, long Top, long Right, long Bottom, long StartColour, long EndColour, short Mode);
 	afx_msg long WindowFilter(LPCTSTR Name, long Left, long Top, long Right, long Bottom, short Operation, double Options);
@@ -3202,7 +3213,7 @@ class CWorldDocumentOperationGuard
       if (m_pDoc)
         m_pDoc->BeginProgressOperation ();
       }
-    ~CWorldDocumentOperationGuard ()
+    ~CWorldDocumentOperationGuard () noexcept(false)
       {
       if (m_pDoc)
         m_pDoc->EndProgressOperation ();

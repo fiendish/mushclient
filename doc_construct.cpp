@@ -101,6 +101,12 @@ int i;
   m_bWorldCloseQueued = false;
   m_bWorldClosePending = false;
   m_iActiveProgressOperations = 0;
+  m_bBufferedRepaintPending = false;
+  m_bInBufferedRepaint = false;
+  m_bBufferedRepaintPaused = false;
+  m_iOutputPaintDepth = 0;
+  m_fLastRepaintTime = GetRepaintTime ();
+  m_fBufferedRepaintInterval = 0.1;
   m_bInSendToScript = true;
 
   m_bInPlaySoundFilePlugin = false;
