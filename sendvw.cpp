@@ -337,6 +337,7 @@ ASSERT_VALID(pDoc);
   	{
 
     CWorldDocumentOperationGuard operationGuard (pDoc);
+    CTraceEventGuard traceEvent (pDoc, true);
     CValueStateGuard<unsigned short> actionSourceGuard
       (pDoc->m_iCurrentActionSource, eUserTyping);
 

@@ -3,6 +3,7 @@
 // General output (and frame) window management
 
 #include "stdafx.h"
+#include <chrono>
 #include "..\..\MUSHclient.h"
 #include "..\..\doc.h"
 #include "..\..\MUSHview.h"
@@ -624,8 +625,102 @@ long CMUSHclientDoc::SetBackgroundColour(long Colour)
 }   // end of CMUSHclientDoc::SetBackgroundColour
 
 
+double CMUSHclientDoc::GetRepaintTime () const
+{
+  return std::chrono::duration<double>
+    (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+}
+
+void CMUSHclientDoc::BufferedRepaint()
+{
+  RequestBufferedRepaint (0.1);
+}
+
+void CMUSHclientDoc::SetBufferedRepaintPaused (const BOOL Paused)
+{
+  m_bBufferedRepaintPaused = Paused != FALSE;
+  if (!m_bBufferedRepaintPaused)
+    FlushBufferedRepaint (m_iActiveProgressOperations != 0);
+}
+
+void CMUSHclientDoc::RequestBufferedRepaint (const double minInterval)
+{
+  const bool traceOnly = m_bInTrace || m_bTraceOutputRedraw || m_bTraceDeferredRepaint;
+  if (m_bInTrace)
+    ++m_iTraceOutputRedrawRequests;
+  else if (m_bTraceOutputRedraw || m_bTraceDeferredRepaint)
+    ++m_iTraceRedrawRequests;
+  m_bBufferedRepaintTraceOnly = m_bBufferedRepaintPending ?
+    m_bBufferedRepaintTraceOnly && traceOnly : traceOnly;
+  m_bBufferedRepaintOrdinaryRequest =
+    (m_bBufferedRepaintPending && m_bBufferedRepaintOrdinaryRequest) ||
+    (!traceOnly && m_iOutputPaintDepth == 0);
+  m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
+    min (m_fBufferedRepaintInterval, minInterval) : minInterval;
+  m_bBufferedRepaintPending = true;
+  if (!m_bInBufferedRepaint && m_iOutputPaintDepth == 0)
+    m_bBufferedRepaintFollowup = false;
+  FlushBufferedRepaint (m_iActiveProgressOperations != 0);
+}
+
+void CMUSHclientDoc::FlushBufferedRepaint (const bool intervalOnly)
+{
+  if (!m_bBufferedRepaintPending || m_bInBufferedRepaint || m_bInTrace || m_bBufferedRepaintPaused ||
+      m_iOutputPaintDepth != 0 || m_bWorldClosePending || m_bWorldClosing)
+    return;
+  if ((intervalOnly || m_bBufferedRepaintFollowup) &&
+      GetRepaintTime () - m_fLastRepaintTime < m_fBufferedRepaintInterval)
+    return;
+
+  CValueStateGuard<bool> repaintGuard (m_bInBufferedRepaint, true);
+  CValueStateGuard<int> operationGuard
+    (m_iActiveProgressOperations, m_iActiveProgressOperations + 1);
+  // Complete one follow-up frame, then leave further work for a later boundary.
+  for (int frames = 0; frames < 2 && m_bBufferedRepaintPending && !m_bBufferedRepaintPaused &&
+       !m_bWorldClosePending && !m_bWorldClosing; ++frames)
+    {
+    const bool traceOnly = m_bBufferedRepaintTraceOnly;
+    const bool ordinaryRequest = m_bBufferedRepaintOrdinaryRequest;
+    const double minInterval = m_fBufferedRepaintInterval;
+    m_bBufferedRepaintPending = false;
+    CValueStateGuard<bool> traceGuard (m_bTraceOutputRedraw, traceOnly);
+    CValueStateGuard<bool> deferredOriginGuard (m_bTraceDeferredRepaint, false);
+    try
+      {
+      Repaint ();
+      }
+    catch (...)
+      {
+      m_bBufferedRepaintTraceOnly = m_bBufferedRepaintPending ?
+        m_bBufferedRepaintTraceOnly && traceOnly : traceOnly;
+      m_fBufferedRepaintInterval = m_bBufferedRepaintPending ?
+        min (m_fBufferedRepaintInterval, minInterval) : minInterval;
+      m_bBufferedRepaintOrdinaryRequest = m_bBufferedRepaintOrdinaryRequest || ordinaryRequest;
+      m_bBufferedRepaintPending = true;
+      throw;
+      }
+    }
+  m_bBufferedRepaintFollowup = m_bBufferedRepaintPending;
+}
+
 void CMUSHclientDoc::Repaint() 
 {
+  CWorldDocumentOperationGuard operationGuard (this);
+  CValueStateGuard<bool> traceOriginGuard
+    (m_bTraceOutputRedraw, m_bTraceOutputRedraw || (m_bTraceDeferredRepaint && !m_bInBufferedRepaint));
+  // Draw callbacks cannot turn their own trace output into an ordinary frame.
+  const bool ordinaryRepaint = !m_bInTrace && !m_bTraceOutputRedraw &&
+    (!m_bInBufferedRepaint || m_bBufferedRepaintOrdinaryRequest);
+  m_bBufferedRepaintPending = false;
+  m_bBufferedRepaintFollowup = false;
+  m_bBufferedRepaintOrdinaryRequest = false;
+  if (ordinaryRepaint)
+    for (POSITION pos = GetFirstViewPosition(); pos != NULL; )
+      {
+      CView * pView = GetNextView (pos);
+      if (pView->IsKindOf (RUNTIME_CLASS (CMUSHView)))
+        static_cast<CMUSHView *> (pView)->m_bOrdinaryRedrawPending = true;
+      }
   UpdateAllViews (NULL);
 
   for(POSITION pos = GetFirstViewPosition(); pos != NULL; )
@@ -638,6 +733,7 @@ void CMUSHclientDoc::Repaint()
       pmyView->UpdateWindow ();
 	    }	  // end of being a CMUSHView
     }   // end of loop through views
+  m_fLastRepaintTime = GetRepaintTime ();
 
 }    // end of CMUSHclientDoc::Repaint
 
@@ -762,6 +858,8 @@ CMUSHView * pScrollView = GetOutputView ();
         if (pt.y > highest)
           pt.y = highest;
 
+        // Clamping can leave the requested position unchanged.
+        will_scroll = pt.x != cur_pt.x || pt.y != cur_pt.y;
         pmyView->ScrollToPosition (pt, false);
       }
 

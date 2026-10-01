@@ -10,6 +10,7 @@
 #include "..\pcre\config.h"
 #include "..\pcre\pcre_internal.h"
 #include "..\luacom\luacom.h"
+#include "lua_call_trace.h"
 
 set<string> LuaFunctionsSet;
 set<string> LuaTablesSet;
@@ -330,7 +331,20 @@ bool CScriptEngine::ParseLua (const CString & strCode, const CString & strWhat)
     return true;
     }
 
-  int error = CallLuaWithTraceBack (L, 0, 0);
+  const unsigned int traceCategory = m_pDoc->m_iCurrentActionSource == eTimerFired
+    ? m_pDoc->m_iTimerTraceCategory : CMUSHclientDoc::eTraceOther;
+  const bool traceCalls = m_pDoc->m_bTrace && !m_pDoc->m_bInTrace &&
+    !m_pDoc->m_bTraceOutputRedraw && (m_pDoc->m_iTraceCategories & traceCategory);
+  CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, true, true);
+  CLuaCallTrace callTrace (L, traceCalls, NULL, 0, &m_pDoc->m_bInTrace,
+                          CTraceScope::FirstLuaCall, &traceScope);
+  int error = CallLuaWithTraceBack (L, 0, 0, &callTrace);
+  if (traceCalls)
+    {
+    const string detail = callTrace.Description ();
+    if (!detail.empty ())
+      traceScope.Function (detail.c_str ());
+    }
 
   // note - an error here is a *runtime* error
   if (error)
@@ -538,7 +552,8 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
                                 map<string, string> * table,   // map of other things
                                 CPaneLine * paneline,     // and the line (for triggers)
                                 bool * result,            // where to put result
-                                bool bMarkActivity)
+                                bool bMarkActivity,
+                                const bool pluginCallback)
 
 
   {
@@ -576,10 +591,15 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
   LARGE_INTEGER start, 
                 finish;
 
-  // do not trace OnPluginDrawOutputWindow or OnPluginTick because they can spam the output window
-  if (ON_PLUGIN_DRAW_OUTPUT_WINDOW != szProcedure &&
-      ON_PLUGIN_TICK != szProcedure)
-    m_pDoc->Trace (TFormat ("Executing %s script \"%s\"", szType, szProcedure));
+  const bool traceOrigin = m_pDoc->m_bTraceOutputRedraw;
+  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType, pluginCallback);
+  const bool traceCalls = m_pDoc->m_bTrace && !m_pDoc->m_bInTrace &&
+    (m_pDoc->m_iTraceCategories & traceCategory) &&
+    !traceOrigin;
+  const bool continuation = !pluginCallback && (strcmp (szType, "alias") == 0 ||
+    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0);
+  CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, continuation, false, szProcedure);
+  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType, pluginCallback);
 
   if (App.m_iCounterFrequency)
     QueryPerformanceCounter (&start);
@@ -731,7 +751,19 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,  // dispatch ID, will be set to
     (m_pDoc->m_iCurrentActionSource,
      iReason == eDontChangeAction ? m_pDoc->m_iCurrentActionSource : iReason);
 
-  error = CallLuaWithTraceBack (L, paramCount, LUA_MULTRET);
+  CLuaCallTrace callTrace (L, traceCalls, szProcedure, paramCount, &m_pDoc->m_bInTrace);
+  error = CallLuaWithTraceBack (L, paramCount, LUA_MULTRET, &callTrace);
+  if (traceCalls)
+    {
+    const string detail = callTrace.Description ();
+    if (!detail.empty ())
+      {
+      // A timer or tick is an event; its deferred redraw work can have a trace origin.
+      CValueStateGuard<bool> originGuard (m_pDoc->m_bTraceOutputRedraw, traceOrigin);
+      traceScope.Function (detail.c_str ());
+      }
+    traceScriptGuard.BeginCallback ();
+    }
   }
   }
 
@@ -792,7 +824,8 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
                                LPCTSTR szReason,         // eg. trigger subroutine XXX
                                CString strParam,         // string parameter
                                long & nInvocationCount,  // count of invocations
-                               CString & result)         // where to put result
+                               CString & result,         // where to put result
+                               const bool pluginCallback)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
@@ -820,10 +853,15 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
   LARGE_INTEGER start, 
                 finish;
 
-  // do not trace OnPluginDrawOutputWindow or OnPluginTick because they can spam the output window
-  if (ON_PLUGIN_DRAW_OUTPUT_WINDOW != szProcedure &&
-      ON_PLUGIN_TICK != szProcedure)
-    m_pDoc->Trace (TFormat ("Executing %s script \"%s\"", szType, szProcedure));
+  const bool traceOrigin = m_pDoc->m_bTraceOutputRedraw;
+  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType, pluginCallback);
+  const bool traceCalls = m_pDoc->m_bTrace && !m_pDoc->m_bInTrace &&
+    (m_pDoc->m_iTraceCategories & traceCategory) &&
+    !traceOrigin;
+  const bool continuation = !pluginCallback && (strcmp (szType, "alias") == 0 ||
+    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0);
+  CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, continuation, false, szProcedure);
+  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType, pluginCallback);
 
   if (App.m_iCounterFrequency)
     QueryPerformanceCounter (&start);
@@ -852,7 +890,19 @@ bool CScriptEngine::ExecuteLua (DISPID & dispid,          // dispatch ID, will b
     (m_pDoc->m_iCurrentActionSource,
      iReason == eDontChangeAction ? m_pDoc->m_iCurrentActionSource : iReason);
 
-  error = CallLuaWithTraceBack (L, 1, LUA_MULTRET);
+  CLuaCallTrace callTrace (L, traceCalls, szProcedure, 1, &m_pDoc->m_bInTrace);
+  error = CallLuaWithTraceBack (L, 1, LUA_MULTRET, &callTrace);
+  if (traceCalls)
+    {
+    const string detail = callTrace.Description ();
+    if (!detail.empty ())
+      {
+      // A timer or tick is an event; its deferred redraw work can have a trace origin.
+      CValueStateGuard<bool> originGuard (m_pDoc->m_bTraceOutputRedraw, traceOrigin);
+      traceScope.Function (detail.c_str ());
+      }
+    traceScriptGuard.BeginCallback ();
+    }
   }
   }
 
@@ -927,12 +977,14 @@ void GetTracebackFunction (lua_State *L)
 
   }
 
-int CallLuaWithTraceBack (lua_State *L, const int iArguments, const int iReturn)
+int CallLuaWithTraceBack (lua_State *L, const int iArguments, const int iReturn, CLuaCallTrace * trace)
   {
 
   int error;
   int base = lua_gettop (L) - iArguments;  /* function index */
   GetTracebackFunction (L);
+  if (trace)
+    trace->Start (lua_topointer (L, -1));
   if (lua_isnil (L, -1))
     {
     lua_pop (L, 1);   // pop non-existent function
@@ -945,6 +997,8 @@ int CallLuaWithTraceBack (lua_State *L, const int iArguments, const int iReturn)
     lua_remove (L, base);  /* remove traceback function */
     }
 
+  if (trace)
+    trace->Stop ();
   return error;
   }  // end of CallLuaWithTraceBack
 

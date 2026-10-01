@@ -100,6 +100,7 @@ CTimer * Timer_item;
 
 
   Timer_item->bEnabled = Enabled != 0;                // set enabled flag
+  Timer_item->bTraceOutputRedraw = Enabled && (m_bInTrace || m_bTraceOutputRedraw);
   Timer_item->nUpdateNumber   = App.GetUniqueNumber ();   // for concurrency checks
 
   if (!m_CurrentPlugin) // plugin mods don't really count
@@ -587,6 +588,8 @@ long CMUSHclientDoc::EnableTimerGroup(LPCTSTR GroupName, BOOL Enabled)
     GetTimerMap ().GetNextAssoc (pos, strTimerName, timer_item);
     if (timer_item->strGroup == GroupName)
       {
+      if ((timer_item->bEnabled != 0) != (Enabled != 0))
+        timer_item->bTraceOutputRedraw = Enabled && (m_bInTrace || m_bTraceOutputRedraw);
       timer_item->bEnabled = Enabled != 0;
       iCount++;
       }
@@ -823,6 +826,9 @@ bool bChanged;
 
     if (bChanged)
       {
+      if (strOptionName == "enabled")
+        Timer_item->bTraceOutputRedraw = Timer_item->bEnabled &&
+          (m_bInTrace || m_bTraceOutputRedraw);
       if (!m_CurrentPlugin) // plugin mods don't really count
         SetModifiedFlag (TRUE);   // document has changed
       Timer_item->nUpdateNumber    = App.GetUniqueNumber ();   // for concurrency checks

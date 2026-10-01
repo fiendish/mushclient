@@ -100,6 +100,7 @@ void CWorldSocket::OnReceive(int nErrorCode)
     }
 
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
+  CTraceEventGuard traceEvent (m_pDoc, true);
 
   m_bInReceive = true;
   m_bBufferedReadPending = false;

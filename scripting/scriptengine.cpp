@@ -36,8 +36,8 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
                               LPCTSTR szReason, // eg. trigger subroutine XXX
                               DISPPARAMS & params,  // parameters
                               long & nInvocationCount,  // count of invocations
-                              COleVariant * result    // result of call
-                              )
+                              COleVariant * result,   // result of call
+                              const bool pluginCallback)
   {
   CWorldDocumentOperationGuard operationGuard (m_pDoc);
   CPluginCallGuard callGuard (m_pDoc->m_CurrentPlugin, true);
@@ -59,7 +59,7 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
                              nparams,
                              sparams, 
                              nInvocationCount,
-                             NULL, NULL, NULL, &r);
+                             NULL, NULL, NULL, &r, true, pluginCallback);
 
 
     if (result)
@@ -90,10 +90,17 @@ bool CScriptEngine::Execute (DISPID & dispid,  // dispatch ID, will be set to DI
                 finish;
   SCRIPTSTATE ss;
 
-  // do not trace OnPluginDrawOutputWindow or OnPluginTick because they can spam the output window
-  if (ON_PLUGIN_DRAW_OUTPUT_WINDOW != szProcedure &&
-      ON_PLUGIN_TICK != szProcedure)
-    m_pDoc->Trace (TFormat ("Executing %s script \"%s\"", szType, szProcedure));
+  const unsigned int traceCategory = m_pDoc->GetScriptTraceCategory (szProcedure, szType, pluginCallback);
+  const bool traceCalls = m_pDoc->m_bTrace && !m_pDoc->m_bInTrace &&
+    !m_pDoc->m_bTraceOutputRedraw && (m_pDoc->m_iTraceCategories & traceCategory);
+  const bool continuation = !pluginCallback && (strcmp (szType, "alias") == 0 ||
+    strcmp (szType, "trigger") == 0 || strcmp (szType, "timer") == 0);
+  CTraceScope traceScope (m_pDoc, traceCategory, traceCalls, continuation, false, szProcedure);
+  CTraceScriptGuard traceScriptGuard (m_pDoc, szProcedure, szType, pluginCallback);
+  LPCTSTR traceType = m_pDoc->m_CurrentPlugin && pluginCallback ? "plugin" : szType;
+  if (traceCalls)
+    traceScope.Function (TFormat ("Executing %s script \"%s\"", traceType, szProcedure));
+  traceScriptGuard.BeginCallback ();
 
   //  Frame.SetStatusMessageNow (TFormat ("Executing %s subroutine \"%s\"", szType, szProcedure));
 

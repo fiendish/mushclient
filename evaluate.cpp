@@ -18,6 +18,7 @@ BOOL CMUSHclientDoc::EvaluateCommand (const CString & full_input,
                                             bool & bOmitFromLog,
                                             const bool bTest)
   {
+  CTraceEventGuard traceEvent (this);
 CString str;
 CString input = full_input;
 OneShotItemMap AliasList;
@@ -173,6 +174,8 @@ OneShotItemMap AliasList;
         alias_item->nCreationNumber != alias_it->iCreationNumber)
       continue;
 
+    CValueStateGuard<size_t> traceParentGuard
+      (m_traceOutput.parent, alias_it->iTraceParent);
     ExecuteAliasScript (alias_item, input);
     }       // end of list of aliass that fired
 
@@ -1145,10 +1148,17 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
 
     alias_item->tWhenMatched = CTime::GetCurrentTime(); // when it matched        
 
-    if (alias_item->strLabel.IsEmpty ())
-      Trace ("Matched alias \"%s\"", (LPCTSTR) alias_item->name);
-    else
-      Trace ("Matched alias %s", (LPCTSTR) alias_item->strLabel);
+    if (m_bTrace && !m_bInTrace && !m_bTraceOutputRedraw && (m_iTraceCategories & eTraceOther))
+      {
+      CString message;
+      if (alias_item->strLabel.IsEmpty ())
+        message.Format ("Matched alias \"%s\"", (LPCTSTR) alias_item->name);
+      else
+        message.Format ("Matched alias %s", (LPCTSTR) alias_item->strLabel);
+      TraceForCategory (eTraceOther, message, true);
+      }
+    const size_t traceParent = m_traceOutput.MetadataParent
+      (m_CurrentPlugin ? (LPCTSTR) m_CurrentPlugin->m_strName : "", eTraceOther);
   
     // get unlabelled alias's internal name
     const char * pLabel = strAliasLabel;
@@ -1183,7 +1193,7 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
     AliasList.push_back
       (OneShotItem (m_CurrentPlugin,
                     (const char *) alias_item->strInternalName,
-                    alias_item->nCreationNumber));
+                    alias_item->nCreationNumber, traceParent));
 
     CString strExtraOutput;
 

@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include "lua_call_trace.h"
+#include <cmath>
 #include "..\mainfrm.h"
 #include "..\MUSHclient.h"
 #include "..\doc.h"
@@ -1029,6 +1031,7 @@ static int L_FindPluginRoutine (lua_State *L)
 static int L_CallPlugin (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
+  const string traceCaller = pDoc->m_CurrentPlugin ? string ((LPCTSTR) pDoc->m_CurrentPlugin->m_strName) : "";
 
   const char * sPluginID = my_checkstring (L, 1);
   const char * sRoutine = my_checkstring (L, 2);
@@ -1189,7 +1192,26 @@ static int L_CallPlugin (lua_State *L)
     
     // now call the routine in the plugin
 
-    iCallError = CallLuaWithTraceBack (pL, n, LUA_MULTRET);
+    const bool traceOrigin = pDoc->m_bTraceOutputRedraw;
+    const unsigned int traceCategory = pDoc->GetScriptTraceCategory (sRoutine, "Plugin ", true);
+    const bool traceCalls = pDoc->m_bTrace && !pDoc->m_bInTrace &&
+      (pDoc->m_iTraceCategories & traceCategory) &&
+      !traceOrigin;
+    CValueStateGuard<string> callerGuard (pDoc->m_traceOutput.caller, traceCaller);
+    CTraceScope traceScope (pDoc, traceCategory, traceCalls, false, false, sRoutine);
+    CTraceScriptGuard traceScriptGuard (pDoc, sRoutine, "Plugin ", true);
+    CLuaCallTrace callTrace (pL, traceCalls, sRoutine, n, &pDoc->m_bInTrace);
+    iCallError = CallLuaWithTraceBack (pL, n, LUA_MULTRET, &callTrace);
+    if (traceCalls)
+      {
+      const string detail = callTrace.Description ();
+      if (!detail.empty ())
+        {
+        CValueStateGuard<bool> originGuard (pDoc->m_bTraceOutputRedraw, traceOrigin);
+        traceScope.Function (detail.c_str ());
+        }
+      traceScriptGuard.BeginCallback ();
+      }
     if (iCallError)
       {
 
@@ -5061,6 +5083,30 @@ static int L_SetRemoveMapReverses (lua_State *L)
   } // end of L_SetRemoveMapReverses
 
 //----------------------------------------
+//  world.BufferedRepaint
+//----------------------------------------
+static int L_BufferedRepaint (lua_State *L)
+  {
+  CMUSHclientDoc * pDoc = doc (L);
+  const double minInterval = my_optnumber (L, 1, 0.1);
+  luaL_argcheck (L, std::isfinite (minInterval) && minInterval >= 0, 1,
+                 "min_interval must be a finite nonnegative number");
+  pDoc->RequestBufferedRepaint (minInterval);
+  return 0;
+  } // end of L_BufferedRepaint
+
+//----------------------------------------
+//  world.SetBufferedRepaintPaused
+//----------------------------------------
+static int L_SetBufferedRepaintPaused (lua_State *L)
+  {
+  CMUSHclientDoc * pDoc = doc (L);
+  const BOOL paused = optboolean (L, 1, 0);
+  pDoc->SetBufferedRepaintPaused (paused);
+  return 0;
+  }
+
+//----------------------------------------
 //  world.Repaint
 //----------------------------------------
 static int L_Repaint (lua_State *L)
@@ -6914,6 +6960,8 @@ static const struct luaL_Reg worldlib [] =
   {"GetBoldColour", L_GetBoldColour},
   {"SetBoldColour", L_SetBoldColour},
   {"BroadcastPlugin", L_BroadcastPlugin},
+  {"BufferedRepaint", L_BufferedRepaint},
+  {"SetBufferedRepaintPaused", L_SetBufferedRepaintPaused},
   {"CallPlugin", L_CallPlugin},
   {"ChangeDir", L_ChangeDir},
   {"ChatAcceptCalls", L_ChatAcceptCalls},

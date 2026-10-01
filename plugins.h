@@ -108,6 +108,7 @@ class CPlugin :public CObject
   LONGLONG m_iScriptTimeTaken;  // time taken to execute scripts
   bool m_bSavingStateNow;       // to prevent infinite loops
   long m_iActiveScriptCalls;    // nested calls currently using this plugin
+  bool m_bTraceRedrawPending;   // display work deferred after trace output
 
   // Lua note - for Lua the DISPID is a flag indicating whether or not
   // the routine exists. It is set to DISPID_UNKNOWN if the last call caused an error

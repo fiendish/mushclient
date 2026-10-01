@@ -461,6 +461,7 @@ struct CMUSHclientDoc : CDocument {
     CMUSHclientDoc() : CDocument(&App.worlds) {}
     int activeOperations() const override { return m_iActiveProgressOperations; }
     void BeginProgressOperation(); void EndProgressOperation(); void OnCloseDocument();
+    void FlushBufferedRepaint(bool) {} // This fixture makes no buffered repaint request.
     void PluginListChanged() { CHECK(false); }
     void OnScriptFileChanged() { CHECK(false); }
 };

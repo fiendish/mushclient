@@ -30,6 +30,14 @@ int i;
   AllocateConfigurationArrays ();
 
   m_bTrace = false;   // not tracing yet
+  m_iTraceCategories = eTraceAll & ~eTraceIdleTicks;
+  m_iTimerTraceCategory = eTraceOther;
+  m_bInTrace = false;
+  m_bTraceGroupHasOutput = m_bTraceGroupNeedsSeparator = m_bTraceGroupOutputQueued = false;
+  m_bTraceOutputRedraw = false;
+  m_bTraceDeferredRepaint = false;
+  m_iTraceRedrawRequests = 0;
+  m_iTraceOutputRedrawRequests = 0;
 
 // note - these initialisations merely make the hash lookup more efficient.
 // until v 3.21 they were the default of 20, so this should help somewhat
@@ -101,6 +109,15 @@ int i;
   m_bWorldCloseQueued = false;
   m_bWorldClosePending = false;
   m_iActiveProgressOperations = 0;
+  m_bBufferedRepaintPending = false;
+  m_bBufferedRepaintFollowup = false;
+  m_bBufferedRepaintTraceOnly = false;
+  m_bBufferedRepaintOrdinaryRequest = false;
+  m_bInBufferedRepaint = false;
+  m_bBufferedRepaintPaused = false;
+  m_iOutputPaintDepth = 0;
+  m_fLastRepaintTime = GetRepaintTime ();
+  m_fBufferedRepaintInterval = 0.1;
   m_bInSendToScript = true;
 
   m_bInPlaySoundFilePlugin = false;

@@ -662,6 +662,7 @@ class CTimer : public CObject
      bOmitFromOutput = false;
      bOmitFromLog = false;
      bExecutingScript = false;
+     bTraceOutputRedraw = false;
      nCreationNumber = 0;
      pNextRetired = NULL;
     };
@@ -727,6 +728,7 @@ class CTimer : public CObject
   bool bIncluded;       // if true, don't save it
   bool bSelected;       // if true, selected for use in a plugin
   bool bExecutingScript;    // if true, executing a script and cannot be deleted
+  bool bTraceOutputRedraw;  // this firing was scheduled by trace display work
   CTimer * pNextRetired;    // next replaced timer waiting for active script to finish
 
   static unsigned long GetNextTimerSequence () { return nNextCreateSequence++; }

@@ -100,6 +100,8 @@ public:
 
   BOOL m_mousedover;
   bool m_bInSelectionChanged;
+  bool m_bTraceRedrawPending;
+  bool m_bOrdinaryRedrawPending;
   int m_iMXPMenuAction;
   CMXPMenuItemList m_MXPMenuItems;
 
@@ -212,6 +214,7 @@ void BookmarkLine (const long iLine);
 	virtual BOOL PreTranslateMessage(MSG* pMsg);
 	protected:
 	virtual void OnInitialUpdate(); // called first time after construct
+  virtual void OnUpdate(CView* pSender, LPARAM lHint, CObject* pHint);
 	virtual BOOL OnPreparePrinting(CPrintInfo* pInfo);
 	virtual void OnBeginPrinting(CDC* pDC, CPrintInfo* pInfo);
 	virtual void OnEndPrinting(CDC* pDC, CPrintInfo* pInfo);

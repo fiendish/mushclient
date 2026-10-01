@@ -312,6 +312,8 @@ CMUSHView::CMUSHView()
   m_scroll_position = 0;
   m_mousedover = false;
   m_bInSelectionChanged = false;
+  m_bTraceRedrawPending = false;
+  m_bOrdinaryRedrawPending = false;
   m_iMXPMenuAction = 0;
   m_bottomview = NULL;
 
@@ -891,8 +893,36 @@ void CMUSHView::DrawImage (CDC* pDC, CBitmap & bitmap, const short iMode)
 
   } // end of CMUSHView::DrawImage
 
+void CMUSHView::OnUpdate(CView* pSender, LPARAM lHint, CObject* pHint)
+{
+  CMUSHclientDoc* pDoc = GetDocument();
+  ASSERT_VALID(pDoc);
+
+  // Ordinary redraw requests take precedence over later trace invalidations.
+  // Requests from draw callbacks retain the current frame's origin.
+  if (!pDoc->m_bInTrace && !pDoc->m_bTraceOutputRedraw && !pDoc->m_bTraceDeferredRepaint &&
+      pDoc->m_iOutputPaintDepth == 0 && !pDoc->m_bInBufferedRepaint)
+    m_bOrdinaryRedrawPending = true;
+  m_bTraceRedrawPending = !m_bOrdinaryRedrawPending &&
+    (m_bTraceRedrawPending || pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw || pDoc->m_bTraceDeferredRepaint);
+  if (pDoc->m_bBufferedRepaintPending && !m_bTraceRedrawPending)
+    pDoc->m_bBufferedRepaintTraceOnly = false;
+
+  if (pDoc->m_bInTrace)
+    pDoc->m_iTraceOutputRedrawRequests++;
+  else if (pDoc->m_bTraceOutputRedraw || pDoc->m_bTraceDeferredRepaint)
+    pDoc->m_iTraceRedrawRequests++;
+
+  CView::OnUpdate(pSender, lHint, pHint);
+}
+
+
 void CMUSHView::OnDraw(CDC* dc)
 {
+CMUSHclientDoc* pDoc = GetDocument();
+ASSERT_VALID(pDoc);
+CWorldDocumentOperationGuard operationGuard (pDoc);
+CValueStateGuard<int> paintGuard (pDoc->m_iOutputPaintDepth, pDoc->m_iOutputPaintDepth + 1);
 
 // this stuff stops the flicker when redawing stuff that is almost identical to last time
 CRect rcBounds;
@@ -909,8 +939,6 @@ int startline,
 
 long pixel;
 
-CMUSHclientDoc* pDoc = GetDocument();
-ASSERT_VALID(pDoc);
 
   if (!pDoc->m_FontHeight)
     return;
@@ -1073,10 +1101,17 @@ RECT r;
   if (startline > lastline)
     startline = lastline - 20;
 
-  // give the user a chance to update miniwindows to match text in the output window
+  // Trace output schedules a repaint, but the display callback still runs.
+  {
+  const bool traceRedraw = !m_bOrdinaryRedrawPending &&
+    (m_bTraceRedrawPending || pDoc->m_bTraceOutputRedraw);
+  m_bTraceRedrawPending = false;
+  m_bOrdinaryRedrawPending = false;
+  CValueStateGuard<bool> traceRedrawGuard (pDoc->m_bTraceOutputRedraw, traceRedraw);
   pDoc->SendToAllPluginCallbacks (ON_PLUGIN_DRAW_OUTPUT_WINDOW,
                                   startline + 1, pt.y - pDoc->m_iPixelOffset,
                                   "", false, false);
+  }
 
 POSITION pos = pDoc->GetLinePosition (startline);
 unsigned short style = 0;    // background (bleed) style
@@ -1815,6 +1850,17 @@ void CMUSHView::addedstuff (void)
   {
 CMUSHclientDoc* pDoc = GetDocument();
 ASSERT_VALID(pDoc);
+
+  // Ordinary output starts a new display event; trace output does not.
+  const bool traceOutput = pDoc->m_bInTrace || pDoc->m_bTraceOutputRedraw;
+  m_bOrdinaryRedrawPending = m_bOrdinaryRedrawPending || !traceOutput;
+  m_bTraceRedrawPending = traceOutput && !m_bOrdinaryRedrawPending;
+  if (pDoc->m_bBufferedRepaintPending && !m_bTraceRedrawPending)
+    pDoc->m_bBufferedRepaintTraceOnly = false;
+  if (pDoc->m_bInTrace)
+    pDoc->m_iTraceOutputRedrawRequests++;
+  else if (pDoc->m_bTraceOutputRedraw)
+    pDoc->m_iTraceRedrawRequests++;
 
 // find page size
 
@@ -4762,45 +4808,48 @@ int iDeltaY = m_scroll_position.y - pt.y;
   if (m_nLastToolTipLine || m_nLastToolTipColumn)
     RemoveToolTip ();
   GetClientRect (&r);
-  // if we can do a smooth scroll, well let's do it!
-  if (abs (iDeltaY) < GetOutputWindowHeight ())
+  if (pt.x != m_scroll_position.x || pt.y != m_scroll_position.y)
     {
-// very smooth scrolling
-
-    int iSmoothDelta = iDeltaY < 0 ? -1 : 1;
-
-    if (App.m_bSmoothScrolling)
+    // if we can do a smooth scroll, well let's do it!
+    if (abs (iDeltaY) < GetOutputWindowHeight ())
       {
-      for (int i = 0; i < abs (iDeltaY); i++)
+  // very smooth scrolling
+
+      int iSmoothDelta = iDeltaY < 0 ? -1 : 1;
+
+      if (App.m_bSmoothScrolling)
         {
-        m_scroll_position.y -= iSmoothDelta;
-        // update scroll bar
-        GetScrollInfo (SB_VERT, &ScrollInfo, SIF_POS);
-        ScrollInfo.nPos = m_scroll_position.y;
-        if (pDoc->m_bScrollBarWanted)
-          SetScrollInfo (SB_VERT, &ScrollInfo, pDoc->m_bScrollBarWanted);
-        m_ScrollbarPosition = ScrollInfo.nPos;
-        ScrollWindow (0, iSmoothDelta);
-        UpdateWindow ();
-        }
-      } // end of smooth scrolling
+        for (int i = 0; i < abs (iDeltaY); i++)
+          {
+          m_scroll_position.y -= iSmoothDelta;
+          // update scroll bar
+          GetScrollInfo (SB_VERT, &ScrollInfo, SIF_POS);
+          ScrollInfo.nPos = m_scroll_position.y;
+          if (pDoc->m_bScrollBarWanted)
+            SetScrollInfo (SB_VERT, &ScrollInfo, pDoc->m_bScrollBarWanted);
+          m_ScrollbarPosition = ScrollInfo.nPos;
+          ScrollWindow (0, iSmoothDelta);
+          UpdateWindow ();
+          }
+        } // end of smooth scrolling
+      else
+        {
+        Invalidate ();
+        m_scroll_position = pt;
+        if (App.m_bSmootherScrolling)
+          UpdateWindow ();    // redraw immediately if wanted
+        } // end of not smooth scrolling
+      }
     else
+      // more than a screenfull away? just redraw the whole lot
       {
       Invalidate ();
-      m_scroll_position = pt;
-      if (App.m_bSmootherScrolling)
-        UpdateWindow ();    // redraw immediately if wanted
-      } // end of not smooth scrolling
-    }
-  else
-    // more than a screenfull away? just redraw the whole lot
-    {
-    Invalidate ();
-#if REDRAW_DEBUG
-    RECT r;
-    GetClientRect (&r);
-    ShowInvalidatedRect (this, r);
-#endif
+  #if REDRAW_DEBUG
+      RECT r;
+      GetClientRect (&r);
+      ShowInvalidatedRect (this, r);
+  #endif
+      }
     }
 
 #if REDRAW_DEBUG
@@ -7796,6 +7845,16 @@ void CMUSHView::SelectionChanged (void)
 
 LRESULT CMUSHView::WindowProc(UINT message, WPARAM wParam, LPARAM lParam) 
 {
+  if (message == WM_PAINT && m_pDocument)
+    {
+    CMUSHclientDoc * pDoc = GetDocument ();
+    CWorldDocumentOperationGuard operationGuard (pDoc);
+    CValueStateGuard<int> paintGuard (pDoc->m_iOutputPaintDepth, pDoc->m_iOutputPaintDepth + 1);
+    const LRESULT result = CView::WindowProc (message, wParam, lParam);
+    pDoc->m_fLastRepaintTime = pDoc->GetRepaintTime ();
+    return result;
+    }
+
   switch (message)
    {
     case WM_MOUSELEAVE:

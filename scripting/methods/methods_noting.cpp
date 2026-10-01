@@ -67,7 +67,15 @@ void CMUSHclientDoc::Tell(LPCTSTR Message)
         }  // end of notes in custom colour
       }
 
-    m_OutstandingLines.push_back (CPaneStyle (Message, fore, back, m_iNoteStyle));
+    m_OutstandingLines.push_back (CPaneStyle (Message, fore, back, m_iNoteStyle,
+      m_bInTrace || m_bTraceOutputRedraw));
+    if (m_bInTrace)
+      {
+      const size_t length = strlen (Message);
+      m_bTraceGroupHasOutput = m_bTraceGroupOutputQueued = true;
+      m_bTraceGroupNeedsSeparator = length < 4 ||
+        memcmp (Message + length - 4, "\r\n\r\n", 4) != 0;
+      }
     return;
     }
 

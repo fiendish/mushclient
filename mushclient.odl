@@ -450,6 +450,8 @@ library MUSHclient
 			[id(420)] long GetCommandLineCount();
 			[id(421)] long SetCommandWindowAutoResizeSuppressed(BOOL Suppressed);
 			[id(422)] long GetCommandWindowDesiredHeight(long CurrentHeight);
+			[id(423)] void BufferedRepaint();
+			[id(424)] void SetBufferedRepaintPaused(BOOL Paused);
 			//}}AFX_ODL_METHOD
 
 	};

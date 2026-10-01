@@ -16,6 +16,7 @@
 #include "plugins.h"
 #include "version.h"
 #include "output_line_buffer.h"
+#include "scripting/trace_output.h"
 
 #define COMPRESS_BUFFER_LENGTH 10000   // size of decompression buffer
 extern CString MUSHCLIENT_VERSION;
@@ -523,17 +524,19 @@ class ScriptItem
   // constructor
   ScriptItem (CPlugin * pPlugin,
               const string sText, 
-              const string sSource) :
+              const string sSource,
+              const size_t traceParent = CTraceOutput::noParent) :
         sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
         iPluginInstanceNumber
           (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
         sScriptText   (sText), 
-        sScriptSource (sSource) {};
+        sScriptSource (sSource), iTraceParent (traceParent) {};
 
   const string sPluginID;        // which plugin, or empty for the world
   const __int64 iPluginInstanceNumber;
   const string sScriptText;      // the script to execute
   const string sScriptSource;    // what it is, eg. "Trigger X"
+  const size_t iTraceParent;     // match heading for the deferred callback
   };
 
 typedef list<ScriptItem> ScriptItemMap;
@@ -545,17 +548,19 @@ class OneShotItem
   // constructor
   OneShotItem (CPlugin * pPlugin,
               const string sKey,
-              const __int64 iCreationNumber) :
+              const __int64 iCreationNumber,
+              const size_t traceParent = CTraceOutput::noParent) :
         sPluginID (pPlugin ? (LPCTSTR) pPlugin->m_strID : ""),
         iPluginInstanceNumber
           (pPlugin ? pPlugin->m_iPluginInstanceNumber : 0),
         sItemKey   (sKey),
-        iCreationNumber (iCreationNumber) {};
+        iCreationNumber (iCreationNumber), iTraceParent (traceParent) {};
 
   const string sPluginID;     // which plugin, or empty for the world
   const __int64 iPluginInstanceNumber;
   const string sItemKey;      // the key to delete
   const __int64 iCreationNumber; // exact object instance that fired
+  const size_t iTraceParent;     // match heading for the deferred callback
   };
 
 typedef list<OneShotItem> OneShotItemMap;
@@ -1224,6 +1229,18 @@ public:
   int   m_iActiveProgressOperations;
   void BeginProgressOperation ();
   void EndProgressOperation ();
+  void RequestBufferedRepaint (double minInterval);
+  void FlushBufferedRepaint (bool intervalOnly = false);
+  bool m_bBufferedRepaintPending;
+  bool m_bBufferedRepaintFollowup;
+  bool m_bBufferedRepaintTraceOnly;
+  bool m_bBufferedRepaintOrdinaryRequest;
+  bool m_bInBufferedRepaint;
+  bool m_bBufferedRepaintPaused;
+  int m_iOutputPaintDepth;
+  double m_fLastRepaintTime;
+  double GetRepaintTime () const;
+  double m_fBufferedRepaintInterval;
 
 // we save the current style here on any style change *from the mud*
 // we don't want to mix up notes/user input with mud-set styles
@@ -1306,6 +1323,15 @@ public:
   bool m_bSyntaxErrorOnly;
   bool m_bDisconnectOK;
   bool m_bTrace;
+  unsigned int m_iTraceCategories;
+  unsigned int m_iTimerTraceCategory;
+  bool m_bInTrace;
+  CTraceOutput m_traceOutput;
+  bool m_bTraceGroupHasOutput, m_bTraceGroupNeedsSeparator, m_bTraceGroupOutputQueued;
+  bool m_bTraceOutputRedraw;
+  bool m_bTraceDeferredRepaint;
+  unsigned int m_iTraceRedrawRequests;
+  unsigned int m_iTraceOutputRedrawRequests;
   bool m_bInSendToScript;
   LONGLONG m_iScriptTimeTaken;        // time taken to execute scripts
 
@@ -2225,7 +2251,23 @@ public:
   long DoSetVariable (LPCTSTR VariableName, LPCTSTR Contents)
     { return SetVariable (VariableName, Contents); };
 
+  enum TraceCategory
+    {
+    eTraceIdleTicks = 1,
+    eTraceDisplay = 2,
+    eTraceOther = 4,
+    eTraceRepeatingTimers = 8,
+    eTraceAll = eTraceIdleTicks | eTraceDisplay | eTraceOther | eTraceRepeatingTimers
+    };
+
   void Trace (LPCTSTR lpszFormat, ...);
+  void TraceForCategory (const unsigned int category, const CString & message, const bool heading = false);
+  void BeginTraceEvent ();
+  void EndTraceEvent ();
+  void FlushTraceEvent ();
+  unsigned int GetTimerTraceCategory (const CTimer & timer) const;
+  unsigned int GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false) const;
+  void TraceScript (LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false);
 
   void Screendraw  (const long iType,
                     const long iLog,
@@ -2476,6 +2518,8 @@ protected:
 	afx_msg void OnUpdateFileReloaddefaults(CCmdUI* pCmdUI);
 	afx_msg void OnGameTrace();
 	afx_msg void OnUpdateGameTrace(CCmdUI* pCmdUI);
+  afx_msg void OnGameTraceCategory(UINT id);
+  afx_msg void OnUpdateGameTraceCategory(CCmdUI* pCmdUI);
 	afx_msg void OnEditFliptonotepad();
 	afx_msg void OnFileOpen();
 	afx_msg void OnFileSave();
@@ -2902,6 +2946,8 @@ public:
 	afx_msg long WindowBlendImage(LPCTSTR Name, LPCTSTR ImageId, long Left, long Top, long Right, long Bottom, short Mode, double Opacity, long SrcLeft, long SrcTop, long SrcRight, long SrcBottom);
 	afx_msg long WindowImageFromWindow(LPCTSTR Name, LPCTSTR ImageId, LPCTSTR SourceWindow);
 	afx_msg void Repaint();
+	afx_msg void BufferedRepaint();
+	afx_msg void SetBufferedRepaintPaused(BOOL Paused);
 	afx_msg long TextRectangle(long Left, long Top, long Right, long Bottom, long BorderOffset, long BorderColour, long BorderWidth, long OutsideFillColour, long OutsideFillStyle);
 	afx_msg long WindowGradient(LPCTSTR Name, long Left, long Top, long Right, long Bottom, long StartColour, long EndColour, short Mode);
 	afx_msg long WindowFilter(LPCTSTR Name, long Left, long Top, long Right, long Bottom, short Operation, double Options);
@@ -3193,6 +3239,60 @@ class timer
       }
   };    // end of class timer
 
+// Keep one native event together without tracing ordinary Lua helper calls.
+class CTraceEventGuard
+  {
+  public:
+    explicit CTraceEventGuard (CMUSHclientDoc * pDoc, bool independent = false);
+    ~CTraceEventGuard () noexcept(false);
+  private:
+    CMUSHclientDoc * m_pDoc;
+    bool m_independent;
+    CTraceOutput m_saved;
+    CTraceEventGuard (const CTraceEventGuard &);
+    CTraceEventGuard & operator= (const CTraceEventGuard &);
+  };
+
+class CTraceScope
+  {
+  public:
+    CTraceScope (CMUSHclientDoc * pDoc, unsigned int category, bool enabled,
+                 bool continuation = false, bool deferred = false,
+                 LPCTSTR procedure = NULL);
+    ~CTraceScope ();
+    void StartFunction ();
+    static void FirstLuaCall (void * scope);
+    void Function (const CString & message);
+  private:
+    CTraceEventGuard m_event;
+    CMUSHclientDoc * m_pDoc;
+    size_t m_previous, m_slot;
+    std::string m_caller, m_plugin;
+    unsigned int m_category, m_iRedrawRequests;
+    bool m_enabled, m_continuation, m_deferredRepaint;
+    CTraceScope (const CTraceScope &);
+    CTraceScope & operator= (const CTraceScope &);
+  };
+
+// Keep trace display origin within the current callback.
+class CTraceScriptGuard
+  {
+  public:
+    CTraceScriptGuard (CMUSHclientDoc * pDoc, LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false);
+    ~CTraceScriptGuard ();
+    void BeginCallback ();
+
+  private:
+    CMUSHclientDoc * m_pDoc;
+    CPlugin * m_pPlugin;
+    bool m_bSavedRedraw, m_bSavedDeferredRepaint;
+    unsigned int m_iRedrawRequests;
+    unsigned int m_iTraceOutputRequests;
+    bool m_bDisplay;
+    CTraceScriptGuard (const CTraceScriptGuard &);
+    CTraceScriptGuard & operator= (const CTraceScriptGuard &);
+  };
+
 // Retain a world until a synchronous operation and its callbacks unwind.
 class CWorldDocumentOperationGuard
   {
@@ -3202,7 +3302,7 @@ class CWorldDocumentOperationGuard
       if (m_pDoc)
         m_pDoc->BeginProgressOperation ();
       }
-    ~CWorldDocumentOperationGuard ()
+    ~CWorldDocumentOperationGuard () noexcept(false)
       {
       if (m_pDoc)
         m_pDoc->EndProgressOperation ();

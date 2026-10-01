@@ -177,6 +177,7 @@ CPlugin::CPlugin (CMUSHclientDoc * pDoc)
   m_iScriptTimeTaken = 0;
   m_bSavingStateNow = false;
   m_iActiveScriptCalls = 0;
+  m_bTraceRedrawPending = false;
   m_iSequence = DEFAULT_PLUGIN_SEQUENCE;
 
   } // end of constructor
@@ -401,7 +402,7 @@ void CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo)
                                    nparams,
                                    sparams, 
                                    nInvocationCount, NULL, NULL, NULL, NULL,
-                                   callinfo._name != ON_PLUGIN_TICK);
+                                   callinfo._name != ON_PLUGIN_TICK, true);
       }   // end of Lua
     else
       {
@@ -412,7 +413,7 @@ void CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo)
                                strType,
                                strReason,
                                params, 
-                               nInvocationCount, NULL);
+                               nInvocationCount, NULL, true);
       } // end of not Lua
     }   // end of having a script engine
 
@@ -454,7 +455,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                    sparams, 
                                    nInvocationCount,
                                    NULL, NULL, NULL,
-                                   &result))
+                                   &result, true, true))
         return false;
       return result;
       }   // end of Lua
@@ -482,7 +483,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                strReason,
                                params, 
                                nInvocationCount, 
-                               &result))
+                               &result, true))
         return false;
 
       // see what result was
@@ -538,7 +539,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult))
+                                  &bResult, true, true))
         return false;
       return bResult;
       }   // end of Lua
@@ -577,7 +578,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result))
+                             &result, true))
         return false;
 
     // see what result was
@@ -632,7 +633,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult))
+                                  &bResult, true, true))
         return false;
       return bResult;
       }   // end of Lua
@@ -666,7 +667,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result))
+                             &result, true))
         return false;
 
     // see what result was
@@ -724,7 +725,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                                   sparams, 
                                   nInvocationCount,
                                   NULL, NULL, NULL,
-                                  &bResult))
+                                  &bResult, true, true))
         return false;
       return bResult;
       }   // end of Lua
@@ -760,7 +761,7 @@ bool CPlugin::ExecutePluginScript (CScriptCallInfo & callinfo,
                              strReason,
                              params, 
                              nInvocationCount, 
-                             &result))
+                             &result, true))
         return false;
 
     // see what result was
@@ -808,7 +809,7 @@ void CPlugin::ExecutePluginScriptRtn (CScriptCallInfo & callinfo,
                                   strReason,
                                   strText,
                                   nInvocationCount,
-                                  strText);
+                                  strText, true);
       } // end of Lua
     else
       {
@@ -834,7 +835,7 @@ void CPlugin::ExecutePluginScriptRtn (CScriptCallInfo & callinfo,
                                strReason,
                                params, 
                                nInvocationCount, 
-                               &result);
+                               &result, true);
 
 
       // if they returned a string, give it back
@@ -1705,6 +1706,8 @@ bool CMUSHclientDoc::EndPluginListChangedDeferral (void)
 
 void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arguments
   {
+  CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1733,6 +1736,8 @@ void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arg
 // this is for when we want the first available plugin to handle something (eg. Trace, Sound)
 bool CMUSHclientDoc::SendToFirstPluginCallbacks (const string & sName, const char * sText)   // one argument
   {
+  CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1772,6 +1777,8 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnFalse)
   {
   bool bResult = true;    // assume they OK'd something
+  CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1808,6 +1815,8 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
 // this sends a string to all plugins and allows them to modify it
 void CMUSHclientDoc::SendToAllPluginCallbacksRtn (const string & sName, CString & strResult)  // taking and returning a string
   {
+  CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1841,6 +1850,8 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnTrue,
                                                const bool bStopOnFalse)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
@@ -1890,6 +1901,8 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
                                                const bool bStopOnTrue,
                                                const bool bStopOnFalse)
   {
+  CWorldDocumentOperationGuard operationGuard (this);
+  CTraceEventGuard traceEvent (this);
   CPluginNotesGuard notesGuard (this);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);

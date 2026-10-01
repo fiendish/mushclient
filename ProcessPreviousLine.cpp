@@ -182,6 +182,7 @@ static vector<CLine *> ResolveTriggerLines (
 
 bool CMUSHclientDoc::ProcessPreviousLine (void)
   {
+  CTraceEventGuard traceEvent (this);
 POSITION pos, 
          prevpos = NULL;
 int flags = NOTE_OR_COMMAND;
@@ -1003,6 +1004,8 @@ assemble the full text of the original line.
       }
 
     CPluginContextGuard contextGuard (this, pPlugin, false, false);
+    CValueStateGuard<size_t> traceParentGuard
+      (m_traceOutput.parent, deferred_it->iTraceParent);
     
     // if Lua, add style info to script space
     if (GetScriptEngine () && GetScriptEngine ()->L)
@@ -1061,6 +1064,8 @@ assemble the full text of the original line.
         trigger_item->nCreationNumber != trigger_it->iCreationNumber)
       continue;
 
+    CValueStateGuard<size_t> traceParentGuard
+      (m_traceOutput.parent, trigger_it->iTraceParent);
     ExecuteTriggerScript (trigger_item, strCurrentLine, StyledLine);
     }  // end of doing each trigger that had a script
 
@@ -1314,10 +1319,17 @@ __int64 iOutputGeneration = m_iOutputGeneration;
           trigger_item->iClipboardArg < MAX_WILDCARDS)
          putontoclipboard (trigger_item->wildcards [trigger_item->iClipboardArg].c_str (), m_bUTF_8);
 
-      if (trigger_item->strLabel.IsEmpty ())
-        Trace ("Matched trigger \"%s\"", (LPCTSTR) trigger_item->trigger);
-      else
-        Trace ("Matched trigger %s", (LPCTSTR) trigger_item->strLabel);
+      if (m_bTrace && !m_bInTrace && !m_bTraceOutputRedraw && (m_iTraceCategories & eTraceOther))
+        {
+        CString message;
+        if (trigger_item->strLabel.IsEmpty ())
+          message.Format ("Matched trigger \"%s\"", (LPCTSTR) trigger_item->trigger);
+        else
+          message.Format ("Matched trigger %s", (LPCTSTR) trigger_item->strLabel);
+        TraceForCategory (eTraceOther, message, true);
+        }
+      const size_t traceParent = m_traceOutput.MetadataParent
+        (m_CurrentPlugin ? (LPCTSTR) m_CurrentPlugin->m_strName : "", eTraceOther);
 
     // play the trigger sound, if we matched on a trigger
 
@@ -1367,7 +1379,7 @@ __int64 iOutputGeneration = m_iOutputGeneration;
         mapDeferredScripts.push_back (
             ScriptItem (m_CurrentPlugin, 
                         (const char *) strResponse, 
-                        (const char *) strScriptSource));
+                        (const char *) strScriptSource, traceParent));
         }
       else
         {
@@ -1683,7 +1695,7 @@ __int64 iOutputGeneration = m_iOutputGeneration;
          triggerList.push_back
            (OneShotItem (m_CurrentPlugin,
                          (const char *) trigger_item->strInternalName,
-                         trigger_item->nCreationNumber));
+                         trigger_item->nCreationNumber, traceParent));
 
       if (!trigger_item->bKeepEvaluating) // exit loop if no more evaluation wanted
         break;
