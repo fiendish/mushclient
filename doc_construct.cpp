@@ -55,7 +55,7 @@ int i;
   SetDefaults (false);        // set up numeric/boolean defaults
   SetAlphaDefaults (false);   // set up alpha defaults
 
-  m_strWorldID = GetUniqueID ();      // default world ID
+  m_strWorldID = ::GetUniqueID ();      // default world ID
 
   m_CurrentPlugin = NULL;     // no plugin active right now
 
