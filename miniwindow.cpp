@@ -1722,6 +1722,25 @@ long CMiniWindow::Position(long Left, long Top,
 
   */
 
+// Check ASCII callback names without a temporary CString. Use the existing
+// label check for non-ASCII characters so locale handling stays the same.
+static bool InvalidHotspotCallback (LPCTSTR label)
+  {
+  if (!*label) return false;
+  const unsigned char * p = reinterpret_cast<const unsigned char *> (label);
+  if (*p >= 128) return CheckLabel (label, true) != FALSE;
+  if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z')))
+    return true;
+  for (++p; *p; ++p)
+    {
+    if (*p >= 128) return CheckLabel (label, true) != FALSE;
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+          (*p >= '0' && *p <= '9') || *p == '_' || *p == '.'))
+      return true;
+    }
+  return false;
+  }
+
 // add a hotspot for handling mouse-over, mouse up/down events
 long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
                              LPCTSTR HotspotId,
@@ -1737,15 +1756,15 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
                              long Flags)
   {
 
-  if (strlen (MouseOver) > 0 && CheckLabel (MouseOver, true))
+  if (InvalidHotspotCallback (MouseOver))
     return eInvalidObjectLabel;
-  if (strlen (CancelMouseOver) > 0 && CheckLabel (CancelMouseOver, true))
+  if (InvalidHotspotCallback (CancelMouseOver))
     return eInvalidObjectLabel;
-  if (strlen (MouseDown) > 0 && CheckLabel (MouseDown, true))
+  if (InvalidHotspotCallback (MouseDown))
     return eInvalidObjectLabel;
-  if (strlen (CancelMouseDown) > 0 && CheckLabel (CancelMouseDown, true))
+  if (InvalidHotspotCallback (CancelMouseDown))
     return eInvalidObjectLabel;
-  if (strlen (MouseUp) > 0 && CheckLabel (MouseUp, true))
+  if (InvalidHotspotCallback (MouseUp))
     return eInvalidObjectLabel;
 
   // can't switch plugins here :)
@@ -3901,9 +3920,9 @@ long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
                               LPCTSTR ReleaseCallback, long Flags)
   {
 
-  if (strlen (MoveCallback) > 0 && CheckLabel (MoveCallback, true))
+  if (InvalidHotspotCallback (MoveCallback))
     return eInvalidObjectLabel;
-  if (strlen (ReleaseCallback) > 0 && CheckLabel (ReleaseCallback, true))
+  if (InvalidHotspotCallback (ReleaseCallback))
     return eInvalidObjectLabel;
 
   // can't switch plugins here :)
@@ -4249,7 +4268,7 @@ long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
                                      LPCTSTR MoveCallback)
   {
 
-  if (strlen (MoveCallback) > 0 && CheckLabel (MoveCallback, true))
+  if (InvalidHotspotCallback (MoveCallback))
     return eInvalidObjectLabel;
 
   // can't switch plugins here :)
