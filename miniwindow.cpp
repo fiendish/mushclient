@@ -3,6 +3,7 @@
 // See: http://www.gammon.com.au/mw
 
 #include "stdafx.h"
+#include <tuple>
 #include "MUSHclient.h"
 #include "doc.h"
 #include "MUSHview.h"
@@ -14,8 +15,29 @@
 #define PNG_NO_CONSOLE_IO
 #include "png\png.h"
 
+static std::shared_ptr<MiniWindowDrawingResources> SharedDrawingResources ();
+static CBrush * CachedSolidBrush (MiniWindowDrawingResources *, long);
+
+// Restore cached objects before another call can evict them, including on exceptions.
+class MiniWindowSelectedObject
+  {
+  HDC m_DC;
+  HGDIOBJ m_Previous;
+  public:
+  MiniWindowSelectedObject (CDC * dc, CGdiObject * object)
+    : m_DC (dc->GetSafeHdc ()),
+      m_Previous (::SelectObject (m_DC, object->GetSafeHandle ()))
+    { }
+  ~MiniWindowSelectedObject ()
+    {
+    if (Valid ()) ::SelectObject (m_DC, m_Previous);
+    }
+  bool Valid () const { return m_Previous && m_Previous != HGDI_ERROR; }
+  };
+
 // constructor
 CMiniWindow::CMiniWindow ()  :
+          m_DrawingResources (SharedDrawingResources ()),
           m_hOldBitmap (NULL),
           m_Bitmap (NULL),
           m_iWidth (0), m_iHeight (0),
@@ -293,17 +315,17 @@ long  CMiniWindow::RectOp (short Action, long Left, long Top, long Right, long B
     {
     case 1:       // frame
       {
-      CBrush br1;
-      br1.CreateSolidBrush (Colour1);
-      pdc->FrameRect (CRect (Left, Top, FixRight (Right), FixBottom (Bottom)), &br1);
+      CBrush * brush = CachedSolidBrush (m_DrawingResources.get (), Colour1);
+      if (!brush) return eBadParameter;
+      pdc->FrameRect (CRect (Left, Top, FixRight (Right), FixBottom (Bottom)), brush);
       break;
       }
 
     case 2:       // fill
       {
-      CBrush br1;
-      br1.CreateSolidBrush (Colour1);
-      pdc->FillRect (CRect (Left, Top, FixRight (Right), FixBottom (Bottom)), &br1);
+      CBrush * brush = CachedSolidBrush (m_DrawingResources.get (), Colour1);
+      if (!brush) return eBadParameter;
+      pdc->FillRect (CRect (Left, Top, FixRight (Right), FixBottom (Bottom)), brush);
       break;
       }
 
@@ -344,22 +366,22 @@ long  CMiniWindow::RectOp (short Action, long Left, long Top, long Right, long B
     case 6:       // Flood fill border
       {
       // create brush for fill colour
-      CBrush br;
-      br.CreateSolidBrush (Colour2);
-      CBrush* oldBrush = pdc->SelectObject(&br);
+      CBrush * brush = CachedSolidBrush (m_DrawingResources.get (), Colour2);
+      if (!brush) return eBadParameter;
+      MiniWindowSelectedObject selectedBrush (pdc, brush);
+      if (!selectedBrush.Valid ()) return eBadParameter;
       pdc->FloodFill (Left, Top, Colour1);
-      pdc->SelectObject (oldBrush);
       break;
       }
 
     case 7:       // Flood fill surface
       {
       // create brush for fill colour
-      CBrush br;
-      br.CreateSolidBrush (Colour2);
-      CBrush* oldBrush = pdc->SelectObject(&br);
+      CBrush * brush = CachedSolidBrush (m_DrawingResources.get (), Colour2);
+      if (!brush) return eBadParameter;
+      MiniWindowSelectedObject selectedBrush (pdc, brush);
+      if (!selectedBrush.Valid ()) return eBadParameter;
       pdc->ExtFloodFill (Left, Top, Colour1, FLOODFILLSURFACE);
-      pdc->SelectObject (oldBrush);
       break;
       }
 
@@ -544,6 +566,103 @@ long ValidateBrushStyle (const long BrushStyle,
 
   */
 
+// One bounded cache serves the ordinary drawing calls in all miniwindows.
+class MiniWindowDrawingResources
+  {
+  typedef std::tuple<long, long, long> PenKey;
+  typedef std::pair<long, long> BrushKey;
+  std::map<PenKey, std::unique_ptr<CPen> > m_Pens;
+  std::map<BrushKey, std::unique_ptr<CBrush> > m_Brushes;
+
+  public:
+  CPen * Pen (long colour, long style, long width)
+    {
+    // Null pens can share a stock handle. Keep one wrapper for that handle.
+    const PenKey key = (style & PS_STYLE_MASK) == PS_NULL ?
+                       PenKey (0, PS_NULL, 0) : PenKey (colour, style, width);
+    const auto found = m_Pens.find (key);
+    if (found != m_Pens.end ()) return found->second.get ();
+    // Each drawing method restores its selected objects before the next call.
+    // Limit live handles when drawing uses thousands of colours.
+    if (m_Pens.size () >= 512) m_Pens.clear ();
+    std::unique_ptr<CPen> pen (new CPen);
+    MakeAPen (*pen, colour, style, width);
+    if (!pen->GetSafeHandle ()) return NULL;
+    CPen * result = pen.get ();
+    m_Pens.emplace (key, std::move (pen));
+    return result;
+    }
+
+  CBrush * Brush (long style, long pen_colour, long brush_colour, long & status)
+    {
+    // Solid brushes use the fill colour. Hatch brushes use the pen colour.
+    // Null and monochrome pattern brushes do not contain a colour.
+    const long colour = style == 0 ? brush_colour :
+                        (style >= 2 && style <= 7 ? pen_colour : 0);
+    const BrushKey key (style, colour);
+    const auto found = m_Brushes.find (key);
+    if (found != m_Brushes.end ())
+      {
+      status = eOK;
+      return found->second.get ();
+      }
+    if (m_Brushes.size () >= 512) m_Brushes.clear ();
+    std::unique_ptr<CBrush> brush (new CBrush);
+    status = ValidateBrushStyle (style, pen_colour, brush_colour, *brush);
+    if (status != eOK) return NULL;
+    if (!brush->GetSafeHandle ())
+      {
+      status = eBadParameter;
+      return NULL;
+      }
+    CBrush * result = brush.get ();
+    m_Brushes.emplace (key, std::move (brush));
+    return result;
+    }
+  };
+
+// Miniwindows own the cache. This weak reference shares it without extending its lifetime.
+static std::weak_ptr<MiniWindowDrawingResources> shared_drawing_resources;
+
+static std::shared_ptr<MiniWindowDrawingResources> SharedDrawingResources ()
+  {
+  std::shared_ptr<MiniWindowDrawingResources> resources = shared_drawing_resources.lock ();
+  if (!resources)
+    {
+    resources = std::make_shared<MiniWindowDrawingResources> ();
+    shared_drawing_resources = resources;
+    }
+  return resources;
+  }
+
+static CBrush * CachedSolidBrush (MiniWindowDrawingResources * resources, long colour)
+  {
+  long status;
+  return resources->Brush (0, 0, colour, status);
+  }
+
+class MiniWindowPen
+  {
+  CPen * m_Pen;
+  public:
+  MiniWindowPen (MiniWindowDrawingResources * resources,
+                 long colour, long style, long width)
+    : m_Pen (resources->Pen (colour, style, width)) { }
+  CPen * Get () const { return m_Pen; }
+  };
+
+class MiniWindowBrush
+  {
+  long m_Status;
+  CBrush * m_Brush;
+  public:
+  MiniWindowBrush (MiniWindowDrawingResources * resources,
+                   long style, long pen_colour, long brush_colour)
+    : m_Brush (resources->Brush (style, pen_colour, brush_colour, m_Status)) { }
+  long Status () const { return m_Status; }
+  CBrush * Get () const { return m_Brush; }
+  };
+
 // various circle/ellipse/pie operations
 long CMiniWindow::CircleOp (short Action,
                             long Left, long Top, long Right, long Bottom,
@@ -557,18 +676,18 @@ long CMiniWindow::CircleOp (short Action,
     return ePenStyleNotValid;
 
   // validate and create requested bruch
-  CBrush br;
-
-  if (ValidateBrushStyle (BrushStyle, PenColour, BrushColour, br))
-    return eBrushStyleNotValid;
+  MiniWindowBrush br (m_DrawingResources.get (), BrushStyle, PenColour, BrushColour);
+  if (br.Status () != eOK) return br.Status ();
 
   // create requested pen
-  CPen pen;
-  MakeAPen (pen, PenColour, PenStyle, PenWidth);
+  MiniWindowPen pen (m_DrawingResources.get (), PenColour, PenStyle, PenWidth);
+  if (!pen.Get ()) return eBadParameter;
 
   // select into DC
-  CPen* oldPen = pdc->SelectObject(&pen);
-  CBrush* oldBrush = pdc->SelectObject(&br);
+  MiniWindowSelectedObject selectedPen (pdc, pen.Get ());
+  if (!selectedPen.Valid ()) return eBadParameter;
+  MiniWindowSelectedObject selectedBrush (pdc, br.Get ());
+  if (!selectedBrush.Valid ()) return eBadParameter;
 
   if (BrushStyle > 1 && BrushStyle <= 7)
     {
@@ -630,9 +749,6 @@ long CMiniWindow::CircleOp (short Action,
 
     } // end of switch
 
-  // put things back
-  pdc->SelectObject (oldPen);
-  pdc->SelectObject (oldBrush);
 
   return iResult;
 
@@ -952,16 +1068,15 @@ long CMiniWindow::Line (long x1, long y1, long x2, long y2,
   pdc->SetBkMode (TRANSPARENT);
 
   // create requested pen
-  CPen pen;
-  MakeAPen (pen, PenColour, PenStyle, PenWidth);
+  MiniWindowPen pen (m_DrawingResources.get (), PenColour, PenStyle, PenWidth);
+  if (!pen.Get ()) return eBadParameter;
 
-  CPen* oldPen = pdc->SelectObject(&pen);
+  MiniWindowSelectedObject selectedPen (pdc, pen.Get ());
+  if (!selectedPen.Valid ()) return eBadParameter;
 
   pdc->MoveTo (x1, y1);
   pdc->LineTo (x2, y2);    // note NOT: FixRight (x2), FixBottom (y2) (as at version 4.38)
 
-  // put things back
-  pdc->SelectObject (oldPen);
 
   return eOK;
 
@@ -981,17 +1096,16 @@ long CMiniWindow::Arc (long Left, long Top, long Right, long Bottom,
   pdc->SetBkMode (TRANSPARENT);
 
   // create requested pen
-  CPen pen;
-  MakeAPen (pen, PenColour, PenStyle, PenWidth);
+  MiniWindowPen pen (m_DrawingResources.get (), PenColour, PenStyle, PenWidth);
+  if (!pen.Get ()) return eBadParameter;
 
-  CPen* oldPen = pdc->SelectObject(&pen);
+  MiniWindowSelectedObject selectedPen (pdc, pen.Get ());
+  if (!selectedPen.Valid ()) return eBadParameter;
 
   pdc->Arc(Left, Top, FixRight (Right), FixBottom (Bottom),
           x1, y1, // from
           FixRight (x2), FixBottom (y2)); // to
 
-  // put things back
-  pdc->SelectObject (oldPen);
 
   return eOK;
 
@@ -1579,14 +1693,13 @@ long CMiniWindow::Bezier(LPCTSTR Points, long PenColour, long PenStyle, long Pen
   pdc->SetBkMode (TRANSPARENT);
 
   // create requested pen
-  CPen pen;
-  MakeAPen (pen, PenColour, PenStyle, PenWidth);
-  CPen* oldPen = pdc->SelectObject(&pen);
+  MiniWindowPen pen (m_DrawingResources.get (), PenColour, PenStyle, PenWidth);
+  if (!pen.Get ()) return eBadParameter;
+  MiniWindowSelectedObject selectedPen (pdc, pen.Get ());
+  if (!selectedPen.Valid ()) return eBadParameter;
 
   pdc->PolyBezier(&points [0], iCount);
 
-  // put things back
-  pdc->SelectObject (oldPen);
 
   return eOK;
 
@@ -1606,10 +1719,8 @@ long CMiniWindow::Polygon(LPCTSTR Points,
     return ePenStyleNotValid;
 
   // validate and create requested bruch
-  CBrush br;
-
-  if (ValidateBrushStyle (BrushStyle, PenColour, BrushColour, br))
-    return eBrushStyleNotValid;
+  MiniWindowBrush br (m_DrawingResources.get (), BrushStyle, PenColour, BrushColour);
+  if (br.Status () != eOK) return br.Status ();
 
   vector<string> v;
 
@@ -1644,12 +1755,14 @@ long CMiniWindow::Polygon(LPCTSTR Points,
     }
 
   // create requested pen
-  CPen pen;
-  MakeAPen (pen, PenColour, PenStyle, PenWidth);
+  MiniWindowPen pen (m_DrawingResources.get (), PenColour, PenStyle, PenWidth);
+  if (!pen.Get ()) return eBadParameter;
 
   // select pen and brush into device context
-  CPen* oldPen = pdc->SelectObject(&pen);
-  CBrush* oldBrush = pdc->SelectObject(&br);
+  MiniWindowSelectedObject selectedPen (pdc, pen.Get ());
+  if (!selectedPen.Valid ()) return eBadParameter;
+  MiniWindowSelectedObject selectedBrush (pdc, br.Get ());
+  if (!selectedBrush.Valid ()) return eBadParameter;
 
   pdc->SetPolyFillMode (Winding ? WINDING : ALTERNATE);
 
@@ -1674,9 +1787,6 @@ long CMiniWindow::Polygon(LPCTSTR Points,
   else
     pdc->Polyline(&points [0], iCount);
 
-  // put things back
-  pdc->SelectObject (oldPen);
-  pdc->SelectObject (oldBrush);
 
   return eOK;
 
@@ -1941,12 +2051,14 @@ long CMiniWindow::ImageOp(short Action,
   br.CreatePatternBrush (bitmap);
 
   // create requested pen
-  CPen pen;
-  MakeAPen (pen, PenColour, PenStyle, PenWidth);
+  MiniWindowPen pen (m_DrawingResources.get (), PenColour, PenStyle, PenWidth);
+  if (!pen.Get ()) return eBadParameter;
 
   // select into DC
-  CPen* oldPen = pdc->SelectObject(&pen);
-  CBrush* oldBrush = pdc->SelectObject(&br);
+  MiniWindowSelectedObject selectedPen (pdc, pen.Get ());
+  if (!selectedPen.Valid ()) return eBadParameter;
+  MiniWindowSelectedObject selectedBrush (pdc, &br);
+  if (!selectedBrush.Valid ()) return eBadParameter;
 
   switch (Action)
 
@@ -1975,9 +2087,6 @@ long CMiniWindow::ImageOp(short Action,
 
     } // end of switch
 
-  // put things back
-  pdc->SelectObject (oldPen);
-  pdc->SelectObject (oldBrush);
 
   return iResult;
 

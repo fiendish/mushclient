@@ -70,9 +70,13 @@ typedef HotspotMap::iterator HotspotMapIterator;
 #define MINIWINDOW_IGNORE_MOUSE 0x08           // ignore mouse-down, mouse-over etc. 
 #define MINIWINDOW_KEEP_HOTSPOTS 0x10          // retain existing hotspots
 
+class MiniWindowDrawingResources;
+
 class CMiniWindow
   {
   private:
+
+    std::shared_ptr<MiniWindowDrawingResources> m_DrawingResources;
 
     CDC * pdc;                // our offscreen device context
     HBITMAP     m_hOldBitmap; // borrowed original bitmap handle, not an MFC temporary wrapper
