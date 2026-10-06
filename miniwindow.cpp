@@ -1854,7 +1854,7 @@ static bool InvalidHotspotCallback (LPCTSTR label)
 // add a hotspot for handling mouse-over, mouse up/down events
 long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
                              LPCTSTR HotspotId,
-                             string sPluginID,
+                             LPCTSTR sPluginID,
                              long Left, long Top, long Right, long Bottom,
                              LPCTSTR MouseOver,
                              LPCTSTR CancelMouseOver,
@@ -1881,6 +1881,11 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
+  // Own the callback ID only when this window first receives plugin hotspots.
+  string replacementPluginID;
+  if (m_sCallbackPlugin.empty ())
+    replacementPluginID = sPluginID;
+
   std::unique_ptr<CHotspot> pHotspot (new CHotspot);
 
   pHotspot->m_sMouseOver        = MouseOver;
@@ -1893,7 +1898,7 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
   pHotspot->m_Flags             = Flags;
 
   // if not in a plugin, look in main world for hotspot callbacks, and remember the dispatch ID
-  if (sPluginID.empty ())
+  if (!*sPluginID)
     {
     // Resolving a Lua name may run __index or a GC finalizer. As with mouse
     // callbacks, do not allow WindowDelete to destroy this active window.
@@ -1913,13 +1918,21 @@ long CMiniWindow::AddHotspot(CMUSHclientDoc * pDoc,
     return eHotspotPluginChanged;
 
   pHotspot->m_rect = CRect (Left, Top, FixRight (Right), FixBottom (Bottom));
-  HotspotMapIterator it = m_Hotspots.find (HotspotId);
-  CHotspot * pOldHotspot = it == m_Hotspots.end () ? NULL : it->second;
-  m_Hotspots [HotspotId] = pHotspot.get ();
+  string hotspotId (HotspotId);
+  HotspotMapIterator it = m_Hotspots.lower_bound (hotspotId);
+  CHotspot * pOldHotspot = NULL;
+  if (it == m_Hotspots.end () || it->first != hotspotId)
+    m_Hotspots.emplace_hint (it, std::move (hotspotId), pHotspot.get ());
+  else
+    {
+    pOldHotspot = it->second;
+    it->second = pHotspot.get ();
+    }
   pHotspot.release ();
   delete pOldHotspot;
 
-  m_sCallbackPlugin.swap (sPluginID);
+  if (!replacementPluginID.empty ())
+    m_sCallbackPlugin.swap (replacementPluginID);
 
   if (m_sMouseOverHotspot == HotspotId)
     m_sMouseOverHotspot.erase ();
@@ -4024,7 +4037,7 @@ CPoint menupoint (Left, Top);
   }  // end of CMiniWindow::Menu
 
 long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
-                              string sPluginID,
+                              LPCTSTR sPluginID,
                               LPCTSTR MoveCallback,
                               LPCTSTR ReleaseCallback, long Flags)
   {
@@ -4038,14 +4051,15 @@ long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
-  if (m_Hotspots.find (HotspotId) == m_Hotspots.end ())
+  HotspotMapIterator first = m_Hotspots.find (HotspotId);
+  if (first == m_Hotspots.end ())
     return eHotspotNotInstalled;   // no such hotspot
 
   DISPID dispidMove = DISPID_UNKNOWN;
   DISPID dispidRelease = DISPID_UNKNOWN;
 
   // if not in a plugin, look in main world for hotspot callbacks, and remember the dispatch ID
-  if (sPluginID.empty ())
+  if (!*sPluginID)
     {
     CBoolStateGuard executingGuard (m_bExecutingScript, true);
     CString strErrorMessage;
@@ -4058,7 +4072,7 @@ long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
   // WindowCreate). Do not carry its pointer across that lookup.
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
-  HotspotMapIterator it = m_Hotspots.find (HotspotId);
+  HotspotMapIterator it = *sPluginID ? first : m_Hotspots.find (HotspotId);
   if (it == m_Hotspots.end ())
     return eHotspotNotInstalled;
 
@@ -4066,7 +4080,7 @@ long CMiniWindow::DragHandler(CMUSHclientDoc * pDoc, LPCTSTR HotspotId,
   pHotspot->m_sMoveCallback = MoveCallback;
   pHotspot->m_sReleaseCallback = ReleaseCallback;
   pHotspot->m_DragFlags = Flags;
-  if (sPluginID.empty ())
+  if (!*sPluginID)
     {
     pHotspot->m_dispid_MoveCallback = dispidMove;
     pHotspot->m_dispid_ReleaseCallback = dispidRelease;
@@ -4373,7 +4387,7 @@ long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
 
 long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
                                      LPCTSTR HotspotId,
-                                     string sPluginID,
+                                     LPCTSTR sPluginID,
                                      LPCTSTR MoveCallback)
   {
 
@@ -4384,13 +4398,14 @@ long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
 
-  if (m_Hotspots.find (HotspotId) == m_Hotspots.end ())
+  HotspotMapIterator first = m_Hotspots.find (HotspotId);
+  if (first == m_Hotspots.end ())
     return eHotspotNotInstalled;   // no such hotspot
 
   DISPID dispidScrollwheel = DISPID_UNKNOWN;
 
   // if not in a plugin, look in main world for hotspot callbacks, and remember the dispatch ID
-  if (sPluginID.empty ())
+  if (!*sPluginID)
     {
     CBoolStateGuard executingGuard (m_bExecutingScript, true);
     CString strErrorMessage;
@@ -4401,13 +4416,13 @@ long CMiniWindow::ScrollwheelHandler(CMUSHclientDoc * pDoc,
   // As with drag handlers, lookup must finish before borrowing the hotspot.
   if (!m_sCallbackPlugin.empty () && m_sCallbackPlugin != sPluginID)
     return eHotspotPluginChanged;
-  HotspotMapIterator it = m_Hotspots.find (HotspotId);
+  HotspotMapIterator it = *sPluginID ? first : m_Hotspots.find (HotspotId);
   if (it == m_Hotspots.end ())
     return eHotspotNotInstalled;
 
   CHotspot * pHotspot = it->second;
   pHotspot->m_sScrollwheelCallback = MoveCallback;
-  if (sPluginID.empty ())
+  if (!*sPluginID)
     pHotspot->m_dispid_ScrollwheelCallback = dispidScrollwheel;
 
   return eOK;

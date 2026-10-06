@@ -212,7 +212,7 @@ class CMiniWindow
 
   long AddHotspot(CMUSHclientDoc * pDoc,
                    LPCTSTR HotspotId, 
-                   string sPluginID,
+                   LPCTSTR sPluginID,
                    long Left, long Top, long Right, long Bottom, 
                    LPCTSTR MouseOver, 
                    LPCTSTR CancelMouseOver, 
@@ -267,14 +267,14 @@ class CMiniWindow
 
   long DragHandler(CMUSHclientDoc * pDoc, 
                    LPCTSTR HotspotId, 
-                   string sPluginID,
+                   LPCTSTR sPluginID,
                    LPCTSTR MoveCallback, 
                    LPCTSTR ReleaseCallback, 
                    long Flags);
 
   long ScrollwheelHandler(CMUSHclientDoc * pDoc, 
                          LPCTSTR HotspotId, 
-                         string sPluginID,
+                         LPCTSTR sPluginID,
                          LPCTSTR MoveCallback);
 
   long HotspotTooltip(LPCTSTR HotspotId, 
@@ -306,7 +306,8 @@ class CMiniWindow
   };
 
 
-typedef map<string, CMiniWindow *> MiniWindowMap;
+// Find by a C string without allocating a temporary window name.
+typedef map<string, CMiniWindow *, std::less<> > MiniWindowMap;
 
 typedef MiniWindowMap::iterator MiniWindowMapIterator;
 

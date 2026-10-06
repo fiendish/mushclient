@@ -585,12 +585,10 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
 
   CBoolStateGuard addingHotspotGuard (*addingHotspot, true);
 
-  string sPluginID;
-
-  if (m_CurrentPlugin)
-    {
+  // Plugin callback setup does not run Lua, so this ID stays valid for the call.
+  LPCTSTR sPluginID = "";
+  if (m_CurrentPlugin && !m_CurrentPlugin->m_strID.IsEmpty ())
     sPluginID = m_CurrentPlugin->m_strID;
-    }
 
   long status;
 
@@ -610,6 +608,10 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
   // in mouse was over hotspot when it was created, do a "mouse move" to detect this
   if ((status == eOK) && !(GetCapture()))
     {
+
+    // Match the stored rectangle, including any resize during world callback lookup.
+    if (!CRect (Left, Top, mw->FixRight (Right), mw->FixBottom (Bottom)).PtInRect (mw->m_last_mouseposition))
+      return status;
 
     // only check the current hotspot, not all of them
     HotspotMapIterator it = mw->m_Hotspots.find (HotspotId);
@@ -1465,12 +1467,10 @@ long CMUSHclientDoc::WindowDragHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR 
   if (it == m_MiniWindows.end ())
     return eNoSuchWindow;
 
-  string sPluginID;
-
-  if (m_CurrentPlugin)
-    {
+  // Plugin callback setup does not run Lua, so this ID stays valid for the call.
+  LPCTSTR sPluginID = "";
+  if (m_CurrentPlugin && !m_CurrentPlugin->m_strID.IsEmpty ())
     sPluginID = m_CurrentPlugin->m_strID;
-    }
 
   return it->second->DragHandler (this, HotspotId, sPluginID,
                                   MoveCallback, ReleaseCallback, Flags);
@@ -1485,12 +1485,10 @@ long CMUSHclientDoc::WindowScrollwheelHandler(LPCTSTR Name, LPCTSTR HotspotId, L
   if (it == m_MiniWindows.end ())
     return eNoSuchWindow;
 
-  string sPluginID;
-
-  if (m_CurrentPlugin)
-    {
+  // Plugin callback setup does not run Lua, so this ID stays valid for the call.
+  LPCTSTR sPluginID = "";
+  if (m_CurrentPlugin && !m_CurrentPlugin->m_strID.IsEmpty ())
     sPluginID = m_CurrentPlugin->m_strID;
-    }
 
   return it->second->ScrollwheelHandler (this, HotspotId, sPluginID,
                                          MoveCallback);
