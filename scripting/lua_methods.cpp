@@ -6447,11 +6447,61 @@ static int L_WindowHotspotInfo (lua_State *L)
 //----------------------------------------
 //  world.WindowHotspotList
 //----------------------------------------
+static int L_PushHotspotListSnapshot (lua_State *L)
+  {
+  const vector<string> & names =
+    *static_cast<const vector<string> *> (lua_touserdata (L, 1));
+  if (names.empty ())
+    lua_pushnil (L);
+  else
+    {
+    lua_createtable (L, (int) names.size (), 0);
+    for (size_t i = 0; i < names.size (); ++i)
+      {
+      lua_pushstring (L, names [i].c_str ());
+      lua_rawseti (L, -2, (int) i + 1);
+      }
+    }
+  return 1;
+  }
+
 static int L_WindowHotspotList (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
-  VARIANT v = pDoc->WindowHotspotList (my_checkstring (L, 1)); // name
-  return pushVariant (L, v);  // number of result fields
+  const char * name = my_checkstring (L, 1);
+  lua_pushcfunction (L, L_PushHotspotListSnapshot);
+  int status;
+  {
+  // Snapshot before Lua allocations can run finalizers that delete hotspots
+  // or their window. Protect conversion so a Lua error releases the snapshot.
+  vector<string> names;
+  MiniWindowMapIterator window = pDoc->m_MiniWindows.find (name);
+  if (window != pDoc->m_MiniWindows.end ())
+    {
+    const HotspotMap & hotspots = window->second->m_Hotspots;
+    names.reserve (hotspots.size ());
+    for (HotspotMap::const_iterator i = hotspots.begin (); i != hotspots.end (); ++i)
+      {
+      const char * id = i->first.c_str ();
+      const unsigned char * p = reinterpret_cast<const unsigned char *> (id);
+      while (*p && *p < 0x80)
+        ++p;
+      if (*p)
+        {
+        // Preserve the COM path's ANSI/BSTR/ANSI conversion for non-ASCII IDs.
+        COleVariant converted (id);
+        names.push_back (string (CString (converted.bstrVal)));
+        }
+      else
+        names.push_back (i->first);
+      }
+    }
+  lua_pushlightuserdata (L, &names);
+  status = lua_pcall (L, 1, 1, 0);
+  } // destroy the snapshot before propagating a Lua error
+  if (status)
+    return lua_error (L);
+  return 1;
   } // end of L_WindowHotspotList
 
 //----------------------------------------
