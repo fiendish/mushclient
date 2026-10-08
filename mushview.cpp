@@ -1605,7 +1605,15 @@ ASSERT_VALID(pDoc);
 
   FixupTitle ();
 
-  if (m_ToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX | 0x40) && m_ToolTip.AddTool(this))
+  // Keep mouse input in the view when a balloon covers the pointer.
+  TOOLINFO toolInfo = { sizeof (TOOLINFO) };
+  toolInfo.uFlags = TTF_IDISHWND | TTF_TRANSPARENT;
+  toolInfo.hwnd = GetParent()->GetSafeHwnd();
+  toolInfo.uId = (UINT_PTR) GetSafeHwnd();
+  toolInfo.lpszText = LPSTR_TEXTCALLBACK;
+
+  if (m_ToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX | 0x40) &&
+      m_ToolTip.SendMessage(TTM_ADDTOOL, 0, (LPARAM) &toolInfo))
   {
     m_ToolTip.SendMessage(TTM_SETMAXTIPWIDTH, 0, SHRT_MAX);
     m_ToolTip.SendMessage(TTM_SETDELAYTIME, TTDT_AUTOPOP, pDoc->m_iToolTipVisibleTime - 1);  // zero will be default  (-1)

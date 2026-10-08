@@ -625,7 +625,16 @@ long CMUSHclientDoc::WindowAddHotspot(LPCTSTR Name,
 	        CView* pView = GetNextView(pos);
 
 	        if (pView->IsKindOf(RUNTIME_CLASS(CMUSHView)))
+            {
+            // A hover callback can replace the hotspot after WM_SETCURSOR.
+            // Select the new cursor before running its mouseover callback.
+            CPoint point;
+            if (::GetCursorPos (&point) &&
+                ::WindowFromPoint (point) == pView->GetSafeHwnd ())
+              pView->SendMessage (WM_SETCURSOR, (WPARAM) pView->GetSafeHwnd (),
+                                  MAKELPARAM (HTCLIENT, WM_MOUSEMOVE));
             ((CMUSHView*)pView)->Mouse_Move_MiniWindow (this, m_lastMousePosition);
+            }
           } // end of looping through views
         }
       } // end of hotspot found
