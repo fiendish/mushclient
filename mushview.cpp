@@ -7057,6 +7057,9 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
           {
           // now activate for *this* hotspot
           m_ToolTip.Activate(TRUE);
+          // A callback can replace the hovered hotspot with the same ID.
+          // Refresh the visible popup's text and position for its new contents.
+          m_ToolTip.UpdateTipText (LPSTR_TEXTCALLBACK, this);
           m_nLastToolTipLine = 0;
           m_nLastToolTipColumn = 0;
           }   // end of having tooltip window
@@ -7098,6 +7101,9 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
                                       mw->m_sCallbackPlugin, 
                                       pHotspot->m_sMouseOver, 
                                       sHotspotId, MW_MOUSE_NOT_FIRST);
+          // Repeated callbacks can change the text without replacing the hotspot.
+          if (::IsWindow(m_ToolTip.m_hWnd))
+            m_ToolTip.UpdateTipText (LPSTR_TEXTCALLBACK, this);
           }
 
         }
