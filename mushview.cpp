@@ -7101,6 +7101,9 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
                                       mw->m_sCallbackPlugin, 
                                       pHotspot->m_sMouseOver, 
                                       sHotspotId, MW_MOUSE_NOT_FIRST);
+          // Repeated callbacks can change the text without replacing the hotspot.
+          if (::IsWindow(m_ToolTip.m_hWnd))
+            m_ToolTip.UpdateTipText (LPSTR_TEXTCALLBACK, this);
           }
 
         }
