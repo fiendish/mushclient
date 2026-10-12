@@ -1615,6 +1615,10 @@ ASSERT_VALID(pDoc);
   if (m_ToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX | 0x40) &&
       m_ToolTip.SendMessage(TTM_ADDTOOL, 0, (LPARAM) &toolInfo))
   {
+    // Keep the popup fully visible while native mouse input passes through it.
+    m_ToolTip.ModifyStyleEx(0, WS_EX_LAYERED | WS_EX_TRANSPARENT);
+    ::SetLayeredWindowAttributes(m_ToolTip.GetSafeHwnd(), 0, 255, LWA_ALPHA);
+
     m_ToolTip.SendMessage(TTM_SETMAXTIPWIDTH, 0, SHRT_MAX);
     m_ToolTip.SendMessage(TTM_SETDELAYTIME, TTDT_AUTOPOP, pDoc->m_iToolTipVisibleTime - 1);  // zero will be default  (-1)
     m_ToolTip.SendMessage(TTM_SETDELAYTIME, TTDT_INITIAL, pDoc->m_iToolTipStartTime - 1);    // zero will be default  (-1)
