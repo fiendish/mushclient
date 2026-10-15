@@ -86,6 +86,10 @@ public:
  	CToolTipCtrl m_ToolTip;
   long m_nLastToolTipLine;
   long m_nLastToolTipColumn;
+  bool m_bMiniWindowToolTipPending;
+  bool m_bMiniWindowToolTipValid;
+  string m_sLastMiniWindowToolTip;
+  CPoint m_lastMiniWindowToolTipPoint;
 
   CPoint m_scroll_position;
   CPoint m_scroll_limit;
@@ -233,6 +237,8 @@ public:
 
   void  OnUpdateStatuslineFreeze_helper(CCmdUI* pCmdUI);
 	BOOL OnToolTipNeedText(UINT id, NMHDR * pNMHDR, LRESULT * pResult);
+  void QueueMiniWindowToolTip ();
+  afx_msg LRESULT OnUpdateMiniWindowToolTip (WPARAM, LPARAM);
 
 protected:
 

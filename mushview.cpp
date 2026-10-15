@@ -26,6 +26,8 @@
 static char BASED_CODE THIS_FILE[] = __FILE__;
 #endif
 
+#define WM_UPDATE_MINIWINDOW_TOOLTIP (WM_APP + 2)
+
 #define REDRAW_DEBUG 0
 
 #if REDRAW_DEBUG
@@ -111,6 +113,7 @@ class COptionalBoolStateGuard
 IMPLEMENT_DYNCREATE(CMUSHView, CView)
 
 BEGIN_MESSAGE_MAP(CMUSHView, CView)
+  ON_MESSAGE(WM_UPDATE_MINIWINDOW_TOOLTIP, OnUpdateMiniWindowToolTip)
   ON_WM_CONTEXTMENU()
   //{{AFX_MSG_MAP(CMUSHView)
   ON_COMMAND(ID_TEST_END, OnTestEnd)
@@ -309,6 +312,8 @@ CMUSHView::CMUSHView()
   m_last_line = 0;
   m_nLastToolTipLine = 0;
   m_nLastToolTipColumn = 0;
+  m_bMiniWindowToolTipPending = false;
+  m_bMiniWindowToolTipValid = false;
   m_scroll_position = 0;
   m_mousedover = false;
   m_bInSelectionChanged = false;
@@ -4649,6 +4654,7 @@ BOOL CMUSHView::OnToolTipNeedText(UINT id, NMHDR * pNMHDR, LRESULT * pResult)
 
 void CMUSHView::RemoveToolTip (void)
   {
+  m_bMiniWindowToolTipValid = false;
   // get rid of tooltip, it is incorrect if we scroll
   if (::IsWindow(m_ToolTip.m_hWnd))
     {
@@ -7062,8 +7068,7 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
           // now activate for *this* hotspot
           m_ToolTip.Activate(TRUE);
           // A callback can replace the hovered hotspot with the same ID.
-          // Refresh the visible popup's text and position for its new contents.
-          m_ToolTip.UpdateTipText (LPSTR_TEXTCALLBACK, this);
+          QueueMiniWindowToolTip ();
           m_nLastToolTipLine = 0;
           m_nLastToolTipColumn = 0;
           }   // end of having tooltip window
@@ -7106,8 +7111,7 @@ bool CMUSHView::Mouse_Move_MiniWindow (CMUSHclientDoc* pDoc, CPoint point)
                                       pHotspot->m_sMouseOver, 
                                       sHotspotId, MW_MOUSE_NOT_FIRST);
           // Repeated callbacks can change the text without replacing the hotspot.
-          if (::IsWindow(m_ToolTip.m_hWnd))
-            m_ToolTip.UpdateTipText (LPSTR_TEXTCALLBACK, this);
+          QueueMiniWindowToolTip ();
           }
 
         }
@@ -7434,6 +7438,39 @@ bool CMUSHView::Mouse_Up_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, long fl
   } // end of CMUSHView::Mouse_Up_MiniWindow 
 
 
+// Refresh after mouse callbacks and drawing finish. Several updates in one
+// script batch need only the final text and pointer position.
+void CMUSHView::QueueMiniWindowToolTip ()
+  {
+  if (!m_bMiniWindowToolTipPending && ::IsWindow(m_ToolTip.m_hWnd) &&
+      m_ToolTip.IsWindowVisible ())
+    {
+    if (!PostMessage (WM_UPDATE_MINIWINDOW_TOOLTIP))
+      AfxThrowResourceException ();
+    m_bMiniWindowToolTipPending = true;
+    }
+  }
+
+LRESULT CMUSHView::OnUpdateMiniWindowToolTip (WPARAM, LPARAM)
+  {
+  m_bMiniWindowToolTipPending = false;
+  if (!::IsWindow(m_ToolTip.m_hWnd) || !m_ToolTip.IsWindowVisible ())
+    return 0;
+
+  CPoint point;
+  if (!::GetCursorPos (&point))
+    AfxThrowResourceException ();
+  ScreenToClient (&point);
+  CHotspot * hotspot = NULL;
+  string hotspotId, windowId;
+  CMiniWindow * window = Mouse_Over_Miniwindow (GetDocument (), point, hotspotId, hotspot, windowId);
+  const string text = hotspot ? hotspot->m_sTooltipText : "";
+  if (window && (!m_bMiniWindowToolTipValid || text != m_sLastMiniWindowToolTip ||
+                 point != m_lastMiniWindowToolTipPoint))
+    m_ToolTip.UpdateTipText (LPSTR_TEXTCALLBACK, this);
+  return 0;
+  }
+
 // version 4.41 onwards - you can have title \t body (title and body separated by a tab)
 bool CMUSHView::Mouse_Tooltip_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, NMHDR * pNMHDR)
   {
@@ -7448,6 +7485,10 @@ bool CMUSHView::Mouse_Tooltip_MiniWindow (CMUSHclientDoc* pDoc, CPoint point, NM
 
   if (!mw)
     return false;
+
+  m_sLastMiniWindowToolTip = pHotspot ? pHotspot->m_sTooltipText : "";
+  m_lastMiniWindowToolTipPoint = point;
+  m_bMiniWindowToolTipValid = true;
 
   TOOLTIPTEXT *pTTT = (TOOLTIPTEXT *)pNMHDR;
 
