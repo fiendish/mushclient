@@ -634,6 +634,9 @@ BEGIN_DISPATCH_MAP(CMUSHclientDoc, CDocument)
 	DISP_FUNCTION(CMUSHclientDoc, "GetCommandWindowDesiredHeight", GetCommandWindowDesiredHeight, VT_I4, VTS_I4)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "BufferedRepaint", 423, BufferedRepaint, VT_EMPTY, VTS_NONE)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "SetBufferedRepaintPaused", 424, SetBufferedRepaintPaused, VT_EMPTY, VTS_BOOL)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "SetCommandWindowWidth", 425, SetCommandWindowWidth, VT_I4, VTS_I4)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "GetCommandLineStarts", 426, GetCommandLineStarts, VT_VARIANT, VTS_NONE)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "GetCommandCursorLine", 427, GetCommandCursorLine, VT_I4, VTS_NONE)
 	//}}AFX_DISPATCH_MAP
 END_DISPATCH_MAP()
 

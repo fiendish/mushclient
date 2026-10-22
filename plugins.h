@@ -312,6 +312,8 @@ extern const string ON_PLUGIN_IAC_GA;               //  "OnPlugin_IAC_GA"
 // commands                                                                           
 extern const string ON_PLUGIN_COMMAND;              //  "OnPluginCommand"              
 extern const string ON_PLUGIN_COMMAND_ENTERED;      //  "OnPluginCommandEntered"       
+// Native navigation moved the floating command caret or selection. No arguments.
+extern const string ON_PLUGIN_COMMAND_SELECTION_CHANGED;
 extern const string ON_PLUGIN_COMMAND_CHANGED;      //  "OnPluginCommandChanged"       
 extern const string ON_PLUGIN_TABCOMPLETE;          //  "OnPluginTabComplete"          
                                                                                       

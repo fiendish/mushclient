@@ -16,6 +16,7 @@
 #include "doc.h"
 #include "MUSHview.h"
 #include "sendvw.h"
+#include "command_layout.h"
 #include "mainfrm.h"
 #include "childfrm.h"
 #include "dialogs\GlobalChangeDlg.h"
@@ -38,6 +39,79 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 #endif
 
 static CString RandomString();
+
+CCommandLayout & CSendView::GetCommandLayout()
+  {
+  if (!m_commandLayout)
+    m_commandLayout.reset(new CCommandLayout(GetEditCtrl().GetSafeHwnd()));
+  m_commandLayout->Update();
+  return *m_commandLayout;
+  }
+
+int CSendView::CommandByteOffset(int position)
+  {
+  return GetCommandLayout().ByteFromNative(position);
+  }
+
+int CSendView::CommandNativeOffset(int position)
+  {
+  return GetCommandLayout().NativeFromByte(position);
+  }
+
+
+
+LRESULT CSendView::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
+  {
+  CommandWordBreakScope scope(GetSafeHwnd(), m_pNativeCommandWordBreak, message, wParam);
+  bool navigation = message == WM_KEYDOWN && m_iCommandWindowWidth > 0 &&
+      (wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_UP ||
+       wParam == VK_DOWN || wParam == VK_HOME || wParam == VK_END ||
+       wParam == VK_PRIOR || wParam == VK_NEXT);
+  if (!navigation)
+    return CEditView::WindowProc(message, wParam, lParam);
+
+  CWorldDocumentOperationGuard operationGuard(GetDocument());
+  CEdit & edit = GetEditCtrl();
+  int startBefore, endBefore;
+  edit.GetSel(startBefore, endBefore);
+  int firstLineBefore = edit.GetFirstVisibleLine();
+  CPoint caretBefore;
+  BOOL haveCaretBefore = ::GetCaretPos(&caretBefore);
+
+  LRESULT result = CEditView::WindowProc(message, wParam, lParam);
+
+  int startAfter, endAfter;
+  edit.GetSel(startAfter, endAfter);
+  CPoint caretAfter;
+  BOOL haveCaretAfter = ::GetCaretPos(&caretAfter);
+  if (m_iCommandWindowWidth > 0 &&
+      (startBefore != startAfter || endBefore != endAfter ||
+       firstLineBefore != edit.GetFirstVisibleLine() ||
+       haveCaretBefore != haveCaretAfter ||
+       (haveCaretBefore && haveCaretAfter &&
+        (caretBefore.x != caretAfter.x || caretBefore.y != caretAfter.y))))
+    NotifyPluginCommandSelectionChanged();
+  return result;
+  }
+
+void CSendView::UpdateCommandWordBreak()
+  {
+  static const bool runningOnWine =
+      ::GetProcAddress(::GetModuleHandleA("ntdll.dll"), "wine_get_version") != NULL;
+  bool enabled = runningOnWine && m_iCommandWindowWidth > 0;
+  if (enabled == m_bWineCommandWordBreak)
+    return;
+  CEdit & edit = GetEditCtrl();
+  m_bWineCommandWordBreak = enabled;
+  if (enabled)
+    {
+    m_pNativeCommandWordBreak = (EDITWORDBREAKPROC)
+        edit.SendMessage(EM_GETWORDBREAKPROC, 0, 0);
+    edit.SendMessage(EM_SETWORDBREAKPROC, 0, (LPARAM) WineCommandWordBreak);
+    }
+  else
+    edit.SendMessage(EM_SETWORDBREAKPROC, 0, (LPARAM) m_pNativeCommandWordBreak);
+  }
 
 static bool IsWorldDocumentLive (const CMUSHclientDoc * pExpectedDoc,
                                  const __int64 iDocumentNumber)
@@ -239,6 +313,7 @@ BEGIN_MESSAGE_MAP(CSendView, CEditView)
 	ON_COMMAND(ID_WINDOW_RESTORE, OnWindowRestore)
 	//}}AFX_MSG_MAP
 
+  ON_WM_SIZE()
   ON_WM_INITMENU( )
   ON_WM_INITMENUPOPUP( )
 
@@ -278,6 +353,11 @@ CSendView::CSendView()
   m_iHistoryStatus = eAtBottom;
   m_backbr = NULL;
   m_bNotifyingPluginCommandChanged = false;
+  m_bNotifyingPluginCommandSelectionChanged = false;
+  m_iCommandWindowWidth = 0;
+  m_bWineCommandWordBreak = false;
+  m_pNativeCommandWordBreak = NULL;
+  m_bCommandWindowClipped = false;
 }
 
 CSendView::~CSendView()
@@ -1239,6 +1319,18 @@ ASSERT_VALID(pDoc);
     }
 
   }  // end of CSendView::NotifyPluginCommandChanged
+
+
+// Notify after native navigation completes, including soft-wrap caret affinity.
+void CSendView::NotifyPluginCommandSelectionChanged()
+  {
+  if (!m_bNotifyingPluginCommandSelectionChanged)
+    {
+    CWorldDocumentOperationGuard operationGuard(GetDocument());
+    CBoolStateGuard notifyGuard(m_bNotifyingPluginCommandSelectionChanged, true);
+    GetDocument()->SendToAllPluginCallbacks(ON_PLUGIN_COMMAND_SELECTION_CHANGED);
+    }
+  }
 
 
 void CSendView::OnInitialUpdate() 
@@ -3113,7 +3205,8 @@ int CSendView::GetCommandWindowDesiredHeight (const int iCurrentHeight)
     return iCurrentHeight;
 
   // find how many lines in command window
-  int iLines = GetEditCtrl().GetLineCount ();
+  int iLines = m_iCommandWindowWidth > 0 ? GetCommandLayout().LineCount() :
+      GetEditCtrl().GetLineCount ();
 
   // if too small, make the minimum
   if (iLines < pDoc->m_iAutoResizeMinimumLines)
@@ -3244,12 +3337,65 @@ void CSendView::OnEditCopyashtml()
   } // end of CSendView::OnEditCopyashtml() 
 
 
+void CSendView::OnSize(UINT nType, int cx, int cy)
+  {
+  CEditView::OnSize(nType, cx, cy);
+  if (m_iCommandWindowWidth > 0)
+    UpdateWrap();
+  }
+
 void CSendView::UpdateWrap() 
   {
   
   CMUSHclientDoc* pDoc = GetDocument();
   CEdit& theEdit = GetEditCtrl();
+  UpdateCommandWordBreak();
   
+  bool bRestoreNativeLayout = m_bCommandWindowClipped && m_iCommandWindowWidth == 0;
+  if (bRestoreNativeLayout)
+    {
+    m_bCommandWindowClipped = false;
+    MoveWindow(&m_CommandWindowRect, FALSE);
+    }
+
+  // Keep the hidden editor usable for native caret and selection queries.
+  // Windows does not maintain caret coordinates in a zero-height control.
+  if (m_iCommandWindowWidth > 0)
+    {
+    CRect r;
+    GetClientRect(r);
+    int iHeight = MAX(1, pDoc->m_InputFontHeight) + 4;
+    if ((r.Height() == 0 || (m_bCommandWindowClipped && r.Height() != iHeight)) && GetParent())
+      {
+      CRect parentRect, windowRect;
+      GetParent()->GetClientRect(parentRect);
+      GetWindowRect(windowRect);
+      GetParent()->ScreenToClient(windowRect);
+      if (r.Height() == 0)
+        m_CommandWindowRect = windowRect;
+      m_bCommandWindowClipped = true;
+      SetWindowPos(NULL, windowRect.left, parentRect.bottom,
+          windowRect.Width(), iHeight,
+          SWP_NOZORDER | SWP_NOACTIVATE);
+      GetClientRect(r);
+      }
+    int iWidth = m_iCommandWindowWidth;
+    if (pDoc->m_bAutoWrapInput)
+      iWidth = MIN (iWidth, MAX (20, MIN (MAX_LINE_WIDTH,
+          pDoc->m_nWrapColumn + 1)) * pDoc->m_InputFontWidth);
+    int iRightMargin = MAX (0, r.Width() - iWidth);
+    bool bMarginsChanged = LOWORD(theEdit.GetMargins()) != 0 ||
+        HIWORD(theEdit.GetMargins()) != iRightMargin;
+    if (bMarginsChanged)
+      {
+      theEdit.SetMargins (0, iRightMargin);
+      // Rebuild native line breaks using the default rectangle, which already
+      // includes margins and borders. Do not apply those offsets a second time.
+      theEdit.SetRectNP(NULL);
+      }
+    return;
+    }
+
   int iOffset = pDoc->m_iPixelOffset; // Need this either way.
   
   if (pDoc->m_bAutoWrapInput) 
@@ -3273,7 +3419,8 @@ void CSendView::UpdateWrap()
       rMargin = iOffset;
     
     // If the margin needs to change, change it.
-    if (rMargin != HIWORD(theEdit.GetMargins()))
+    if (rMargin != HIWORD(theEdit.GetMargins()) ||
+        iOffset != LOWORD(theEdit.GetMargins()))
       {
       theEdit.SetMargins (iOffset, rMargin);
       theEdit.Invalidate (FALSE); 
@@ -3291,5 +3438,14 @@ void CSendView::UpdateWrap()
       } // end if changed
     }  // end if
     
+  if (bRestoreNativeLayout)
+    {
+    CRect r, format;
+    GetClientRect(r);
+    theEdit.GetRect(format);
+    format.left = LOWORD(theEdit.GetMargins());
+    format.right = r.Width() - HIWORD(theEdit.GetMargins());
+    theEdit.SetRectNP(&format);
+    }
   }   // end of CSendView::UpdateWrap() 
 

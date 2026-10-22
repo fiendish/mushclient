@@ -140,6 +140,7 @@ struct CMUSHclientDoc: CDocument {
     void OnCloseDocument();
     void OnScriptFileChanged(bool force=false);
     long Execute(LPCTSTR);
+    void FlushBufferedRepaint(bool){}
     long ChatDisconnect(long);
     CChatSocket* GetChatSocket(const long) const;
     void CleanupTick();

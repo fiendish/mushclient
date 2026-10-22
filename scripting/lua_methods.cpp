@@ -2888,6 +2888,24 @@ static int L_GetCommandCursorPosition (lua_State *L)
 
 
 //----------------------------------------
+//  world.GetCommandCursorLine
+//----------------------------------------
+static int L_GetCommandCursorLine (lua_State *L)
+  {
+  lua_pushnumber (L, doc (L)->GetCommandCursorLine ());
+  return 1;
+  }
+
+//----------------------------------------
+//  world.GetCommandLineStarts
+//----------------------------------------
+static int L_GetCommandLineStarts (lua_State *L)
+  {
+  VARIANT v = doc (L)->GetCommandLineStarts ();
+  return pushVariant (L, v);
+  }
+
+//----------------------------------------
 //  world.GetCommandLineCount
 //----------------------------------------
 static int L_GetCommandLineCount (lua_State *L)
@@ -5502,6 +5520,15 @@ static int L_SetCommandWindowHeight (lua_State *L)
   } // end of L_SetCommandWindowHeight
 
 //----------------------------------------
+//  world.SetCommandWindowWidth
+//----------------------------------------
+static int L_SetCommandWindowWidth (lua_State *L)
+  {
+  lua_pushnumber (L, doc (L)->SetCommandWindowWidth (my_checknumber (L, 1)));
+  return 1;
+  }
+
+//----------------------------------------
 //  world.SetCommandWindowAutoResizeSuppressed
 //----------------------------------------
 static int L_SetCommandWindowAutoResizeSuppressed (lua_State *L)
@@ -7126,6 +7153,8 @@ static const struct luaL_Reg worldlib [] =
   {"GetClipboard", L_GetClipboard},
   {"GetCommand", L_GetCommand},
   {"GetCommandCursorPosition", L_GetCommandCursorPosition},
+  {"GetCommandCursorLine", L_GetCommandCursorLine},
+  {"GetCommandLineStarts", L_GetCommandLineStarts},
   {"GetCommandLineCount", L_GetCommandLineCount},
   {"GetCommandList", L_GetCommandList},
   {"GetCommandWindowDesiredHeight", L_GetCommandWindowDesiredHeight},
@@ -7308,6 +7337,7 @@ static const struct luaL_Reg worldlib [] =
   {"SetCommand", L_SetCommand},
   {"SetCommandSelection", L_SetCommandSelection},
   {"SetCommandWindowAutoResizeSuppressed", L_SetCommandWindowAutoResizeSuppressed},
+  {"SetCommandWindowWidth", L_SetCommandWindowWidth},
   {"SetCommandWindowHeight", L_SetCommandWindowHeight},
   {"SetCursor", L_SetCursor},
   {"SetCustomColourName", L_SetCustomColourName},

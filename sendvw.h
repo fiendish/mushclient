@@ -19,6 +19,7 @@ enum  {
   };
 
 class COutputSearchSnapshot;
+class CCommandLayout;
 
 class CSendView : public CEditView
 {
@@ -51,6 +52,7 @@ public:
 
   bool m_bChanged;    // the user has typed something
   bool m_bNotifyingPluginCommandChanged;
+  bool m_bNotifyingPluginCommandSelectionChanged;
   
   CString m_strPartialCommand;  // for Alt+UpArrow
 
@@ -79,6 +81,7 @@ public:
   void DoNextCommand ();
 
   void NotifyPluginCommandChanged ();
+  void NotifyPluginCommandSelectionChanged();
 
   void AddToCommandHistory (const CString & strCommand,
                             const bool bRespectNoEcho = true,
@@ -89,6 +92,16 @@ public:
   void CheckForSelectionChange (void);
   void CancelSelection (void);
   void UpdateWrap();
+  void UpdateCommandWordBreak();
+  CCommandLayout & GetCommandLayout();
+  int CommandByteOffset(int position);
+  int CommandNativeOffset(int position);
+  std::unique_ptr<CCommandLayout> m_commandLayout;
+  bool m_bWineCommandWordBreak;
+  EDITWORDBREAKPROC m_pNativeCommandWordBreak;
+  int m_iCommandWindowWidth;  // temporary text width; zero uses the native layout
+  bool m_bCommandWindowClipped;
+  CRect m_CommandWindowRect;
   
   // Overrides
 	// ClassWizard generated virtual function overrides
@@ -98,6 +111,7 @@ public:
 	virtual BOOL PreTranslateMessage(MSG* pMsg);
 	protected:
 	virtual void OnDraw(CDC* pDC);      // overridden to draw this view
+  virtual LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam);
 	virtual BOOL PreCreateWindow(CREATESTRUCT& cs);
 	virtual void OnActivateView(BOOL bActivate, CView* pActivateView, CView* pDeactiveView);
 	//}}AFX_VIRTUAL
@@ -209,6 +223,7 @@ protected:
 	afx_msg void OnWindowRestore();
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
 	//}}AFX_MSG
+  afx_msg void OnSize(UINT nType, int cx, int cy);
   afx_msg void OnMXPMenu(UINT nID);    
   afx_msg void OnAcceleratorCommand(UINT nID);  
 	afx_msg void OnInitMenu(CMenu* pMenu);
