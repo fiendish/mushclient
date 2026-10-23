@@ -2694,6 +2694,9 @@ public:
 	afx_msg void SelectCommand();
 	afx_msg BSTR GetCommand();
 	afx_msg long GetCommandCursorPosition();
+	afx_msg long GetCommandCursorLine();
+	afx_msg VARIANT GetCommandLineStarts();
+	afx_msg long SetCommandWindowWidth(long Width);
 	afx_msg long GetCommandLineCount();
 	afx_msg long GetCommandWindowDesiredHeight(long CurrentHeight);
 	afx_msg long AddTriggerEx(LPCTSTR TriggerName, LPCTSTR MatchText, LPCTSTR ResponseText, long Flags, short Colour, short Wildcard, LPCTSTR SoundFileName, LPCTSTR ScriptName, short SendTo, short Sequence);
