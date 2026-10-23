@@ -93,6 +93,7 @@ public:
   void CancelSelection (void);
   void UpdateWrap();
   void UpdateCommandWordBreak();
+  void UpdateCommandWindowWidth(int textWidth);
   CCommandLayout & GetCommandLayout();
   int CommandByteOffset(int position);
   int CommandNativeOffset(int position);
@@ -100,6 +101,9 @@ public:
   bool m_bWineCommandWordBreak;
   EDITWORDBREAKPROC m_pNativeCommandWordBreak;
   int m_iCommandWindowWidth;  // temporary text width; zero uses the native layout
+  int m_iCommandWindowOriginalWidth;
+  int m_iCommandWindowLayoutWidth;
+  bool m_bUpdatingCommandWindowWidth;
   bool m_bCommandWindowClipped;
   CRect m_CommandWindowRect;
   

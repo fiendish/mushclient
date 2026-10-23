@@ -99,6 +99,31 @@ LRESULT CSendView::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
   return result;
   }
 
+// Keep enough native window width for the requested text layout.
+void CSendView::UpdateCommandWindowWidth(int textWidth)
+  {
+  if (!textWidth && !m_iCommandWindowOriginalWidth)
+    return;
+  CRect window, client;
+  GetWindowRect(window);
+  GetClientRect(client);
+  int nativeWidth = m_iCommandWindowOriginalWidth ?
+      m_iCommandWindowOriginalWidth : window.Width();
+  int layoutWidth = MAX(nativeWidth, textWidth + window.Width() - client.Width());
+  if (window.Width() != layoutWidth)
+    {
+    if (!m_iCommandWindowOriginalWidth)
+      m_iCommandWindowOriginalWidth = window.Width();
+    CBoolStateGuard widthGuard(m_bUpdatingCommandWindowWidth, true);
+    SetWindowPos(NULL, 0, 0, layoutWidth, window.Height(),
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    GetWindowRect(window);
+    m_iCommandWindowLayoutWidth = window.Width();
+    }
+  if (layoutWidth == nativeWidth)
+    m_iCommandWindowOriginalWidth = 0;
+  }
+
 void CSendView::UpdateCommandWordBreak()
   {
   static const bool runningOnWine =
@@ -360,6 +385,9 @@ CSendView::CSendView()
   m_bNotifyingPluginCommandChanged = false;
   m_bNotifyingPluginCommandSelectionChanged = false;
   m_iCommandWindowWidth = 0;
+  m_iCommandWindowOriginalWidth = 0;
+  m_iCommandWindowLayoutWidth = 0;
+  m_bUpdatingCommandWindowWidth = false;
   m_bWineCommandWordBreak = false;
   m_pNativeCommandWordBreak = NULL;
   m_bCommandWindowClipped = false;
@@ -3344,6 +3372,14 @@ void CSendView::OnEditCopyashtml()
 
 void CSendView::OnSize(UINT nType, int cx, int cy)
   {
+  if (m_iCommandWindowWidth > 0 && m_iCommandWindowOriginalWidth &&
+      !m_bUpdatingCommandWindowWidth)
+    {
+    CRect window;
+    GetWindowRect(window);
+    if (window.Width() != m_iCommandWindowLayoutWidth)
+      m_iCommandWindowOriginalWidth = 0;
+    }
   CEditView::OnSize(nType, cx, cy);
   if (m_iCommandWindowWidth > 0)
     UpdateWrap();
@@ -3362,6 +3398,8 @@ void CSendView::UpdateWrap()
     m_bCommandWindowClipped = false;
     MoveWindow(&m_CommandWindowRect, FALSE);
     }
+  if (m_iCommandWindowWidth == 0)
+    UpdateCommandWindowWidth(0);
 
   // Keep the hidden editor usable for native caret and selection queries.
   // Windows does not maintain caret coordinates in a zero-height control.
@@ -3388,6 +3426,8 @@ void CSendView::UpdateWrap()
     if (pDoc->m_bAutoWrapInput)
       iWidth = MIN (iWidth, MAX (20, MIN (MAX_LINE_WIDTH,
           pDoc->m_nWrapColumn + 1)) * pDoc->m_InputFontWidth);
+    UpdateCommandWindowWidth(iWidth);
+    GetClientRect(r);
     int iRightMargin = MAX (0, r.Width() - iWidth);
     bool bMarginsChanged = LOWORD(theEdit.GetMargins()) != 0 ||
         HIWORD(theEdit.GetMargins()) != iRightMargin;
