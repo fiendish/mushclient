@@ -1,19 +1,24 @@
 #pragma once
 
+#include <exception>
+
 struct CommandWordBreakContext
   {
   HWND window;
   EDITWORDBREAKPROC original;
   UINT message;
   WPARAM key;
+  std::exception_ptr * failure;
   };
 
 class CommandWordBreakScope
   {
   CommandWordBreakContext saved;
+  std::exception_ptr failure;
 public:
   CommandWordBreakScope(HWND window, EDITWORDBREAKPROC original, UINT message, WPARAM key);
   ~CommandWordBreakScope();
+  void RethrowFailure() const;
   };
 
 int CALLBACK WineCommandWordBreak(LPSTR bytes, int index, int byteCount, int action);

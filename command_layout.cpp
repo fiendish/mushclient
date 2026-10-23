@@ -9,9 +9,16 @@ static thread_local CommandWordBreakContext commandWordBreakContext = {};
 CommandWordBreakScope::CommandWordBreakScope(HWND window, EDITWORDBREAKPROC original,
     UINT message, WPARAM key) : saved(commandWordBreakContext)
   {
-  commandWordBreakContext = {window, original, message, key};
+  commandWordBreakContext = {window, original, message, key,
+      saved.failure ? saved.failure : &failure};
   }
 CommandWordBreakScope::~CommandWordBreakScope() { commandWordBreakContext = saved; }
+
+void CommandWordBreakScope::RethrowFailure() const
+  {
+  if (failure)
+    std::rethrow_exception(failure);
+  }
 
 static void CheckCommandTextResult(HRESULT result)
   {
@@ -123,7 +130,14 @@ static int CommandWordBreak(std::vector<WCHAR> & text, int index, int action,
     if (position == length || !IS_LOW_SURROGATE(text[position]) ||
         !IS_HIGH_SURROGATE(text[position - 1]))
       stops.push_back(position);
-  int low = 0, high = (int) stops.size() - 1;
+  // Bound the search near one line before measuring larger prefixes.
+  int low = 0, high = 1, last = (int) stops.size() - 1;
+  while (high < last &&
+      measurement.Width(&text[0], stops[high]) <= rect.right - rect.left)
+    {
+    low = high;
+    high = high > last / 2 ? last : high * 2;
+    }
   while (low < high)
     {
     int middle = low + (high - low + 1) / 2;
@@ -151,19 +165,32 @@ static int CommandWordBreak(std::vector<WCHAR> & text, int index, int action,
 
 int CALLBACK WineCommandWordBreak(LPSTR bytes, int index, int byteCount, int action)
   {
-  bool navigation = (commandWordBreakContext.message == WM_KEYDOWN &&
-      (commandWordBreakContext.key == VK_LEFT || commandWordBreakContext.key == VK_RIGHT)) ||
-      commandWordBreakContext.message == WM_LBUTTONDBLCLK;
-  if (commandWordBreakContext.original && (navigation || action != WB_LEFT))
-    return commandWordBreakContext.original(bytes, index, byteCount, action);
-  int length = ::MultiByteToWideChar(CP_ACP, 0, bytes, byteCount, NULL, 0);
-  if (byteCount && !length)
-    AfxThrowResourceException();
-  std::vector<WCHAR> text(length + 1);
-  if (length && ::MultiByteToWideChar(CP_ACP, 0, bytes, byteCount,
-      &text[0], length) != length)
-    AfxThrowResourceException();
-  return CommandWordBreak(text, index, action, bytes, byteCount);
+  if (!*commandWordBreakContext.failure)
+    {
+    try
+      {
+      bool navigation = (commandWordBreakContext.message == WM_KEYDOWN &&
+          (commandWordBreakContext.key == VK_LEFT || commandWordBreakContext.key == VK_RIGHT)) ||
+          commandWordBreakContext.message == WM_LBUTTONDBLCLK;
+      if (commandWordBreakContext.original && (navigation || action != WB_LEFT))
+        return commandWordBreakContext.original(bytes, index, byteCount, action);
+      int length = ::MultiByteToWideChar(CP_ACP, 0, bytes, byteCount, NULL, 0);
+      if (byteCount && !length)
+        AfxThrowResourceException();
+      std::vector<WCHAR> text(length + 1);
+      if (length && ::MultiByteToWideChar(CP_ACP, 0, bytes, byteCount,
+          &text[0], length) != length)
+        AfxThrowResourceException();
+      return CommandWordBreak(text, index, action, bytes, byteCount);
+      }
+    catch (...)
+      {
+      *commandWordBreakContext.failure = std::current_exception();
+      }
+    }
+  // Let Wine finish its native cleanup before the outer message rethrows.
+  // Zero selects its forced-break path for wrapping.
+  return 0;
   }
 
 // Map native character positions to the legacy bytes returned by GetCommand.

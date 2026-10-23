@@ -526,8 +526,7 @@ long CMUSHclientDoc::GetCommandCursorPosition()
       }
     }
 
-  if (pCommandView->m_iCommandWindowWidth > 0)
-    nCursorChar = pCommandView->CommandByteOffset(nCursorChar);
+  nCursorChar = pCommandView->CommandByteOffset(nCursorChar);
   return nCursorChar + 1;
 }   // end of CMUSHclientDoc::GetCommandCursorPosition
 
@@ -699,12 +698,8 @@ long CMUSHclientDoc::SetCommandSelection(long First, long Last)
   CSendView * pmyView = GetCommandView ();
   if (pmyView)
     {
-    int first = First - 1, last = Last;
-    if (pmyView->m_iCommandWindowWidth > 0)
-      {
-      first = pmyView->CommandNativeOffset(first);
-      last = pmyView->CommandNativeOffset(last);
-      }
+    int first = pmyView->CommandNativeOffset(First - 1);
+    int last = pmyView->CommandNativeOffset(Last);
     pmyView->GetEditCtrl().SetSel(first, last, FALSE);
     }
 

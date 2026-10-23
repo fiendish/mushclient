@@ -68,7 +68,11 @@ LRESULT CSendView::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
        wParam == VK_DOWN || wParam == VK_HOME || wParam == VK_END ||
        wParam == VK_PRIOR || wParam == VK_NEXT);
   if (!navigation)
-    return CEditView::WindowProc(message, wParam, lParam);
+    {
+    LRESULT result = CEditView::WindowProc(message, wParam, lParam);
+    scope.RethrowFailure();
+    return result;
+    }
 
   CWorldDocumentOperationGuard operationGuard(GetDocument());
   CEdit & edit = GetEditCtrl();
@@ -79,6 +83,7 @@ LRESULT CSendView::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
   BOOL haveCaretBefore = ::GetCaretPos(&caretBefore);
 
   LRESULT result = CEditView::WindowProc(message, wParam, lParam);
+  scope.RethrowFailure();
 
   int startAfter, endAfter;
   edit.GetSel(startAfter, endAfter);
