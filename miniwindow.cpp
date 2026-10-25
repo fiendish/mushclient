@@ -408,7 +408,9 @@ static long ValidatePenStyle (const long PenStyle, const long PenWidth)
       case PS_DOT:             // 2       /* .......  */
       case PS_DASHDOT:         // 3       /* _._._._  */
       case PS_DASHDOTDOT:      // 4       /* _.._.._  */
-         if (PenWidth > 1)
+         // Wide patterned pens require the geometric path in MakeAPen.
+         if (PenWidth > 1 &&
+             (PenStyle & (PS_ENDCAP_MASK | PS_JOIN_MASK)) == 0)
            return ePenStyleNotValid;
          break;
 
