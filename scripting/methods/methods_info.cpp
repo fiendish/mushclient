@@ -745,6 +745,7 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
               // find where cursor is
   
             pmyView->GetEditCtrl().GetSel(nStartChar, nEndChar);
+            nStartChar = pmyView->CommandByteOffset(nStartChar);
             SetUpVariantLong (vaResult, nStartChar + 1);  // start column
           }
       }
@@ -763,6 +764,8 @@ VARIANT CMUSHclientDoc::GetInfo(long InfoType)
             pmyView->GetEditCtrl().GetSel(nStartChar, nEndChar);
             if (nEndChar <= nStartChar)
               nEndChar = 0;  // zero indicates no text selected
+            else
+              nEndChar = pmyView->CommandByteOffset(nEndChar);
             SetUpVariantLong (vaResult, nEndChar);  // end column
           }
       }

@@ -7,6 +7,7 @@
 #include "..\..\doc.h"
 #include "..\..\mainfrm.h"
 #include "..\..\sendvw.h"
+#include "..\..\command_layout.h"
 #include "..\..\childfrm.h"
 #include "..\errors.h"
 
@@ -17,6 +18,8 @@
 //    Execute
 //    GetCommand
 //    GetCommandCursorPosition
+//    GetCommandCursorLine
+//    GetCommandLineStarts
 //    GetCommandLineCount
 //    GetCommandWindowDesiredHeight
 //    GetCommandList
@@ -28,6 +31,7 @@
 //    SetCommand
 //    SetCommandSelection
 //    SetCommandWindowAutoResizeSuppressed
+//    SetCommandWindowWidth
 //    SetCommandWindowHeight
 //    SetInputFont
 //    ShiftTabCompleteItem
@@ -480,7 +484,6 @@ long CMUSHclientDoc::GetCommandCursorPosition()
   int nStartChar;
   int nEndChar;
   edit.GetSel(nStartChar, nEndChar);
-
   int nCursorChar = nEndChar;
   if (nStartChar == nEndChar)
     nCursorChar = nStartChar;
@@ -493,14 +496,88 @@ long CMUSHclientDoc::GetCommandCursorPosition()
     if (!::GetCaretPos(&cursorPoint))
       return 0;
 
+    if (pCommandView->m_iCommandWindowWidth > 0 &&
+        (cursorPoint.x < 0 || cursorPoint.y < 0))
+      {
+      ::SendMessage(edit.GetSafeHwnd(), EM_SCROLLCARET, 0, 0);
+      if (!::GetCaretPos(&cursorPoint))
+        return 0;
+      }
     CPoint start = edit.PosFromChar(nStartChar);
     if (start.x >= 0 && start.y >= 0 &&
         abs(cursorPoint.x - start.x) <= 1 && abs(cursorPoint.y - start.y) <= 1)
       nCursorChar = nStartChar;
+    else
+      {
+      // At a soft wrap, PosFromChar reports the next line's start even when
+      // the active caret is at the previous line's end (for example Shift+End).
+      CRect rect;
+      edit.GetRect(rect);
+      int iCaretLine = edit.GetFirstVisibleLine() +
+          (cursorPoint.y - rect.top) / MAX(1, m_InputFontHeight);
+      iCaretLine = MIN(MAX(0, iCaretLine), edit.GetLineCount() - 1);
+      if (iCaretLine >= 0 && iCaretLine + 1 < edit.GetLineCount())
+        {
+        int iLineStart = edit.LineIndex(iCaretLine);
+        if (edit.LineIndex(iCaretLine + 1) == nStartChar &&
+            iLineStart + edit.LineLength(iLineStart) == nStartChar)
+          nCursorChar = nStartChar;
+        }
+      }
     }
 
+  nCursorChar = pCommandView->CommandByteOffset(nCursorChar);
   return nCursorChar + 1;
 }   // end of CMUSHclientDoc::GetCommandCursorPosition
+
+
+// world.GetCommandCursorLine - gets the visual line containing the active caret.
+// Returns a 1-relative line, or zero if the caret is unavailable.
+long CMUSHclientDoc::GetCommandCursorLine()
+{
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView == NULL)
+    return 0;
+
+  CEdit & edit = pCommandView->GetEditCtrl();
+  CPoint point;
+  if (edit.GetSafeHwnd() != ::GetFocus())
+    return 0;
+
+  if (!::GetCaretPos(&point))
+    return 0;
+  if (pCommandView->m_iCommandWindowWidth > 0 && (point.x < 0 || point.y < 0))
+    {
+    ::SendMessage(edit.GetSafeHwnd(), EM_SCROLLCARET, 0, 0);
+    if (!::GetCaretPos(&point))
+      return 0;
+    }
+  CRect rect;
+  edit.GetRect(rect);
+  int iLine = edit.GetFirstVisibleLine() +
+      (point.y - rect.top) / MAX (1, m_InputFontHeight);
+  return MIN (MAX (0, iLine) + 1, edit.GetLineCount());
+}
+
+
+// world.GetCommandLineStarts - gets 1-relative byte positions in GetCommand().
+// Includes empty lines. Does not add line breaks to the command text.
+VARIANT CMUSHclientDoc::GetCommandLineStarts()
+{
+  COleSafeArray sa;
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView)
+    {
+    std::vector<int> starts = pCommandView->GetCommandLayout().LineStarts();
+    sa.CreateOneDim (VT_VARIANT, (long) starts.size());
+    for (long i = 0; i < (long) starts.size(); ++i)
+      {
+      COleVariant value ((long) starts[i] + 1);
+      sa.PutElement (&i, &value);
+      }
+    }
+  return sa.Detach();
+}
 
 
 // world.GetCommandLineCount - gets the number of visual command lines
@@ -512,7 +589,9 @@ long CMUSHclientDoc::GetCommandLineCount()
   if (pCommandView == NULL)
     return 0;
 
-  return pCommandView->GetEditCtrl().GetLineCount ();
+  return pCommandView->m_iCommandWindowWidth > 0 ?
+      pCommandView->GetCommandLayout().LineCount() :
+      pCommandView->GetEditCtrl().GetLineCount ();
 }   // end of CMUSHclientDoc::GetCommandLineCount
 
 
@@ -566,6 +645,20 @@ long CMUSHclientDoc::SetCommandWindowHeight(short Height)
 }   // end of CMUSHclientDoc::SetCommandWindowHeight
 
 
+// Set a temporary text width in pixels. Zero restores the native layout.
+long CMUSHclientDoc::SetCommandWindowWidth(long Width)
+{
+  if (Width < 0 || Width > 65535)
+    return eBadParameter;
+  CSendView * pCommandView = GetCommandView ();
+  if (pCommandView == NULL)
+    return eBadParameter;
+  pCommandView->m_iCommandWindowWidth = Width;
+  pCommandView->UpdateWrap();
+  return eOK;
+}
+
+
 // suppress automatic command-window resizing without changing the world option
 long CMUSHclientDoc::SetCommandWindowAutoResizeSuppressed(BOOL Suppressed)
 {
@@ -604,7 +697,11 @@ long CMUSHclientDoc::SetCommandSelection(long First, long Last)
 {
   CSendView * pmyView = GetCommandView ();
   if (pmyView)
-    pmyView->GetEditCtrl().SetSel(First - 1, Last, FALSE);
+    {
+    int first = pmyView->CommandNativeOffset(First - 1);
+    int last = pmyView->CommandNativeOffset(Last);
+    pmyView->GetEditCtrl().SetSel(first, last, FALSE);
+    }
 
 	return eOK;
 

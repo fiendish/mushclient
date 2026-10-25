@@ -65,6 +65,7 @@ const string ON_PLUGIN_IAC_GA                ("OnPlugin_IAC_GA");
 // commands
 const string ON_PLUGIN_COMMAND               ("OnPluginCommand"); 
 const string ON_PLUGIN_COMMAND_ENTERED       ("OnPluginCommandEntered"); 
+const string ON_PLUGIN_COMMAND_SELECTION_CHANGED ("OnPluginCommandSelectionChanged");
 const string ON_PLUGIN_COMMAND_CHANGED       ("OnPluginCommandChanged");    
 const string ON_PLUGIN_TABCOMPLETE           ("OnPluginTabComplete"); 
 
@@ -107,6 +108,7 @@ string PluginCallbacksNames [] = {
      
    ON_PLUGIN_CLOSE,                 
    ON_PLUGIN_COMMAND,               
+   ON_PLUGIN_COMMAND_SELECTION_CHANGED,
    ON_PLUGIN_COMMAND_CHANGED,       
    ON_PLUGIN_COMMAND_ENTERED,       
    ON_PLUGIN_CONNECT,               
