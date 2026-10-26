@@ -15,6 +15,7 @@
 //    Accelerator
 //    AcceleratorList
 //    AcceleratorTo
+//    RestoreAccelerator
 
 
 // accelerator finding functor
@@ -117,6 +118,11 @@ WORD key;
 
     if (it == acceleratorToCommandMap.end ())
       {
+      // A restored key can release an ID below commands still in use.
+      while (nextAcceleratorCommand < (ACCELERATOR_FIRST_COMMAND + ACCELERATOR_COUNT) &&
+             commandToMacroMap.find (nextAcceleratorCommand) != commandToMacroMap.end ())
+        ++nextAcceleratorCommand;
+
       // check not too many ;)
       if (nextAcceleratorCommand >=
           (ACCELERATOR_FIRST_COMMAND + ACCELERATOR_COUNT))
@@ -177,6 +183,86 @@ WORD key;
 
 	return eOK;
 }  // end of CMUSHclientDoc::AcceleratorTo
+
+long CMUSHclientDoc::RestoreAccelerator(LPCTSTR Key)
+{
+  BYTE fVirt;
+  WORD key;
+  try
+    {
+    StringToKeyCode (Key, fVirt, key);
+    }
+  catch (CException* e)
+    {
+    e->Delete ();
+    return eBadParameter;
+    }
+  fVirt |= FNOINVERT;
+
+  // Read the built-in bindings, not the document's modified table.
+  HACCEL hDefault = App.m_pWorldDocTemplate->m_hAccelTable;
+  if (!hDefault)
+    return eBadParameter;
+  int iCount = CopyAcceleratorTable (hDefault, NULL, 0);
+  if (iCount <= 0)
+    return eBadParameter;
+  vector<ACCEL> defaults (iCount);
+  if (CopyAcceleratorTable (hDefault, &defaults [0], iCount) != iCount)
+    return eBadParameter;
+
+  HACCEL hCurrent = GetDefaultAccelerator ();
+  if (!hCurrent)
+    hCurrent = hDefault;
+  iCount = CopyAcceleratorTable (hCurrent, NULL, 0);
+  if (iCount <= 0)
+    return eBadParameter;
+  vector<ACCEL> accelerators (iCount);
+  if (CopyAcceleratorTable (hCurrent, &accelerators [0], iCount) != iCount)
+    return eBadParameter;
+
+  ACCEL wanted;
+  wanted.fVirt = fVirt;
+  wanted.key = key;
+  wanted.cmd = 0;
+  fFindAccelerator matches;
+  accelerators.erase (remove_if (accelerators.begin (), accelerators.end (),
+                                bind2nd (matches, wanted)), accelerators.end ());
+  bool foundDefault = false;
+  for (vector<ACCEL>::const_iterator it = defaults.begin (); it != defaults.end (); ++it)
+    if (matches (*it, wanted))
+      {
+      accelerators.push_back (*it);
+      foundDefault = true;
+      }
+  if (!foundDefault)
+    return eKeyDoesNotExist;
+
+  // Create the replacement key-binding table before changing current state.
+  HACCEL hNew = CreateAcceleratorTable (&accelerators [0], accelerators.size ());
+  if (!hNew)
+    return eBadParameter;
+
+  HACCEL hOld = m_accelerator;
+  m_accelerator = hNew;
+  const long virt_plus_key = ((long) fVirt) << 16 | key;
+  map<long, WORD>::iterator command = m_AcceleratorToCommandMap.find (virt_plus_key);
+  if (command != m_AcceleratorToCommandMap.end ())
+    {
+    const WORD releasedCommand = command->second;
+    m_CommandToMacroMap.erase (releasedCommand);
+    m_CommandToSendToMap.erase (releasedCommand);
+    m_CommandToPluginMap.erase (releasedCommand);
+    m_AcceleratorToCommandMap.erase (command);
+
+    // Reuse released command IDs during repeated enable/disable cycles.
+    if (releasedCommand < m_nextAcceleratorCommand)
+      m_nextAcceleratorCommand = releasedCommand;
+    }
+
+  if (hOld)
+    DestroyAcceleratorTable (hOld);
+  return eOK;
+}  // end of CMUSHclientDoc::RestoreAccelerator
 
 long CMUSHclientDoc::Accelerator(LPCTSTR Key, LPCTSTR Send) 
 {

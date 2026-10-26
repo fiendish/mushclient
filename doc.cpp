@@ -637,6 +637,7 @@ BEGIN_DISPATCH_MAP(CMUSHclientDoc, CDocument)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "SetCommandWindowWidth", 425, SetCommandWindowWidth, VT_I4, VTS_I4)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "GetCommandLineStarts", 426, GetCommandLineStarts, VT_VARIANT, VTS_NONE)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "GetCommandCursorLine", 427, GetCommandCursorLine, VT_I4, VTS_NONE)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "RestoreAccelerator", 428, RestoreAccelerator, VT_I4, VTS_BSTR)
 	//}}AFX_DISPATCH_MAP
 END_DISPATCH_MAP()
 

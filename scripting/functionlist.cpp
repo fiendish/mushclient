@@ -324,6 +324,7 @@ tInternalFunctionsTable InternalFunctionsTable [] = {
 { "ResetStatusTime" ,            "( )" } ,
 { "ResetTimer" ,                 "( TimerName )" } ,
 { "ResetTimers" ,                "( )" } ,
+{ "RestoreAccelerator" ,         "( Key )" } ,
 { "ReverseSpeedwalk" ,           "( SpeedWalkString )" } ,
 { "RGBColourToName" ,            "( Colour )" } ,
 { "Save" ,                       "( Name )" } ,
