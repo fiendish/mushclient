@@ -455,6 +455,7 @@ library MUSHclient
 			[id(425)] long SetCommandWindowWidth(long Width);
 			[id(426)] VARIANT GetCommandLineStarts();
 			[id(427)] long GetCommandCursorLine();
+			[id(428)] long RestoreAccelerator(BSTR Key);
 			//}}AFX_ODL_METHOD
 
 	};

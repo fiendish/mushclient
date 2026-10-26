@@ -2840,6 +2840,7 @@ public:
 	afx_msg BSTR TranslateGerman(LPCTSTR Text);
 	afx_msg BSTR GetWorldID();
 	afx_msg long Accelerator(LPCTSTR Key, LPCTSTR Send);
+	afx_msg long RestoreAccelerator(LPCTSTR Key);
 	afx_msg VARIANT AcceleratorList();
 	afx_msg void MapColour(long Original, long Replacement);
 	afx_msg VARIANT SpellCheck(LPCTSTR Text);

@@ -378,6 +378,16 @@ static int L_AcceleratorTo (lua_State *L)
   } // end of L_AcceleratorTo
 
 //----------------------------------------
+//  world.RestoreAccelerator
+//----------------------------------------
+static int L_RestoreAccelerator (lua_State *L)
+  {
+  CMUSHclientDoc *pDoc = doc (L);   // must do this first
+  lua_pushnumber (L, pDoc->RestoreAccelerator (my_checkstring (L, 1)));
+  return 1;
+  } // end of L_RestoreAccelerator
+
+//----------------------------------------
 //  world.AcceleratorList
 //----------------------------------------
 static int L_AcceleratorList (lua_State *L)
@@ -6996,6 +7006,7 @@ static const struct luaL_Reg worldlib [] =
   {"Accelerator", L_Accelerator},
   {"AcceleratorTo", L_AcceleratorTo},
   {"AcceleratorList", L_AcceleratorList},
+  {"RestoreAccelerator", L_RestoreAccelerator},
   {"Activate", L_Activate},
   {"ActivateClient", L_ActivateClient},
   {"ActivateNotepad", L_ActivateNotepad},
