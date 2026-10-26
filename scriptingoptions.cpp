@@ -500,6 +500,8 @@ long CMUSHclientDoc::SetOptionItem (const int iItem,
                                     const bool bInclude) 
   {
 bool bChanged;
+bool bOutputBufferResized = false;
+const long iOldMaxlines = m_maxlines;
 
   // Prepare the current line before enabling UTF-8. A failed allocation must
   // leave the option unchanged.
@@ -522,6 +524,14 @@ long iResult = SetBaseOptionItem (iItem,
   if (iResult != eOK)
     return iResult;
 
+  if (bDoSpecial && (OptionsTable [iItem].iFlags & OPT_FIX_OUTPUT_BUFFER) &&
+      m_pCurrentLine)
+    {
+    // Keep the old limit until the replacement line index is ready.
+    m_maxlines = iOldMaxlines;
+    bOutputBufferResized = ResizeOutputBuffer (Value) != FALSE;
+    }
+
   if (bChanged)
     SetModifiedFlag ();
 
@@ -537,9 +547,8 @@ long iResult = SetBaseOptionItem (iItem,
   
 // some special handling
 
-  if (OptionsTable [iItem].iFlags & OPT_FIX_OUTPUT_BUFFER)
-    if (m_pCurrentLine)     // a new world might not have a line yet
-      FixUpOutputBuffer (Value);
+  if (bOutputBufferResized)
+    RefreshOutputBuffer ();
 
   if (OptionsTable [iItem].iFlags & OPT_FIX_INPUT_WRAP)
 	  FixInputWrap();

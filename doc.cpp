@@ -5500,7 +5500,7 @@ void CMUSHclientDoc::OnUpdateConnectionDisconnect(CCmdUI* pCmdUI)
 	pCmdUI->Enable (m_iConnectPhase != eConnectNotConnected);
 }
 
-BOOL CMUSHclientDoc::FixUpOutputBuffer (int nNewBufferSize)
+BOOL CMUSHclientDoc::ResizeOutputBuffer (int nNewBufferSize)
   {
 
 POSITION pos;
@@ -5511,19 +5511,20 @@ long i;
 
   Frame.SetStatusMessageNow (Translate ("Recalculating line positions"));
 
-// delete from head the excess lines
+// Allocate the replacement index before removing any lines.
 
-  while (m_LineList.GetCount () > nNewBufferSize)
-    RemoveChunk ();
-
-// do a new line positions array
-
-  POSITION * pNewLinePositions = new POSITION [(nNewBufferSize / JUMP_SIZE) + 1];
+  std::unique_ptr<POSITION []> pNewLinePositions
+    (new POSITION [(nNewBufferSize / JUMP_SIZE) + 1]);
 
 // clear all elements
 
   for (i = 0; i <= nNewBufferSize / JUMP_SIZE; i++)
     pNewLinePositions [i] = NULL;
+
+// delete from head the excess lines
+
+  while (m_LineList.GetCount () > nNewBufferSize)
+    RemoveChunk ();
 
 // re-seed positions array
 
@@ -5537,7 +5538,25 @@ long i;
         } // end of for loop
 
   delete [] m_pLinePositions;
-  m_pLinePositions = pNewLinePositions;
+  m_pLinePositions = pNewLinePositions.release ();
+  m_maxlines = nNewBufferSize;
+
+  return TRUE;
+
+  } // end of ResizeOutputBuffer
+
+BOOL CMUSHclientDoc::FixUpOutputBuffer (int nNewBufferSize)
+  {
+  if (!ResizeOutputBuffer (nNewBufferSize))
+    return FALSE;
+
+  RefreshOutputBuffer ();
+  return TRUE;
+  } // end of FixUpOutputBuffer
+
+void CMUSHclientDoc::RefreshOutputBuffer (void)
+  {
+POSITION pos;
 
 // refresh view to show different scroll bars
 
@@ -5555,9 +5574,7 @@ long i;
 
   ShowStatusLine ();
 
-  return TRUE;
-
-  } // end of FixUpOutputBuffer
+  } // end of RefreshOutputBuffer
 
 
 
