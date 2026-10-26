@@ -2017,6 +2017,8 @@ public:
   void SSLCleanup (void);
 
   BOOL FixUpOutputBuffer (int nNewBufferSize);
+  BOOL ResizeOutputBuffer (int nNewBufferSize);
+  void RefreshOutputBuffer (void);
   bool SendToMushHelper (CFile * f, 
                          CString & strPreamble,
                          CString & strLinePreamble,

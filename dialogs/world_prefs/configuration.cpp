@@ -1584,8 +1584,7 @@ void CMUSHclientDoc:: SavePrefsP14 (CPrefsP14 &page14)
 // we must adjust the output buffer to reflect the new number of lines in it
 
   if (m_maxlines != page14.m_nLines)
-    if (FixUpOutputBuffer (page14.m_nLines))  // if we could adjust it
-      m_maxlines        = page14.m_nLines;
+    FixUpOutputBuffer (page14.m_nLines);
 
 // We must adjust the current line to allow for the new wrap size
 
