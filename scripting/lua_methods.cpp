@@ -382,7 +382,8 @@ static int L_AcceleratorTo (lua_State *L)
 //----------------------------------------
 static int L_RestoreAccelerator (lua_State *L)
   {
-  lua_pushnumber (L, doc (L)->RestoreAccelerator (my_checkstring (L, 1)));
+  CMUSHclientDoc *pDoc = doc (L);   // must do this first
+  lua_pushnumber (L, pDoc->RestoreAccelerator (my_checkstring (L, 1)));
   return 1;
   } // end of L_RestoreAccelerator
 
