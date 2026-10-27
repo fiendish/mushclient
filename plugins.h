@@ -277,6 +277,7 @@ extern const string ON_PLUGIN_DISCONNECT;           //  "OnPluginDisconnect"
 // saving                                                                             
 extern const string ON_PLUGIN_SAVE_STATE;           //  "OnPluginSaveState"            
 extern const string ON_PLUGIN_WORLD_SAVE;           //  "OnPluginWorldSave"            
+extern const string ON_PLUGIN_WORLD_SETTINGS_CHANGED; // "OnPluginWorldSettingsChanged"
                                                                                       
 // enable / disable                                                                   
 extern const string ON_PLUGIN_ENABLE;               //  "OnPluginEnable"               

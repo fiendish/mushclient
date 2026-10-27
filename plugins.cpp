@@ -30,6 +30,7 @@ const string ON_PLUGIN_DISCONNECT            ("OnPluginDisconnect");
 // saving
 const string ON_PLUGIN_SAVE_STATE            ("OnPluginSaveState");
 const string ON_PLUGIN_WORLD_SAVE            ("OnPluginWorldSave");
+const string ON_PLUGIN_WORLD_SETTINGS_CHANGED ("OnPluginWorldSettingsChanged");
 
 // enable / disable
 const string ON_PLUGIN_ENABLE                ("OnPluginEnable");
@@ -151,6 +152,7 @@ string PluginCallbacksNames [] = {
    ON_PLUGIN_PACKET_DEBUG,
    ON_PLUGIN_WORLD_OUTPUT_RESIZED,  
    ON_PLUGIN_WORLD_SAVE,            
+   ON_PLUGIN_WORLD_SETTINGS_CHANGED,
 
   ""   // end of table marker            
 
