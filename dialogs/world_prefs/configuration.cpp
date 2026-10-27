@@ -2382,6 +2382,8 @@ Frame.DelayDebugStatus ("World config - loading pages");
 
   Frame.SetStatusNormal ();
 
+  SendToAllPluginCallbacks (ON_PLUGIN_WORLD_SETTINGS_CHANGED);
+
   return true;    // did it OK
 } // end of CMUSHclientDoc::GamePreferences 
 
