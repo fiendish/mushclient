@@ -164,13 +164,14 @@ static void BuildLuaTables (lua_State * L)
 
   } // end of BuildLuaTables
 
-// sigh - luacom_open returns void
-int luacom_open_glue (lua_State *L)
+static int RejectLuaCOMMessageLoop (lua_State *L)
   {
-  lua_pushliteral (L, "mushclient_embedded");
-  lua_pushboolean (L, 1);
-  lua_settable (L, LUA_REGISTRYINDEX);
-  luacom_open (L);
+  return luaL_error (L, "StartMessageLoop is not available inside MUSHclient");
+  }
+
+static int OpenLuaCOM (lua_State *L)
+  {
+  luacom_open_core (L, NULL, RejectLuaCOMMessageLoop);
   return 0;
   }
 
@@ -220,7 +221,7 @@ void CScriptEngine::OpenLuaDelayed ()
 
     if (lua_istable (L, -1))   // preload table exists
       {
-      lua_pushcfunction(L, luacom_open_glue);   // luacom open
+      lua_pushcfunction(L, OpenLuaCOM);   // luacom open
       lua_setfield(L, -2, "luacom");          
       } // have package.preload table
 
