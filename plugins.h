@@ -211,20 +211,6 @@ class CPluginContextGuard
   bool m_bResetNoteStyle;
   };
 
-class CPluginNotesGuard
-  {
-  public:
-  CPluginNotesGuard (CMUSHclientDoc * pDoc);
-  ~CPluginNotesGuard ();
-
-  private:
-  CPluginNotesGuard (const CPluginNotesGuard &);
-  CPluginNotesGuard & operator= (const CPluginNotesGuard &);
-
-  CMUSHclientDoc * m_pDoc;
-  bool m_bSavedNotesNotWanted;
-  };
-
 typedef list<CPlugin*> CPluginList;
 typedef CPluginList::iterator PluginListIterator;
 

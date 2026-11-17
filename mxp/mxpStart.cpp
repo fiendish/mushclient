@@ -23,16 +23,6 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 #define SECURE_ELEMENT_CHECK true
 
-class CArgumentListGuard
-  {
-  public:
-    CArgumentListGuard (CArgumentList & list) : m_list (list) { }
-    ~CArgumentListGuard () { DELETE_LIST (m_list); }
-
-  private:
-    CArgumentList & m_list;
-  };
-
 static std::unique_ptr<CElement> CloneCustomElement (const CElement * pSource)
   {
   std::unique_ptr<CElement> pClone (new CElement);
@@ -383,8 +373,8 @@ class CMXPStartTransaction
         m_pDoc->m_iMXPListOwner = m_iOpeningListOwner;
         }
 
-      CStyle * pMarkerStyle = FindStyle (m_iMarkerCreationNumber);
-      CStyle * pNewStyle = FindStyle (m_iStyleCreationNumber);
+      CStyle * pMarkerStyle = m_pDoc->FindMXPStyle (m_iMarkerCreationNumber);
+      CStyle * pNewStyle = m_pDoc->FindMXPStyle (m_iStyleCreationNumber);
       const bool bMarkerWasRepurposed =
         pMarkerStyle &&
         ((pMarkerStyle->iFlags & START_TAG) == 0 ||
@@ -499,29 +489,10 @@ class CMXPStartTransaction
 
     CStyle * ResolveStyle (const __int64 iCreationNumber) const
       {
-      if (!iCreationNumber)
-        return NULL;
-
-      // Deleting output can resume an older retained line. Keep the full
-      // lookup when that happens during this transaction.
-      if (m_pDoc->m_iOutputGeneration != m_iOpeningOutputGeneration)
-        return FindStyle (iCreationNumber);
-
-      // Without deletion, results stay on the opening line or a newer line.
-      // A note callback can replace the result without deleting any lines.
-      for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
-        {
-        CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
-        if (pLine->nCreationNumber < m_iFirstResultLineCreationNumber)
-          break;
-        for (POSITION stylepos = pLine->styleList.GetTailPosition (); stylepos; )
-          {
-          CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
-          if (pStyle->nCreationNumber == iCreationNumber)
-            return pStyle;
-          }
-        }
-      return NULL;
+      // Deleting output can resume an older retained line. Otherwise a result
+      // can only be on the opening line or a newer line.
+      const bool deletedOutput = m_pDoc->m_iOutputGeneration != m_iOpeningOutputGeneration;
+      return m_pDoc->FindMXPStyle (iCreationNumber, deletedOutput ? 0 : m_iFirstResultLineCreationNumber);
       }
 
     void Commit ()
@@ -546,27 +517,7 @@ class CMXPStartTransaction
       }
 
     bool HasStyle (const __int64 iCreationNumber) const
-      { return FindStyle (iCreationNumber) != NULL; }
-
-    CStyle * FindStyle (const __int64 iCreationNumber) const
-      {
-      if (!iCreationNumber)
-        return NULL;
-
-      // Opening markers and action results are normally at the output tail.
-      // Still search all lines when rollback needs an older style.
-      for (POSITION linepos = m_pDoc->m_LineList.GetTailPosition (); linepos; )
-        {
-        CLine * pLine = m_pDoc->m_LineList.GetPrev (linepos);
-        for (POSITION stylepos = pLine->styleList.GetTailPosition (); stylepos; )
-          {
-          CStyle * pStyle = pLine->styleList.GetPrev (stylepos);
-          if (pStyle->nCreationNumber == iCreationNumber)
-            return pStyle;
-          }
-        }
-      return NULL;
-      }
+      { return m_pDoc->FindMXPStyle (iCreationNumber) != NULL; }
 
     void RemoveStyle (const __int64 iCreationNumber)
       {

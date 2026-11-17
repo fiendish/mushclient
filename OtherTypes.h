@@ -461,6 +461,13 @@ template <class T>
 class CScriptItemArray : public CTypedPtrArray<CPtrArray, T *>
   {
   public:
+  void Replace (const std::vector<T *> & items)
+    {
+    this->SetSize (items.size ());
+    for (size_t i = 0; i < items.size (); ++i)
+      this->SetAt (i, items [i]);
+    }
+
   void Reserve (INT_PTR count)
     {
     const INT_PTR oldSize = this->GetSize ();
@@ -829,6 +836,16 @@ class CArgument :public CObject
   };
 
 typedef CTypedPtrList <CPtrList, CArgument*> CArgumentList;
+
+class CArgumentListGuard
+  {
+  public:
+    CArgumentListGuard (CArgumentList & list) : m_list (list) { }
+    ~CArgumentListGuard () { DELETE_LIST (m_list); }
+
+  private:
+    CArgumentList & m_list;
+  };
 
 
 /////////////////////////////////////////////////////////////////////////////

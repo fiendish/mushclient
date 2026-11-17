@@ -20,7 +20,6 @@
 //    GetCommandCursorPosition
 //    GetCommandCursorLine
 //    GetCommandLineStarts
-//    GetCommandLineCount
 //    GetCommandWindowDesiredHeight
 //    GetCommandList
 //    GetInternalCommandsList
@@ -578,21 +577,6 @@ VARIANT CMUSHclientDoc::GetCommandLineStarts()
     }
   return sa.Detach();
 }
-
-
-// world.GetCommandLineCount - gets the number of visual command lines
-// Returns zero if there is no command window.
-
-long CMUSHclientDoc::GetCommandLineCount()
-{
-  CSendView * pCommandView = GetCommandView ();
-  if (pCommandView == NULL)
-    return 0;
-
-  return pCommandView->m_iCommandWindowWidth > 0 ?
-      pCommandView->GetCommandLayout().LineCount() :
-      pCommandView->GetEditCtrl().GetLineCount ();
-}   // end of CMUSHclientDoc::GetCommandLineCount
 
 
 // world.GetCommandWindowDesiredHeight - applies command auto-resize policy to the supplied current height

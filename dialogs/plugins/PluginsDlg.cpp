@@ -188,22 +188,6 @@ int iResult;
 
   } // end of CompareFunc
 
-CMUSHclientDoc * CPluginsDlg::GetLiveDocument (void) const
-  {
-  if (!m_pDoc)
-    return NULL;
-
-  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
-    {
-    CMUSHclientDoc * pDoc =
-      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
-    if (pDoc == m_pDoc && pDoc->m_iUniqueDocumentNumber == m_iDocumentNumber)
-      return pDoc;
-    }
-
-  return NULL;
-  }
-
 CString CPluginsDlg::GetPluginIDForIndex (const int iIndex) const
   {
   if (iIndex < 0 || iIndex >= m_PluginIDs.GetSize ())
@@ -213,7 +197,7 @@ CString CPluginsDlg::GetPluginIDForIndex (const int iIndex) const
 
 CPlugin * CPluginsDlg::GetPluginForIndex (const int iIndex) const
   {
-  CMUSHclientDoc * pDoc = GetLiveDocument ();
+  CMUSHclientDoc * pDoc = App.FindLiveWorld (m_pDoc, m_iDocumentNumber);
   CString strPluginID = GetPluginIDForIndex (iIndex);
   if (!pDoc || strPluginID.IsEmpty ())
     return NULL;
@@ -244,7 +228,7 @@ int nItem = 0;
   m_PluginIDs.RemoveAll ();
   m_PluginInstanceNumbers.RemoveAll ();
 
-  CMUSHclientDoc * pDoc = GetLiveDocument ();
+  CMUSHclientDoc * pDoc = App.FindLiveWorld (m_pDoc, m_iDocumentNumber);
   if (!pDoc)
     {
     EndDialog (IDCANCEL);
@@ -380,7 +364,7 @@ pCmdUI->Enable (FALSE);
 
 LRESULT CPluginsDlg::OnKickIdle(WPARAM, LPARAM)
   {
-  if (!GetLiveDocument ())
+  if (!App.FindLiveWorld (m_pDoc, m_iDocumentNumber))
     {
     EndDialog (IDCANCEL);
     return 0;

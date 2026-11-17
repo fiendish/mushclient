@@ -281,9 +281,7 @@ OneShotItemMap AliasList;
     {
     CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
     CPreparedAliasDeletion & prepared = plugin_it->second;
-    GetAliasArray ().SetSize (prepared.newAliasArray.size ());
-    for (size_t i = 0; i < prepared.newAliasArray.size (); i++)
-      GetAliasArray ().SetAt (i, prepared.newAliasArray [i]);
+    GetAliasArray ().Replace (prepared.newAliasArray);
     }
 
   for (map<CPlugin *, AliasDeletionMap>::iterator plugin_it =
@@ -1056,7 +1054,7 @@ bool CMUSHclientDoc::ProcessOneAliasSequence (const CString strCurrentLine,
     {
     CAlias * alias_item = GetAliasArray () [iAlias];
     CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
-    CAliasExecutionGuard executingGuard (this, alias_item);
+    CScriptExecutionGuard<CAlias> executingGuard (alias_item, m_pRetiredAliases);
 
   // ignore non-enabled aliases
 
@@ -1258,7 +1256,7 @@ bool CMUSHclientDoc::ExecuteAliasScript (CAlias * alias_item,
       list<string> sparams;
       sparams.push_back (pLabel);
       sparams.push_back ((LPCTSTR) strCurrentLine);
-      CAliasExecutionGuard executingGuard (this, alias_item);
+      CScriptExecutionGuard<CAlias> executingGuard (alias_item, m_pRetiredAliases);
       GetScriptEngine ()->ExecuteLua (alias_item->dispid, 
                                      alias_item->strProcedure, 
                                      eDontChangeAction,
@@ -1308,7 +1306,7 @@ bool CMUSHclientDoc::ExecuteAliasScript (CAlias * alias_item,
     sa.PutElement (&i, &v);
     args [eWildcards] = sa;
     
-    CAliasExecutionGuard executingGuard (this, alias_item);
+    CScriptExecutionGuard<CAlias> executingGuard (alias_item, m_pRetiredAliases);
     ExecuteScript (alias_item->dispid,  
                    alias_item->strProcedure,
                    eDontChangeAction,     // don't change current action

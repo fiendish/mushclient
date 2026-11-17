@@ -1171,9 +1171,7 @@ assemble the full text of the original line.
     {
     CPluginContextGuard contextGuard (this, plugin_it->first, false, false);
     CPreparedTriggerDeletion & prepared = plugin_it->second;
-    GetTriggerArray ().SetSize (prepared.newTriggerArray.size ());
-    for (size_t i = 0; i < prepared.newTriggerArray.size (); i++)
-      GetTriggerArray ().SetAt (i, prepared.newTriggerArray [i]);
+    GetTriggerArray ().Replace (prepared.newTriggerArray);
     }
 
   for (map<CPlugin *, TriggerDeletionMap>::iterator plugin_it =
@@ -1226,7 +1224,7 @@ __int64 iOutputGeneration = m_iOutputGeneration;
     {
     trigger_item = GetTriggerArray () [iItem];
     CPluginCallGuard pluginCallGuard (m_CurrentPlugin, true);
-    CTriggerExecutionGuard executingGuard (this, trigger_item);
+    CScriptExecutionGuard<CTrigger> executingGuard (trigger_item, m_pRetiredTriggers);
 
     trigger_item = EvaluateTrigger (strCurrentLine, 
                                         strResponse,

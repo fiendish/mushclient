@@ -190,8 +190,6 @@ class CLuaCallTrace
       return "Function: " + m_first;
       }
 
-    bool Incomplete () const { return m_incomplete; }
-
   private:
     lua_State * m_L;
     CLuaCallTrace * m_previous;

@@ -5842,7 +5842,7 @@ ASSERT_VALID(pDoc);
 
       CPluginContextGuard pluginContextGuard (pDoc, pAliasPlugin);
       CPluginCallGuard pluginCallGuard (pAliasPlugin, true);
-      CAliasExecutionGuard executingGuard (pDoc, pAlias);
+      CScriptExecutionGuard<CAlias> executingGuard (pAlias, pDoc->m_pRetiredAliases);
 
       CString strAction;
 

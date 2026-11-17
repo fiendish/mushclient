@@ -1654,6 +1654,7 @@ public:
                        const CString & strVariable);
 
   bool CheckConnected (void);
+  CStyle * FindMXPStyle (__int64 creationNumber, __int64 firstLine = 0) const;
   bool FindStyle (const CLine * pLine,         // which line
                   const int iWantedCol,  // which column we want
                   int & iCol,            // which column style goes up to
@@ -1948,9 +1949,6 @@ public:
   void RetireAlias (CAlias * pAlias);
   void RetireTrigger (CTrigger * pTrigger);
   void RetireTimer (CTimer * pTimer);
-  void DeleteRetiredAliases ();
-  void DeleteRetiredTriggers ();
-  void DeleteRetiredTimers ();
 
   BOOL Load_Set (const int set_type, 
                  CString strFileName,
@@ -2269,7 +2267,6 @@ public:
   void FlushTraceEvent ();
   unsigned int GetTimerTraceCategory (const CTimer & timer) const;
   unsigned int GetScriptTraceCategory (LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false) const;
-  void TraceScript (LPCTSTR procedure, LPCTSTR type, bool pluginCallback = false);
 
   void Screendraw  (const long iType,
                     const long iLog,
@@ -2699,7 +2696,6 @@ public:
 	afx_msg long GetCommandCursorLine();
 	afx_msg VARIANT GetCommandLineStarts();
 	afx_msg long SetCommandWindowWidth(long Width);
-	afx_msg long GetCommandLineCount();
 	afx_msg long GetCommandWindowDesiredHeight(long CurrentHeight);
 	afx_msg long AddTriggerEx(LPCTSTR TriggerName, LPCTSTR MatchText, LPCTSTR ResponseText, long Flags, short Colour, short Wildcard, LPCTSTR SoundFileName, LPCTSTR ScriptName, short SendTo, short Sequence);
 	afx_msg VARIANT GetQueue();
@@ -3122,68 +3118,63 @@ class COutputAppendTransaction
 
 /////////////////////////////////////////////////////////////////////////////
 
-class CAliasExecutionGuard
+template <class T>
+static void RetireScriptItem (T * item, T *& head)
+  {
+  if (!item)
+    return;
+  if (item->bExecutingScript)
+    {
+    item->pNextRetired = head;
+    head = item;
+    }
+  else
+    delete item;
+  }
+
+template <class T>
+void DeleteRetiredScriptItems (T *& head, bool includeExecuting = false)
+  {
+  T ** link = &head;
+  while (*link)
+    {
+    T * item = *link;
+    if (!includeExecuting && item->bExecutingScript)
+      link = &item->pNextRetired;
+    else
+      {
+      *link = item->pNextRetired;
+      delete item;
+      }
+    }
+  }
+
+template <class T>
+class CScriptExecutionGuard
   {
   public:
-  CAliasExecutionGuard (CMUSHclientDoc * pDoc, CAlias * pAlias) :
-      m_pDoc (pDoc), m_pAlias (pAlias), m_bSavedValue (pAlias->bExecutingScript)
-    { m_pAlias->bExecutingScript = true; }
-  ~CAliasExecutionGuard ()
+  CScriptExecutionGuard (T * item, T *& retired)
+    : m_item (item), m_retired (retired), m_wasExecuting (item->bExecutingScript)
+    { m_item->bExecutingScript = true; }
+  ~CScriptExecutionGuard ()
     {
-    m_pAlias->bExecutingScript = m_bSavedValue;
-    m_pDoc->DeleteRetiredAliases ();
+    m_item->bExecutingScript = m_wasExecuting;
+    DeleteRetiredScriptItems (m_retired);
     }
 
   private:
-  CAliasExecutionGuard (const CAliasExecutionGuard &);
-  CAliasExecutionGuard & operator= (const CAliasExecutionGuard &);
-  CMUSHclientDoc * m_pDoc;
-  CAlias * m_pAlias;
-  bool m_bSavedValue;
-  };
-
-class CTriggerExecutionGuard
-  {
-  public:
-  CTriggerExecutionGuard (CMUSHclientDoc * pDoc, CTrigger * pTrigger) :
-      m_pDoc (pDoc), m_pTrigger (pTrigger), m_bSavedValue (pTrigger->bExecutingScript)
-    { m_pTrigger->bExecutingScript = true; }
-  ~CTriggerExecutionGuard ()
-    {
-    m_pTrigger->bExecutingScript = m_bSavedValue;
-    m_pDoc->DeleteRetiredTriggers ();
-    }
-
-  private:
-  CTriggerExecutionGuard (const CTriggerExecutionGuard &);
-  CTriggerExecutionGuard & operator= (const CTriggerExecutionGuard &);
-  CMUSHclientDoc * m_pDoc;
-  CTrigger * m_pTrigger;
-  bool m_bSavedValue;
-  };
-
-class CTimerExecutionGuard
-  {
-  public:
-  CTimerExecutionGuard (CMUSHclientDoc * pDoc, CTimer * pTimer) :
-      m_pDoc (pDoc), m_pTimer (pTimer), m_bSavedValue (pTimer->bExecutingScript)
-    { m_pTimer->bExecutingScript = true; }
-  ~CTimerExecutionGuard ()
-    {
-    m_pTimer->bExecutingScript = m_bSavedValue;
-    m_pDoc->DeleteRetiredTimers ();
-    }
-
-  private:
-  CTimerExecutionGuard (const CTimerExecutionGuard &);
-  CTimerExecutionGuard & operator= (const CTimerExecutionGuard &);
-  CMUSHclientDoc * m_pDoc;
-  CTimer * m_pTimer;
-  bool m_bSavedValue;
+  CScriptExecutionGuard (const CScriptExecutionGuard &);
+  CScriptExecutionGuard & operator= (const CScriptExecutionGuard &);
+  T * m_item;
+  T *& m_retired;
+  bool m_wasExecuting;
   };
 
 /////////////////////////////////////////////////////////////////////////////
 
+
+int CompareTriggerSequence (const void * left, const void * right);
+int CompareAliasSequence (const void * left, const void * right);
 
 // MXP-oriented utilities
 

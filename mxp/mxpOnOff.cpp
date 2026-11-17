@@ -14,17 +14,22 @@
 static char BASED_CODE THIS_FILE[] = __FILE__;
 #endif
 
-static CStyle * FindMXPStyle (CLineList & lines,
-                              const __int64 iCreationNumber)
+CStyle * CMUSHclientDoc::FindMXPStyle (__int64 creationNumber, __int64 firstLine) const
   {
-  for (POSITION linepos = lines.GetHeadPosition (); linepos; )
+  if (!creationNumber)
+    return NULL;
+
+  // Opening markers and action results are normally at the output tail.
+  for (POSITION pos = m_LineList.GetTailPosition (); pos; )
     {
-    CLine * pLine = lines.GetNext (linepos);
-    for (POSITION stylepos = pLine->styleList.GetHeadPosition (); stylepos; )
+    CLine * line = m_LineList.GetPrev (pos);
+    if (firstLine && line->nCreationNumber < firstLine)
+      break;
+    for (POSITION stylePos = line->styleList.GetTailPosition (); stylePos; )
       {
-      CStyle * pStyle = pLine->styleList.GetNext (stylepos);
-      if (pStyle->nCreationNumber == iCreationNumber)
-        return pStyle;
+      CStyle * style = line->styleList.GetPrev (stylePos);
+      if (style->nCreationNumber == creationNumber)
+        return style;
       }
     }
   return NULL;
@@ -34,20 +39,30 @@ static void RestoreAndDeleteMXPTag (CMUSHclientDoc * pDoc,
                                     POSITION current,
                                     CActiveTag * pTag)
   {
-  CStyle * pMarker =
-    FindMXPStyle (pDoc->m_LineList, pTag->nOpeningStyleCreationNumber);
-  if (pMarker && (pMarker->iFlags & START_TAG))
-    {
-    CAction * pReplacementAction = pTag->pOpeningAction;
-    if (pReplacementAction)
-      pReplacementAction->AddRef ();
-    if (pMarker->pAction)
-      pMarker->pAction->Release ();
-    pMarker->iFlags = pTag->iOpeningFlags;
-    pMarker->iForeColour = pTag->iOpeningForeColour;
-    pMarker->iBackColour = pTag->iOpeningBackColour;
-    pMarker->pAction = pReplacementAction;
-    }
+  // A pending wrap can retain copies of the opening marker. Restore all
+  // copies because either the retained or moved style can survive the append.
+  if (pTag->nOpeningStyleCreationNumber)
+    for (POSITION pos = pDoc->m_LineList.GetHeadPosition (); pos; )
+      {
+      CLine * pLine = pDoc->m_LineList.GetNext (pos);
+      for (POSITION stylePos = pLine->styleList.GetHeadPosition (); stylePos; )
+        {
+        CStyle * pMarker = pLine->styleList.GetNext (stylePos);
+        if (pMarker->nCreationNumber != pTag->nOpeningStyleCreationNumber ||
+            (pMarker->iFlags & START_TAG) == 0)
+          continue;
+
+        CAction * pReplacementAction = pTag->pOpeningAction;
+        if (pReplacementAction)
+          pReplacementAction->AddRef ();
+        if (pMarker->pAction)
+          pMarker->pAction->Release ();
+        pMarker->iFlags = pTag->iOpeningFlags;
+        pMarker->iForeColour = pTag->iOpeningForeColour;
+        pMarker->iBackColour = pTag->iOpeningBackColour;
+        pMarker->pAction = pReplacementAction;
+        }
+      }
 
   pDoc->m_ActiveTagList.RemoveAt (current);
   delete pTag;

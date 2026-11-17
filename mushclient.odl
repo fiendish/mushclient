@@ -447,7 +447,6 @@ library MUSHclient
 			[id(413)] void SetSelection(long StartLine, long EndLine, long StartColumn, long EndColumn);
 			[id(414)] void SetFrameBackgroundColour(long Colour);
 			[id(419)] long GetCommandCursorPosition();
-			[id(420)] long GetCommandLineCount();
 			[id(421)] long SetCommandWindowAutoResizeSuppressed(BOOL Suppressed);
 			[id(422)] long GetCommandWindowDesiredHeight(long CurrentHeight);
 			[id(423)] void BufferedRepaint();

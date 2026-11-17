@@ -33,16 +33,9 @@ static bool IsLiveWorldSocket (const CMUSHclientDoc * pDoc,
                                 const CWorldSocket * pSocket,
                                 const __int64 iSocketNumber)
   {
-  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
-    {
-    CMUSHclientDoc * pLiveDoc =
-      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
-    if (pLiveDoc == pDoc &&
-        pLiveDoc->m_iUniqueDocumentNumber == iDocumentNumber)
-      return pLiveDoc->m_pSocket == pSocket &&
-             pLiveDoc->m_pSocket->m_iSocketNumber == iSocketNumber;
-    }
-  return false;
+  CMUSHclientDoc * world = App.FindLiveWorld (pDoc, iDocumentNumber);
+  return world && world->m_pSocket == pSocket &&
+         world->m_pSocket->m_iSocketNumber == iSocketNumber;
   }
 
 CWorldSocket::CWorldSocket(CMUSHclientDoc* pDoc)
