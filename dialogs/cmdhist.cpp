@@ -126,19 +126,7 @@ bool CCmdHistory::IsContextLive (void) const
   if (!m_pDoc || !m_sendview || !m_hSendView)
     return false;
 
-  bool bDocumentLive = false;
-  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
-    {
-    CMUSHclientDoc * pDoc =
-      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
-    if (pDoc == m_pDoc && pDoc->m_iUniqueDocumentNumber == m_iDocumentNumber)
-      {
-      bDocumentLive = true;
-      break;
-      }
-    }
-
-  return bDocumentLive && ::IsWindow (m_hSendView) &&
+  return App.FindLiveWorld (m_pDoc, m_iDocumentNumber) && ::IsWindow (m_hSendView) &&
          CWnd::FromHandlePermanent (m_hSendView) == m_sendview;
   }
 

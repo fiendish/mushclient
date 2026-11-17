@@ -396,24 +396,7 @@ class CValueStateGuard
 // translates "send to" numbers
 CString GetSendToString (const unsigned short iWhere);
 
-class CBoolStateGuard
-  {
-  public:
-  CBoolStateGuard (bool & bValue, const bool bNewValue)
-    : m_bValue (bValue), m_bSavedValue (bValue)
-    {
-    m_bValue = bNewValue;
-    }
-
-  ~CBoolStateGuard ()
-    {
-    m_bValue = m_bSavedValue;
-    }
-
-  private:
-  bool & m_bValue;
-  bool m_bSavedValue;
-  };
+typedef CValueStateGuard<bool> CBoolStateGuard;
 
 // translates connection status to text
 CString GetConnectionStatus (const int iStatus);

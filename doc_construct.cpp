@@ -597,23 +597,13 @@ int i;
 
 // delete triggers
 
-  while (m_pRetiredTriggers)
-    {
-    CTrigger * pTrigger = m_pRetiredTriggers;
-    m_pRetiredTriggers = pTrigger->pNextRetired;
-    delete pTrigger;
-    }
+  DeleteRetiredScriptItems (m_pRetiredTriggers, true);
 
   DELETE_MAP (m_TriggerMap, CTrigger); 
 
 // delete aliass
 
-  while (m_pRetiredAliases)
-    {
-    CAlias * pAlias = m_pRetiredAliases;
-    m_pRetiredAliases = pAlias->pNextRetired;
-    delete pAlias;
-    }
+  DeleteRetiredScriptItems (m_pRetiredAliases, true);
 
   DELETE_MAP (m_AliasMap, CAlias); 
 
@@ -623,12 +613,7 @@ int i;
 
 // delete timer map
 
-  while (m_pRetiredTimers)
-    {
-    CTimer * pTimer = m_pRetiredTimers;
-    m_pRetiredTimers = pTimer->pNextRetired;
-    delete pTimer;
-    }
+  DeleteRetiredScriptItems (m_pRetiredTimers, true);
 
   DELETE_MAP (m_TimerMap, CTimer); 
   

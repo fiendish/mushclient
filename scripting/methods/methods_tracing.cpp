@@ -136,7 +136,7 @@ void CMUSHclientDoc::FlushTraceEvent ()
     {
     if (m_bTraceGroupOutputQueued)
       {
-      CPluginNotesGuard notesGuard (this);
+      CValueStateGuard<bool> notesGuard (m_bNotesNotWantedNow, true);
       Note (ENDLINE);
       }
     else
@@ -332,19 +332,6 @@ CTraceScriptGuard::~CTraceScriptGuard ()
   m_pDoc->m_bTraceOutputRedraw = m_bSavedRedraw;
   }
 
-
-void CMUSHclientDoc::TraceScript (LPCTSTR procedure, LPCTSTR type, bool pluginCallback)
-{
-  const unsigned int category = GetScriptTraceCategory (procedure, type, pluginCallback);
-  // Display callbacks can request further updates while showing trace output.
-  if (m_bTraceOutputRedraw)
-    return;
-  if (m_bTrace && !m_bInTrace && (m_iTraceCategories & category))
-    {
-    LPCTSTR traceType = m_CurrentPlugin && pluginCallback ? "plugin" : type;
-    TraceForCategory (category, TFormat ("Executing %s script \"%s\"", traceType, procedure));
-    }
-}
 
 void CMUSHclientDoc::TraceOut(LPCTSTR Message) 
 {

@@ -42,7 +42,7 @@ void CChooseNotepadDlg::DoDataExchange(CDataExchange* pDX)
   if (!pDX->m_bSaveAndValidate)
     {   // loading
 
-    CMUSHclientDoc * pWorld = GetLiveWorld ();
+    CMUSHclientDoc * pWorld = App.FindLiveWorld (m_pWorld, m_iWorldDocumentNumber);
     if (!pWorld)
       return;
 
@@ -81,26 +81,9 @@ void CChooseNotepadDlg::DoDataExchange(CDataExchange* pDX)
 
 }
 
-CMUSHclientDoc * CChooseNotepadDlg::GetLiveWorld (void) const
-  {
-  if (!m_pWorld)
-    return NULL;
-
-  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
-    {
-    CMUSHclientDoc * pWorld =
-      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
-    if (pWorld == m_pWorld &&
-        pWorld->m_iUniqueDocumentNumber == m_iWorldDocumentNumber)
-      return pWorld;
-    }
-
-  return NULL;
-  }
-
 CTextDocument * CChooseNotepadDlg::GetNotepadForIndex (const int iIndex) const
   {
-  CMUSHclientDoc * pWorld = GetLiveWorld ();
+  CMUSHclientDoc * pWorld = App.FindLiveWorld (m_pWorld, m_iWorldDocumentNumber);
   if (!pWorld || iIndex < 0 || iIndex >= m_NotepadDocumentNumbers.GetSize ())
     return NULL;
 

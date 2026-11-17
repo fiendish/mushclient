@@ -60,20 +60,7 @@ bool CMUSHclientDoc::SwitchToNotepad (void)
     if (dlg.DoModal () != IDOK)
       return true;   // they gave up
 
-    bool bDocumentLive = false;
-    for (POSITION worldPos = App.m_pWorldDocTemplate->GetFirstDocPosition(); worldPos; )
-      {
-      CMUSHclientDoc * pWorld =
-        (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (worldPos);
-      if (pWorld == pThisDocument &&
-          pWorld->m_iUniqueDocumentNumber == iThisDocumentNumber)
-        {
-        bDocumentLive = true;
-        break;
-        }
-      }
-
-    if (!bDocumentLive)
+    if (!App.FindLiveWorld (pThisDocument, iThisDocumentNumber))
       return true;
 
     if (dlg.m_pTextDocument)  // they chose an existing one

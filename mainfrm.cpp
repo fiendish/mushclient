@@ -71,15 +71,7 @@ class CWorldTimerDocumentSnapshot
     CMUSHclientDoc * GetLiveAt (const size_t i) const
       {
       const CWorldDocumentIdentity & identity = m_documents [i];
-      for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
-        {
-        CMUSHclientDoc * pDoc =
-          (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
-        if (pDoc == identity.m_pDocument &&
-            pDoc->m_iUniqueDocumentNumber == identity.m_iDocumentNumber)
-          return pDoc;
-        }
-      return NULL;
+      return App.FindLiveWorld (identity.m_pDocument, identity.m_iDocumentNumber);
       }
 
   private:

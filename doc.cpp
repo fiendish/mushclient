@@ -629,9 +629,8 @@ BEGIN_DISPATCH_MAP(CMUSHclientDoc, CDocument)
 	DISP_PROPERTY_PARAM(CMUSHclientDoc, "CustomColourText", GetCustomColourText, SetCustomColourText, VT_I4, VTS_I2)
 	DISP_PROPERTY_PARAM(CMUSHclientDoc, "CustomColourBackground", GetCustomColourBackground, SetCustomColourBackground, VT_I4, VTS_I2)
 	DISP_FUNCTION(CMUSHclientDoc, "GetCommandCursorPosition", GetCommandCursorPosition, VT_I4, VTS_NONE)
-	DISP_FUNCTION(CMUSHclientDoc, "GetCommandLineCount", GetCommandLineCount, VT_I4, VTS_NONE)
-	DISP_FUNCTION(CMUSHclientDoc, "SetCommandWindowAutoResizeSuppressed", SetCommandWindowAutoResizeSuppressed, VT_I4, VTS_BOOL)
-	DISP_FUNCTION(CMUSHclientDoc, "GetCommandWindowDesiredHeight", GetCommandWindowDesiredHeight, VT_I4, VTS_I4)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "SetCommandWindowAutoResizeSuppressed", 421, SetCommandWindowAutoResizeSuppressed, VT_I4, VTS_BOOL)
+	DISP_FUNCTION_ID(CMUSHclientDoc, "GetCommandWindowDesiredHeight", 422, GetCommandWindowDesiredHeight, VT_I4, VTS_I4)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "BufferedRepaint", 423, BufferedRepaint, VT_EMPTY, VTS_NONE)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "SetBufferedRepaintPaused", 424, SetBufferedRepaintPaused, VT_EMPTY, VTS_BOOL)
 	DISP_FUNCTION_ID(CMUSHclientDoc, "SetCommandWindowWidth", 425, SetCommandWindowWidth, VT_I4, VTS_I4)
@@ -3663,7 +3662,7 @@ void CMUSHclientDoc::ExecuteTriggerScript (CTrigger * trigger_item,
     list<string> sparams;
     sparams.push_back (pLabel);
     sparams.push_back ((LPCTSTR) strCurrentLine);
-    CTriggerExecutionGuard executingGuard (this, trigger_item);
+    CScriptExecutionGuard<CTrigger> executingGuard (trigger_item, m_pRetiredTriggers);
     GetScriptEngine ()->ExecuteLua (trigger_item->dispid, 
                                    trigger_item->strProcedure, 
                                    eTriggerFired,
@@ -3718,7 +3717,7 @@ long i = 1;
   sa.PutElement (&i, &v);
   args [eWildcards] = sa;
 
-  CTriggerExecutionGuard executingGuard (this, trigger_item);
+  CScriptExecutionGuard<CTrigger> executingGuard (trigger_item, m_pRetiredTriggers);
   ExecuteScript (trigger_item->dispid,  
                  trigger_item->strProcedure,
                  eTriggerFired,
@@ -7584,57 +7583,49 @@ CImportXMLdlg dlg;
   
 }
 
-int CompareTrigger (const void * elem1, const void * elem2)
+template <class T>
+static int CompareScriptSequence (const void * left, const void * right, CString T::*name)
   {
-  CTrigger * trigger1 = (*((CTrigger **) elem1));
-  CTrigger * trigger2 = (*((CTrigger **) elem2));
-
-  if (trigger1->iSequence < trigger2->iSequence)
-    return -1;
-  else if (trigger1->iSequence > trigger2->iSequence)
-    return 1;
-  else 
-    {
-      // identical sequence, sort into match order
-    if (trigger1->trigger < trigger2->trigger)
-      return -1;
-    else if (trigger1->trigger > trigger2->trigger)
-      return 1;
-    else
-      return 0;
-    }  // end of sequence identical
-
-  }   // end of CompareTrigger
-
-
-void CMUSHclientDoc::BuildTriggerIndexes (
-  vector<CTrigger *> & triggerArray,
-  const set<CTrigger *> * pExclude,
-  CTriggerMap * pObjectMap)
-  {
-CTriggerMap & objectMap = pObjectMap ? *pObjectMap : GetTriggerMap ();
-CString strTriggerName;
-CTrigger * pTrigger;
-POSITION pos;
-
-  triggerArray.reserve (objectMap.GetCount ());
-
-  // extract pointers into a simple array
-  for (pos = objectMap.GetStartPosition(); pos; )
-    {
-     objectMap.GetNextAssoc (pos, strTriggerName, pTrigger);
-     if (pExclude && pExclude->find (pTrigger) != pExclude->end ())
-       continue;
-     triggerArray.push_back (pTrigger);
-    }
-
-  // sort the array
-  if (triggerArray.size () > 1)
-    qsort (&triggerArray [0],
-           triggerArray.size (),
-           sizeof (CTrigger *),
-           CompareTrigger);
+  const T * a = *static_cast<T * const *> (left);
+  const T * b = *static_cast<T * const *> (right);
+  if (a->iSequence != b->iSequence)
+    return a->iSequence < b->iSequence ? -1 : 1;
+  return (a->*name).Compare (b->*name);
   }
+
+int CompareTriggerSequence (const void * left, const void * right)
+  { return CompareScriptSequence (left, right, &CTrigger::trigger); }
+
+int CompareAliasSequence (const void * left, const void * right)
+  { return CompareScriptSequence (left, right, &CAlias::name); }
+
+template <class T, class TMap>
+static void BuildScriptIndex (vector<T *> & items, TMap & objectMap,
+                              const set<T *> * exclude,
+                              int (*compare) (const void *, const void *))
+  {
+  items.reserve (objectMap.GetCount ());
+  CString key;
+  T * item;
+  for (POSITION pos = objectMap.GetStartPosition (); pos; )
+    {
+    objectMap.GetNextAssoc (pos, key, item);
+    if (!exclude || exclude->find (item) == exclude->end ())
+      items.push_back (item);
+    }
+  if (items.size () > 1)
+    qsort (&items [0], items.size (), sizeof (T *), compare);
+  }
+
+void CMUSHclientDoc::BuildTriggerIndexes (vector<CTrigger *> & items,
+                                          const set<CTrigger *> * exclude,
+                                          CTriggerMap * map)
+  { BuildScriptIndex (items, map ? *map : GetTriggerMap (), exclude, CompareTriggerSequence); }
+
+void CMUSHclientDoc::BuildAliasIndexes (vector<CAlias *> & items,
+                                        const set<CAlias *> * exclude,
+                                        CAliasMap * map)
+  { BuildScriptIndex (items, map ? *map : GetAliasMap (), exclude, CompareAliasSequence); }
 
 void  CMUSHclientDoc::SortTriggers (const set<CTrigger *> * pExclude)
   {
@@ -7642,63 +7633,9 @@ void  CMUSHclientDoc::SortTriggers (const set<CTrigger *> * pExclude)
   BuildTriggerIndexes (newTriggerArray, pExclude);
 
   // Build the sorted replacement before changing the live array.
-  GetTriggerArray ().SetSize (newTriggerArray.size ());
-  for (size_t i = 0; i < newTriggerArray.size (); i++)
-    GetTriggerArray ().SetAt (i, newTriggerArray [i]);
+  GetTriggerArray ().Replace (newTriggerArray);
 
   } // end of CMUSHclientDoc::SortTriggers
-
-static int CompareAlias (const void * elem1, const void * elem2)
-  {
-  CAlias * alias1 = (*((CAlias **) elem1));
-  CAlias * alias2 = (*((CAlias **) elem2));
-
-  if (alias1->iSequence < alias2->iSequence)
-    return -1;
-  else if (alias1->iSequence > alias2->iSequence)
-    return 1;
-  else 
-    {
-      // identical sequence, sort into match order
-    if (alias1->name < alias2->name)
-      return -1;
-    else if (alias1->name > alias2->name)
-      return 1;
-    else
-      return 0;
-    }  // end of sequence identical
-
-  }   // end of CompareAlias
-
-
-void CMUSHclientDoc::BuildAliasIndexes (
-  vector<CAlias *> & aliasArray,
-  const set<CAlias *> * pExclude,
-  CAliasMap * pObjectMap)
-  {
-CAliasMap & objectMap = pObjectMap ? *pObjectMap : GetAliasMap ();
-CString strAliasName;
-CAlias * pAlias;
-POSITION pos;
-
-  aliasArray.reserve (objectMap.GetCount ());
-
-  // extract pointers into a simple array
-  for (pos = objectMap.GetStartPosition(); pos; )
-    {
-     objectMap.GetNextAssoc (pos, strAliasName, pAlias);
-     if (pExclude && pExclude->find (pAlias) != pExclude->end ())
-       continue;
-     aliasArray.push_back (pAlias);
-    }
-
-  // sort the array
-  if (aliasArray.size () > 1)
-    qsort (&aliasArray [0],
-           aliasArray.size (),
-           sizeof (CAlias *),
-           CompareAlias);
-  }
 
 void  CMUSHclientDoc::SortAliases (const set<CAlias *> * pExclude)
   {
@@ -7706,100 +7643,18 @@ void  CMUSHclientDoc::SortAliases (const set<CAlias *> * pExclude)
   BuildAliasIndexes (newAliasArray, pExclude);
 
   // Build the sorted replacement before changing the live array.
-  GetAliasArray ().SetSize (newAliasArray.size ());
-  for (size_t i = 0; i < newAliasArray.size (); i++)
-    GetAliasArray ().SetAt (i, newAliasArray [i]);
+  GetAliasArray ().Replace (newAliasArray);
 
   } // end of CMUSHclientDoc::SortAliases
 
-void CMUSHclientDoc::RetireAlias (CAlias * pAlias)
-  {
-  if (!pAlias)
-    return;
-  if (!pAlias->bExecutingScript)
-    {
-    delete pAlias;
-    return;
-    }
-  pAlias->pNextRetired = m_pRetiredAliases;
-  m_pRetiredAliases = pAlias;
-  }
+void CMUSHclientDoc::RetireAlias (CAlias * item)
+  { RetireScriptItem (item, m_pRetiredAliases); }
 
-void CMUSHclientDoc::RetireTrigger (CTrigger * pTrigger)
-  {
-  if (!pTrigger)
-    return;
-  if (!pTrigger->bExecutingScript)
-    {
-    delete pTrigger;
-    return;
-    }
-  pTrigger->pNextRetired = m_pRetiredTriggers;
-  m_pRetiredTriggers = pTrigger;
-  }
+void CMUSHclientDoc::RetireTrigger (CTrigger * item)
+  { RetireScriptItem (item, m_pRetiredTriggers); }
 
-void CMUSHclientDoc::RetireTimer (CTimer * pTimer)
-  {
-  if (!pTimer)
-    return;
-  if (!pTimer->bExecutingScript)
-    {
-    delete pTimer;
-    return;
-    }
-  pTimer->pNextRetired = m_pRetiredTimers;
-  m_pRetiredTimers = pTimer;
-  }
-
-void CMUSHclientDoc::DeleteRetiredAliases ()
-  {
-  CAlias ** ppAlias = &m_pRetiredAliases;
-  while (*ppAlias)
-    {
-    CAlias * pAlias = *ppAlias;
-    if (pAlias->bExecutingScript)
-      ppAlias = &pAlias->pNextRetired;
-    else
-      {
-      *ppAlias = pAlias->pNextRetired;
-      delete pAlias;
-      }
-    }
-  }
-
-void CMUSHclientDoc::DeleteRetiredTriggers ()
-  {
-  CTrigger ** ppTrigger = &m_pRetiredTriggers;
-  while (*ppTrigger)
-    {
-    CTrigger * pTrigger = *ppTrigger;
-    if (pTrigger->bExecutingScript)
-      ppTrigger = &pTrigger->pNextRetired;
-    else
-      {
-      *ppTrigger = pTrigger->pNextRetired;
-      delete pTrigger;
-      }
-    }
-  }
-
-void CMUSHclientDoc::DeleteRetiredTimers ()
-  {
-  CTimer ** ppTimer = &m_pRetiredTimers;
-  while (*ppTimer)
-    {
-    CTimer * pTimer = *ppTimer;
-    if (pTimer->bExecutingScript)
-      ppTimer = &pTimer->pNextRetired;
-    else
-      {
-      *ppTimer = pTimer->pNextRetired;
-      delete pTimer;
-      }
-    }
-  }
-
-
+void CMUSHclientDoc::RetireTimer (CTimer * item)
+  { RetireScriptItem (item, m_pRetiredTimers); }
 
 // CTime:Format only allows for a total field size of 128 bytes
 CString CMUSHclientDoc::FormatTime (const CTime theTime, 

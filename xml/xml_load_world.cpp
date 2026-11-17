@@ -53,39 +53,6 @@ static void ApplyXMLLoadMapRollback (
     }
   }
 
-static int CompareXMLRollbackTrigger (const void * pLeft,
-                                      const void * pRight)
-  {
-  CTrigger * pTriggerLeft = *static_cast<CTrigger * const *> (pLeft);
-  CTrigger * pTriggerRight = *static_cast<CTrigger * const *> (pRight);
-  if (pTriggerLeft->iSequence != pTriggerRight->iSequence)
-    return pTriggerLeft->iSequence < pTriggerRight->iSequence ? -1 : 1;
-  if (pTriggerLeft->trigger == pTriggerRight->trigger)
-    return 0;
-  return pTriggerLeft->trigger < pTriggerRight->trigger ? -1 : 1;
-  }
-
-static int CompareXMLRollbackAlias (const void * pLeft,
-                                    const void * pRight)
-  {
-  CAlias * pAliasLeft = *static_cast<CAlias * const *> (pLeft);
-  CAlias * pAliasRight = *static_cast<CAlias * const *> (pRight);
-  if (pAliasLeft->iSequence != pAliasRight->iSequence)
-    return pAliasLeft->iSequence < pAliasRight->iSequence ? -1 : 1;
-  if (pAliasLeft->name == pAliasRight->name)
-    return 0;
-  return pAliasLeft->name < pAliasRight->name ? -1 : 1;
-  }
-
-template <class T>
-static void ResetXMLLoadRollbackDecisions (
-  vector<CXMLLoadChange<T> > & changes)
-  {
-  for (typename vector<CXMLLoadChange<T> >::iterator it = changes.begin ();
-       it != changes.end (); ++it)
-    it->bRollbackOwnsNew = false;
-  }
-
 // A nested load can start with map entries that its outer load has not indexed.
 // Reserve their rollback capacity before this load changes any map entries.
 static void ReserveXMLLoadRollback (CXMLLoadContext & context, CAliasMap & map)
@@ -97,80 +64,49 @@ static void ReserveXMLLoadRollback (CXMLLoadContext & context, CTriggerMap & map
 static void ReserveXMLLoadRollback (CXMLLoadContext &, CTimerMap &)
   { }
 
-static void PublishXMLLoadRollbackWithoutAllocation (
-  CXMLLoadContext & context,
-  CTriggerMap & objectMap,
-  vector<CXMLLoadChange<CTrigger> > & changes)
+template <class T, class TMap>
+static void RollbackIndexedScriptItems (CScriptItemArray<T> & items, TMap & objectMap,
+                                        vector<CXMLLoadChange<T> > & changes,
+                                        int (*compare) (const void *, const void *))
   {
-  ResetXMLLoadRollbackDecisions (changes);
   int iFinalCount = 0;
   CString strName;
-  CTrigger * pTrigger;
+  T * item;
   for (POSITION pos = objectMap.GetStartPosition (); pos; )
     {
-    objectMap.GetNextAssoc (pos, strName, pTrigger);
-    if (SimulateXMLLoadRollback (strName, pTrigger, changes))
+    objectMap.GetNextAssoc (pos, strName, item);
+    if (SimulateXMLLoadRollback (strName, item, changes))
       iFinalCount++;
     }
 
   // Guard entry reserves existing keys, including unindexed outer entries.
   // Surviving callback additions publish any further capacity they require.
-  context.pTriggerArray->SetSize (iFinalCount);
-  ResetXMLLoadRollbackDecisions (changes);
-  int iTrigger = 0;
+  items.SetSize (iFinalCount);
+  ApplyXMLLoadMapRollback (objectMap, changes);
+  int index = 0;
   for (POSITION pos = objectMap.GetStartPosition (); pos; )
     {
-    objectMap.GetNextAssoc (pos, strName, pTrigger);
-    pTrigger = SimulateXMLLoadRollback (strName, pTrigger, changes);
-    if (pTrigger)
-      context.pTriggerArray->SetAt (iTrigger++, pTrigger);
+    objectMap.GetNextAssoc (pos, strName, item);
+    items.SetAt (index++, item);
     }
   if (iFinalCount > 1)
-    qsort (&(*context.pTriggerArray) [0], iFinalCount,
-           sizeof (CTrigger *), CompareXMLRollbackTrigger);
-
-  ApplyXMLLoadMapRollback (objectMap, changes);
+    qsort (&items [0], iFinalCount,
+           sizeof (T *), compare);
   }
 
 static void PublishXMLLoadRollbackWithoutAllocation (
-  CXMLLoadContext & context,
-  CAliasMap & objectMap,
-  vector<CXMLLoadChange<CAlias> > & changes)
-  {
-  ResetXMLLoadRollbackDecisions (changes);
-  int iFinalCount = 0;
-  CString strName;
-  CAlias * pAlias;
-  for (POSITION pos = objectMap.GetStartPosition (); pos; )
-    {
-    objectMap.GetNextAssoc (pos, strName, pAlias);
-    if (SimulateXMLLoadRollback (strName, pAlias, changes))
-      iFinalCount++;
-    }
+  CXMLLoadContext & context, CTriggerMap & map, vector<CXMLLoadChange<CTrigger> > & changes)
+  { RollbackIndexedScriptItems (*context.pTriggerArray, map, changes, CompareTriggerSequence); }
 
-  context.pAliasArray->SetSize (iFinalCount);
-  ResetXMLLoadRollbackDecisions (changes);
-  int iAlias = 0;
-  for (POSITION pos = objectMap.GetStartPosition (); pos; )
-    {
-    objectMap.GetNextAssoc (pos, strName, pAlias);
-    pAlias = SimulateXMLLoadRollback (strName, pAlias, changes);
-    if (pAlias)
-      context.pAliasArray->SetAt (iAlias++, pAlias);
-    }
-  if (iFinalCount > 1)
-    qsort (&(*context.pAliasArray) [0], iFinalCount,
-           sizeof (CAlias *), CompareXMLRollbackAlias);
-
-  ApplyXMLLoadMapRollback (objectMap, changes);
-  }
+static void PublishXMLLoadRollbackWithoutAllocation (
+  CXMLLoadContext & context, CAliasMap & map, vector<CXMLLoadChange<CAlias> > & changes)
+  { RollbackIndexedScriptItems (*context.pAliasArray, map, changes, CompareAliasSequence); }
 
 static void PublishXMLLoadRollbackWithoutAllocation (
   CXMLLoadContext &,
   CTimerMap & objectMap,
   vector<CXMLLoadChange<CTimer> > & changes)
   {
-  ResetXMLLoadRollbackDecisions (changes);
   CString strName;
   CTimer * pTimer;
   for (POSITION pos = objectMap.GetStartPosition (); pos; )
@@ -1444,9 +1380,7 @@ UINT CMUSHclientDoc::Load_Triggers_XML (CXMLelement & parent,
 
   vector<CTrigger *> triggerArray;
   BuildTriggerIndexes (triggerArray, NULL, &objectMap);
-  context.pTriggerArray->SetSize (triggerArray.size ());
-  for (size_t i = 0; i < triggerArray.size (); i++)
-    context.pTriggerArray->SetAt (i, triggerArray [i]);
+  context.pTriggerArray->Replace (triggerArray);
     }
   catch (...)
     {
@@ -1739,9 +1673,7 @@ CXMLLoadChangeGuard<CAlias, CAliasMap> changeGuard
 
   vector<CAlias *> aliasArray;
   BuildAliasIndexes (aliasArray, NULL, &objectMap);
-  context.pAliasArray->SetSize (aliasArray.size ());
-  for (size_t i = 0; i < aliasArray.size (); i++)
-    context.pAliasArray->SetAt (i, aliasArray [i]);
+  context.pAliasArray->Replace (aliasArray);
     }
   catch (...)
     {

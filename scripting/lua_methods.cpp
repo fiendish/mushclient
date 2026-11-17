@@ -1984,7 +1984,7 @@ static int L_PushDatabaseValues (lua_State * L)
   return 1;
   }
 
-static int L_DatabaseColumnText (lua_State *L)
+static int DatabaseColumnToLua (lua_State * L, bool textOnly)
   {
   CMUSHclientDoc * pDoc = doc (L);
   LPCTSTR name = my_checkstring (L, 1);
@@ -1992,41 +1992,20 @@ static int L_DatabaseColumnText (lua_State *L)
   lua_pushcfunction (L, L_PushDatabaseValue);
   int status;
   {
-  CLuaDatabaseValue value = DatabaseValueSnapshot (pDoc, name, column, true);
+  CLuaDatabaseValue value = DatabaseValueSnapshot (pDoc, name, column, textOnly);
   lua_pushlightuserdata (L, &value);
   status = lua_pcall (L, 1, 1, 0);
   }
   if (status)
     return lua_error (L);
   return 1;
-  } // end of L_DatabaseColumnText
-
-static void GetDatabaseColumnValue (lua_State *L, CMUSHclientDoc *pDoc, LPCTSTR Name, int Column)
-  {
-  lua_pushcfunction (L, L_PushDatabaseValue);
-  int status;
-  {
-  CLuaDatabaseValue value = DatabaseValueSnapshot (pDoc, Name, Column);
-  lua_pushlightuserdata (L, &value);
-  status = lua_pcall (L, 1, 1, 0);
   }
-  if (status)
-    lua_error (L);
-  }  // end of GetDatabaseColumnValue
 
-//----------------------------------------
-//  world.DatabaseColumnValue
-//----------------------------------------
+static int L_DatabaseColumnText (lua_State *L)
+  { return DatabaseColumnToLua (L, true); }
+
 static int L_DatabaseColumnValue (lua_State *L)
-  {
-  CMUSHclientDoc *pDoc = doc (L);
-  LPCTSTR Name = my_checkstring (L, 1);   // Name
-  int Column = my_checknumber (L, 2);     // Column
-
-  GetDatabaseColumnValue (L, pDoc, Name, Column);
-
-  return 1;    // number of result fields
-  } // end of L_DatabaseColumnValue
+  { return DatabaseColumnToLua (L, false); }
 
 //----------------------------------------
 //  world.DatabaseColumnType
@@ -2914,16 +2893,6 @@ static int L_GetCommandLineStarts (lua_State *L)
   VARIANT v = doc (L)->GetCommandLineStarts ();
   return pushVariant (L, v);
   }
-
-//----------------------------------------
-//  world.GetCommandLineCount
-//----------------------------------------
-static int L_GetCommandLineCount (lua_State *L)
-  {
-  lua_pushnumber (L, doc (L)->GetCommandLineCount ());
-  return 1;  // number of result fields
-  } // end of L_GetCommandLineCount
-
 
 //----------------------------------------
 //  world.GetCommandWindowDesiredHeight
@@ -7166,7 +7135,6 @@ static const struct luaL_Reg worldlib [] =
   {"GetCommandCursorPosition", L_GetCommandCursorPosition},
   {"GetCommandCursorLine", L_GetCommandCursorLine},
   {"GetCommandLineStarts", L_GetCommandLineStarts},
-  {"GetCommandLineCount", L_GetCommandLineCount},
   {"GetCommandList", L_GetCommandList},
   {"GetCommandWindowDesiredHeight", L_GetCommandWindowDesiredHeight},
   {"GetConnectDuration", L_GetConnectDuration},

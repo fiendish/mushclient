@@ -158,7 +158,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
     __int64 iFiredTimerCreationNumber = timer_item->nCreationNumber;
 
     {
-    CTimerExecutionGuard executingGuard (this, timer_item);
+    CScriptExecutionGuard<CTimer> executingGuard (timer_item, m_pRetiredTimers);
 
     timer_item->nMatched++;   // count timer matches
     timer_item->tWhenFired = tNow;  // when it fired
@@ -275,7 +275,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
         list<double> nparams;
         list<string> sparams;
         sparams.push_back (pLabel);
-        CTimerExecutionGuard executingGuard (this, timer_item);
+        CScriptExecutionGuard<CTimer> executingGuard (timer_item, m_pRetiredTimers);
         GetScriptEngine ()->ExecuteLua (timer_item->dispid, 
                                        timer_item->strProcedure, 
                                        eTimerFired,
@@ -302,7 +302,7 @@ CmcDateTimeSpan tsOneDay (1, 0, 0, 0);
 
   //      args [eTimerName] = strTimerName;
         args [eTimerName] = pLabel;
-        CTimerExecutionGuard executingGuard (this, timer_item);
+        CScriptExecutionGuard<CTimer> executingGuard (timer_item, m_pRetiredTimers);
         ExecuteScript (timer_item->dispid,  
                        timer_item->strProcedure,
                        eTimerFired,

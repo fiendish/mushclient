@@ -143,19 +143,6 @@ void CSendView::UpdateCommandWordBreak()
     edit.SendMessage(EM_SETWORDBREAKPROC, 0, (LPARAM) m_pNativeCommandWordBreak);
   }
 
-static bool IsWorldDocumentLive (const CMUSHclientDoc * pExpectedDoc,
-                                 const __int64 iDocumentNumber)
-  {
-  for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
-    {
-    CMUSHclientDoc * pDoc =
-      (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
-    if (pDoc == pExpectedDoc && pDoc->m_iUniqueDocumentNumber == iDocumentNumber)
-      return true;
-    }
-  return false;
-  }
-
 /////////////////////////////////////////////////////////////////////////////
 // CSendView
 
@@ -928,14 +915,14 @@ void CSendView::SendMacro (int whichone)
     }
   catch (...)
     {
-    if (IsWorldDocumentLive (pDoc, iDocumentNumber))
+    if (App.FindLiveWorld (pDoc, iDocumentNumber))
       pDoc->m_bEnableAutoSay = bSavedAutoSay;
     throw;
     }
 
 // restore auto-say
 
-  if (IsWorldDocumentLive (pDoc, iDocumentNumber))
+  if (App.FindLiveWorld (pDoc, iDocumentNumber))
     pDoc->m_bEnableAutoSay = bSavedAutoSay;
 
   } // end of SendMacro
@@ -1502,7 +1489,7 @@ CString strCurrent;
                          MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2);
 
     // The confirmation can process messages that destroy the document or this view.
-    if (!IsWorldDocumentLive (pDoc, iDocumentNumber) ||
+    if (!App.FindLiveWorld (pDoc, iDocumentNumber) ||
         !::IsWindow (hSendView) ||
         CWnd::FromHandlePermanent (hSendView) != this)
       return true;
@@ -1727,7 +1714,7 @@ void CSendView::DoFind (bool bAgain)
   // Do not touch a dead owner, or publish over a newer nested invocation.
   const auto IsCurrent = [&] () -> bool
     {
-    return IsWorldDocumentLive (pDoc, iDocumentNumber) &&
+    return App.FindLiveWorld (pDoc, iDocumentNumber) &&
            !pDoc->m_bWorldClosePending &&
            ::IsWindow (hSendView) && CWnd::FromHandlePermanent (hSendView) == this &&
            ::IsWindow (hTopView) && CWnd::FromHandlePermanent (hTopView) == pTopView &&

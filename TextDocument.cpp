@@ -628,25 +628,7 @@ void CTextDocument::SetTheFont (void)
 CMUSHclientDoc * CTextDocument::FindWorld (void)
   {
 
-  if (!m_pRelatedWorld)
-    return NULL;
-
-  // make sure world still in world list
-  for (POSITION docPos = App.m_pWorldDocTemplate->GetFirstDocPosition();
-      docPos != NULL; )
-    {
-
-    CMUSHclientDoc * pDoc = (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc(docPos);
-
-    // it might be the same pointer, but is it the same *world*?
-    if (pDoc == m_pRelatedWorld)
-      if (pDoc->m_iUniqueDocumentNumber == m_iUniqueDocumentNumber)
-        return pDoc;
-      else
-        return NULL;    // no, unique ID number has changed
-    } // end of doing each document
-
-  return NULL;    // no longer in world list
+  return App.FindLiveWorld (m_pRelatedWorld, m_iUniqueDocumentNumber);
   }
 
 void CTextDocument::OnUpdateStatuslineMushname(CCmdUI* pCmdUI) 

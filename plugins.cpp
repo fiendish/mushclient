@@ -324,19 +324,6 @@ CPluginContextGuard::~CPluginContextGuard ()
     m_pPlugin->m_strCallingPluginID = m_strSavedCallingPluginID;
   }
 
-CPluginNotesGuard::CPluginNotesGuard (CMUSHclientDoc * pDoc)
-  : m_pDoc (pDoc),
-    m_bSavedNotesNotWanted (pDoc->m_bNotesNotWantedNow)
-  {
-  ASSERT (m_pDoc);
-  m_pDoc->m_bNotesNotWantedNow = true;
-  }
-
-CPluginNotesGuard::~CPluginNotesGuard ()
-  {
-  m_pDoc->m_bNotesNotWantedNow = m_bSavedNotesNotWanted;
-  }
-
 // destructor
 CPlugin::~CPlugin ()
   {
@@ -1547,15 +1534,11 @@ void CMUSHclientDoc::OnFilePluginwizard()
 
       if (!triggersToDelete.empty ())
         {
-        m_TriggerArray.SetSize (newTriggerArray.size ());
-        for (size_t i = 0; i < newTriggerArray.size (); i++)
-          m_TriggerArray.SetAt (i, newTriggerArray [i]);
+        m_TriggerArray.Replace (newTriggerArray);
         }
       if (!aliasesToDelete.empty ())
         {
-        m_AliasArray.SetSize (newAliasArray.size ());
-        for (size_t i = 0; i < newAliasArray.size (); i++)
-          m_AliasArray.SetAt (i, newAliasArray [i]);
+        m_AliasArray.Replace (newAliasArray);
         }
 
       if (!triggersToDelete.empty ())
@@ -1712,7 +1695,7 @@ void CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName)   // no arg
   {
   CWorldDocumentOperationGuard operationGuard (this);
   CTraceEventGuard traceEvent (this);
-  CPluginNotesGuard notesGuard (this);
+  CValueStateGuard<bool> notesGuard (m_bNotesNotWantedNow, true);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
@@ -1742,7 +1725,7 @@ bool CMUSHclientDoc::SendToFirstPluginCallbacks (const string & sName, const cha
   {
   CWorldDocumentOperationGuard operationGuard (this);
   CTraceEventGuard traceEvent (this);
-  CPluginNotesGuard notesGuard (this);
+  CValueStateGuard<bool> notesGuard (m_bNotesNotWantedNow, true);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
@@ -1783,7 +1766,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
   bool bResult = true;    // assume they OK'd something
   CWorldDocumentOperationGuard operationGuard (this);
   CTraceEventGuard traceEvent (this);
-  CPluginNotesGuard notesGuard (this);
+  CValueStateGuard<bool> notesGuard (m_bNotesNotWantedNow, true);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
@@ -1821,7 +1804,7 @@ void CMUSHclientDoc::SendToAllPluginCallbacksRtn (const string & sName, CString 
   {
   CWorldDocumentOperationGuard operationGuard (this);
   CTraceEventGuard traceEvent (this);
-  CPluginNotesGuard notesGuard (this);
+  CValueStateGuard<bool> notesGuard (m_bNotesNotWantedNow, true);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
@@ -1856,7 +1839,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
   {
   CWorldDocumentOperationGuard operationGuard (this);
   CTraceEventGuard traceEvent (this);
-  CPluginNotesGuard notesGuard (this);
+  CValueStateGuard<bool> notesGuard (m_bNotesNotWantedNow, true);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
 
@@ -1907,7 +1890,7 @@ bool CMUSHclientDoc::SendToAllPluginCallbacks (const string & sName,
   {
   CWorldDocumentOperationGuard operationGuard (this);
   CTraceEventGuard traceEvent (this);
-  CPluginNotesGuard notesGuard (this);
+  CValueStateGuard<bool> notesGuard (m_bNotesNotWantedNow, true);
   CPluginInstanceSnapshot snapshot;
   GetPluginInstanceSnapshot (m_PluginList, snapshot);
 

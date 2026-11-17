@@ -87,6 +87,7 @@ public:
                               long iChatID = 0);
   void DeferTextDocumentClose (__int64 iDocumentNumber);
   void DeferWorldDocumentClose (__int64 iDocumentNumber);
+  CMUSHclientDoc * FindLiveWorld (const CMUSHclientDoc * expected, __int64 documentNumber) const;
   bool HasActiveDocumentOperations () const;
   void CollectIdleLuaGarbage ();
   DWORD m_dwLastLuaGC;

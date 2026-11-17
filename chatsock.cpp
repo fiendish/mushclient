@@ -210,26 +210,17 @@ void CChatSocket::OnReceive(int nErrorCode)
     // A modal callback can close the document and delete this chat socket.
     // Resolve both identities before reading or restoring socket state.
     bool bSocketLive = false;
-    for (POSITION pos = App.m_pWorldDocTemplate->GetFirstDocPosition(); pos; )
-      {
-      CMUSHclientDoc * pLiveDoc =
-        (CMUSHclientDoc *) App.m_pWorldDocTemplate->GetNextDoc (pos);
-      if (pLiveDoc == pDoc &&
-          pLiveDoc->m_iUniqueDocumentNumber == iDocumentNumber)
+    CMUSHclientDoc * world = App.FindLiveWorld (pDoc, iDocumentNumber);
+    if (world)
+      for (POSITION pos = world->m_ChatList.GetHeadPosition (); pos; )
         {
-        for (POSITION chatpos = pLiveDoc->m_ChatList.GetHeadPosition ();
-             chatpos; )
+        CChatSocket * socket = world->m_ChatList.GetNext (pos);
+        if (socket == this && socket->m_iChatID == iChatID)
           {
-          CChatSocket * pSocket = pLiveDoc->m_ChatList.GetNext (chatpos);
-          if (pSocket == this && pSocket->m_iChatID == iChatID)
-            {
-            bSocketLive = true;
-            break;
-            }
+          bSocketLive = true;
+          break;
           }
-        break;
         }
-      }
 
     if (bSocketLive)
       {

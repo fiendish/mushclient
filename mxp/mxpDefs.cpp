@@ -23,16 +23,6 @@ static char BASED_CODE THIS_FILE[] = __FILE__;
 
 #define DEFINITIONS_MUST_BE_SECURE true
 
-class CElementArgumentListGuard
-  {
-  public:
-    CElementArgumentListGuard (CArgumentList & list) : m_list (list) { }
-    ~CElementArgumentListGuard () { DELETE_LIST (m_list); }
-
-  private:
-    CArgumentList & m_list;
-  };
-
 // handle definition-style tag, eg. <!ELEMENT blah> or <!ENTITY blah>
 
 void CMUSHclientDoc::MXP_Definition (CString strTag)
@@ -122,7 +112,7 @@ CString strName;
 void CMUSHclientDoc::MXP_Element (CString strName, CString strTag)
   {
 CArgumentList ArgumentList;
-CElementArgumentListGuard argumentListGuard (ArgumentList);
+CArgumentListGuard argumentListGuard (ArgumentList);
 
   // get arguments to !ELEMENT definition
   if (BuildArgumentList (ArgumentList, strTag))
@@ -396,7 +386,7 @@ CElement * pElement;
     } // end of no element matching
 
 CArgumentList ArgumentList;
-CElementArgumentListGuard argumentListGuard (ArgumentList);
+CArgumentListGuard argumentListGuard (ArgumentList);
 
   // build into an argument list
   if (BuildArgumentList (ArgumentList, strTag))

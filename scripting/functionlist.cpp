@@ -172,7 +172,6 @@ tInternalFunctionsTable InternalFunctionsTable [] = {
 { "GetCommand" ,                 "( )" } ,
 { "GetCommandCursorLine" ,       "( )" } ,
 { "GetCommandCursorPosition" ,   "( )" } ,
-{ "GetCommandLineCount" ,        "( )" } ,
 { "GetCommandLineStarts" ,       "( )" } ,
 { "GetCommandList" ,             "( Count )" } ,
 { "GetCommandWindowDesiredHeight" , "( CurrentHeight )" } ,

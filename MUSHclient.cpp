@@ -1152,6 +1152,19 @@ void CMUSHclientApp::DeferWorldDocumentClose (__int64 iDocumentNumber)
   m_DeferredWorldDocumentCloses.push_back (iDocumentNumber);
 }
 
+CMUSHclientDoc * CMUSHclientApp::FindLiveWorld (const CMUSHclientDoc * expected,
+                                                __int64 documentNumber) const
+{
+  if (expected && m_pWorldDocTemplate)
+    for (POSITION pos = m_pWorldDocTemplate->GetFirstDocPosition (); pos; )
+      {
+      CMUSHclientDoc * world = static_cast<CMUSHclientDoc *> (m_pWorldDocTemplate->GetNextDoc (pos));
+      if (world == expected && world->m_iUniqueDocumentNumber == documentNumber)
+        return world;
+      }
+  return NULL;
+}
+
 bool CMUSHclientApp::HasActiveDocumentOperations () const
 {
   if (m_pWorldDocTemplate)
