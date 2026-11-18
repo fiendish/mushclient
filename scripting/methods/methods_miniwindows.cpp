@@ -407,14 +407,14 @@ long CMUSHclientDoc::WindowLoadImageMemory(LPCTSTR Name,
                                            LPCTSTR ImageId, 
                                            unsigned char * Buffer, 
                                            const size_t Length,
-                                           const bool bAlpha) 
+                                           const bool swap_alpha_endianness)
 {
   MiniWindowMapIterator it = m_MiniWindows.find (Name);
     
   if (it == m_MiniWindows.end ())
     return eNoSuchWindow;
 
-  return it->second->LoadImageMemory (ImageId, Buffer, Length, bAlpha);
+  return it->second->LoadImageMemory (ImageId, Buffer, Length, swap_alpha_endianness);
 }   // end of  CMUSHclientDoc::WindowLoadImageMemory
 
 
@@ -1085,8 +1085,8 @@ long r = GetRValue (Pixel),
 	return RGB (CLAMP (r), CLAMP (g), CLAMP (b));
 }   // end of CMUSHclientDoc::FilterPixel
 
-#define Blend_It(Op) \
-   do \
+#define Blend_It(mode, name, Op) \
+   case mode: \
       if (Opacity < 1.0) \
         {  \
           r =  Blend_Opacity (rA, rB, Op, Opacity);\
@@ -1099,11 +1099,11 @@ long r = GetRValue (Pixel),
           g = Op (gA, gB);\
           b = Op (bA, bB);\
         }  \
-   while (false)
+   break;
 
 
-#define Colour_Op(fR,fG,fB) \
-   do \
+#define Colour_Op(mode, name, fR, fG, fB) \
+   case mode: \
      {  \
       if (Opacity < 1.0) \
           {  \
@@ -1118,7 +1118,7 @@ long r = GetRValue (Pixel),
           b = fB;  \
           }\
        }\
-   while (false)
+   break;
 
 
 // see also: CMiniWindow::BlendImage
@@ -1156,12 +1156,9 @@ long r, g, b;
   switch (Mode)
     {
 
-    // normal modes
-    case  1: Blend_It (Blend_Normal);     break;
-    case  2: Blend_It (Blend_Average);    break;
-    case  3: Blend_It (Blend_Interpolate);  break;
+    MUSHCLIENT_BLEND_MODES (Blend_It, SKIP_BLEND_MODE, SKIP_BLEND_MODE, SKIP_BLEND_MODE)
 
-    case  4:  // dissolve - randomly choose pixels based on opacity
+    case BlendDissolveMode:
       {
        double rnd = genrand ();
 
@@ -1171,92 +1168,9 @@ long r, g, b;
       }
       break;
 
+    MUSHCLIENT_BLEND_MODES (SKIP_BLEND_MODE, Blend_It, Colour_Op, SKIP_BLEND_MODE)
 
-    // darkening modes
-    case  5: Blend_It (Blend_Darken);     break;
-    case  6: Blend_It (Blend_Multiply);   break;
-    case  7: Blend_It (Blend_ColorBurn);  break;
-    case  8: Blend_It (Blend_LinearBurn); break;
-    case  9: Blend_It (Blend_InverseColorBurn);  break;
-    case 10: Blend_It (Blend_Subtract);   break;
-    
-    // lightening modes
-    case 11: Blend_It (Blend_Lighten);    break;
-    case 12: Blend_It (Blend_Screen);     break;
-    case 13: Blend_It (Blend_ColorDodge); break;
-    case 14: Blend_It (Blend_LinearDodge);break;
-    case 15: Blend_It (Blend_InverseColorDodge);  break;
-    case 16: Blend_It (Blend_Add);        break;
-      
-    // soft/hard light etc.
-    case 17: Blend_It (Blend_Overlay);    break;
-    case 18: Blend_It (Blend_SoftLight);  break;
-    case 19: Blend_It (Blend_HardLight);  break;
-    case 20: Blend_It (Blend_VividLight); break;
-    case 21: Blend_It (Blend_LinearLight);break;
-    case 22: Blend_It (Blend_PinLight);   break;
-    case 23: Blend_It (Blend_HardMix);    break;
-
-    // difference modes
-    case 24: Blend_It (Blend_Difference); break;
-    case 25: Blend_It (Blend_Exclusion);  break;
-
-    // glow modes
-    case 26: Blend_It (Blend_Reflect);    break;
-    case 27: Blend_It (Blend_Glow);       break;
-    case 28: Blend_It (Blend_Freeze);     break;
-    case 29: Blend_It (Blend_Heat);       break;
-        
-    case 30: Blend_It (Blend_Negation);   break;
-    case 31: Blend_It (Blend_Phoenix);    break;
-    case 32: Blend_It (Blend_Stamp);      break;
-
-    // logical modes
-    case 33: Blend_It (Blend_Xor);      break;
-    case 34: Blend_It (Blend_And);      break;
-    case 35: Blend_It (Blend_Or);       break;
-
-    // the follow modes take one colour from the blend and retain 2 from the base
-    case 36: Colour_Op (rA, gB, bB); break;  // red  
-    case 37: Colour_Op (rB, gA, bB); break;  // green
-    case 38: Colour_Op (rB, gB, bA); break;  // blue 
-
-    // the follow modes take two colours from the blend and retain 1 from the base
-    case 39: Colour_Op (rA, gA, bB); break;  // yellow 
-    case 40: Colour_Op (rB, gA, bA); break;  // cyan    
-    case 41: Colour_Op (rA, gB, bA); break;  // magenta    
-
-    // limit green
-    case 42: Colour_Op (rA, (gA > rA) ? rA : gA, bA); break;  // green limited by red    
-    case 43: Colour_Op (rA, (gA > bA) ? bA : gA, bA); break;  // green limited by blue    
-    case 44: Colour_Op (rA, (gA > ((rA + bA) / 2)) ? ((rA + bA) / 2) : gA, bA); break;  // green limited by average of red and blue    
-
-    // limit blue
-    case 45: Colour_Op (rA, gA, (bA > rA) ? rA : bA); break;  // blue limited by red    
-    case 46: Colour_Op (rA, gA, (bA > gA) ? gA : bA); break;  // blue limited by green    
-    case 47: Colour_Op (rA, gA, (bA > ((rA + gA) / 2)) ? ((rA + gA) / 2) : bA); break; // blue limited by average of red and green    
-
-    // limit red
-    case 48: Colour_Op ((rA > gA) ? gA : rA, gA, bA); break;  // red limited by green    
-    case 49: Colour_Op ((rA > bA) ? bA : rA, gA, bA); break;  // red limited by blue    
-    case 50: Colour_Op ((rA > ((gA + bA) / 2)) ? ((gA + bA) / 2) : rA, gA, bA); break;  // red limited by average of green and blue    
-
-    // select single colour
-    case 51: Colour_Op (rA, 0, 0); break;  // red only       (looks red)
-    case 52: Colour_Op (0, gA, 0); break;  // green only     (looks green)
-    case 53: Colour_Op (0, 0, bA); break;  // blue only      (looks blue)
-
-    // discard single colour
-    case 54: Colour_Op (0, gA, bA); break;  // discard red    (looks cyan)
-    case 55: Colour_Op (rA, 0, bA); break;  // discard green  (looks magenta)
-    case 56: Colour_Op (rA, gA, 0); break;  // discard blue   (looks yellow)
-
-    // one colour to all channels  (ie. it looks grey)
-    case 57: Colour_Op (rA, rA, rA); break;  // all red   
-    case 58: Colour_Op (gA, gA, gA); break;  // all green   
-    case 59: Colour_Op (bA, bA, bA); break;  // all blue   
-
-    case 60:           // Hue mode
+    case BlendHueMode:
       {
           CColor cA, cB;    // A = blend, B = base
 
@@ -1270,7 +1184,7 @@ long r, g, b;
        }
       break;
 
-    case 61:           // Saturation mode
+    case BlendSaturationMode:
         {
           CColor cA, cB;    // A = blend, B = base
 
@@ -1284,7 +1198,7 @@ long r, g, b;
        }
       break;
 
-    case 62:           // Colour mode
+    case BlendColourMode:
       {
           CColor cA, cB;    // A = blend, B = base
 
@@ -1300,7 +1214,7 @@ long r, g, b;
       break;
 
 
-    case 63:           // Luminance mode
+    case BlendLuminanceMode:
       {
           CColor cA, cB;    // A = blend, B = base
 
@@ -1316,7 +1230,7 @@ long r, g, b;
        }
       break;
 
-    case 64:           // HSL (hue to red, saturation to green, luminance to blue)
+    case BlendHslMode:  // BlendPixel blends the base colour toward black in this mode.
         {
           CColor cA, cB;    // A = blend, B = base
           cA.SetRGB (rA, gA, bA);
@@ -1335,6 +1249,9 @@ long r, g, b;
 
 	return RGB (CLAMP (r), CLAMP (g), CLAMP (b));
 } // end of CMUSHclientDoc::BlendPixel
+
+#undef Blend_It
+#undef Colour_Op
 
 
 long CMUSHclientDoc::WindowMergeImageAlpha(LPCTSTR Name, 
@@ -1404,15 +1321,49 @@ long CMUSHclientDoc::WindowHotspotTooltip(LPCTSTR Name, LPCTSTR HotspotId, LPCTS
   return it->second->HotspotTooltip (HotspotId, TooltipText);
 }    // end of CMUSHclientDoc::WindowHotspotTooltip
 
-long CMUSHclientDoc::WindowDrawImageAlpha(LPCTSTR Name, LPCTSTR ImageId, long Left, long Top, long Right, long Bottom, double Opacity, long SrcLeft, long SrcTop) 
+long CMUSHclientDoc::WindowDrawImageAlpha(LPCTSTR Name, LPCTSTR ImageId,
+    long Left, long Top, long Right, long Bottom, double Opacity, long SrcLeft, long SrcTop,
+    const VARIANT & SrcRight, const VARIANT & SrcBottom)
 {
   MiniWindowMapIterator it = m_MiniWindows.find (Name);
     
   if (it == m_MiniWindows.end ())
     return eNoSuchWindow;
 
-  return it->second->DrawImageAlpha (ImageId, Left, Top, Right, Bottom, Opacity, 
-                                    SrcLeft,   SrcTop);
+  const bool right_missing = SrcRight.vt == VT_ERROR && SrcRight.scode == DISP_E_PARAMNOTFOUND;
+  const bool bottom_missing = SrcBottom.vt == VT_ERROR && SrcBottom.scode == DISP_E_PARAMNOTFOUND;
+  if (right_missing && bottom_missing)
+    return it->second->DrawImageAlpha (ImageId, Left, Top, Right, Bottom, Opacity, SrcLeft, SrcTop);
+  if (right_missing || bottom_missing)
+    return eBadParameter;
+
+  const auto source_edge = [] (const VARIANT & value, long & edge) -> bool
+    {
+    if (value.vt == VT_I4)
+      edge = value.lVal;
+    else
+      {
+      COleVariant converted;
+      if (FAILED (::VariantChangeType (&converted, const_cast<VARIANT *> (&value), 0, VT_I4)))
+        return false;
+      edge = converted.lVal;
+      }
+    return true;
+    };
+  const bool converting = SrcRight.vt != VT_I4 || SrcBottom.vt != VT_I4;
+  CWorldDocumentOperationGuard operationGuard (converting ? this : NULL);
+  long source_right, source_bottom;
+  if (!source_edge (SrcRight, source_right) || !source_edge (SrcBottom, source_bottom))
+    return eBadParameter;
+  if (converting)
+    {
+    // A COM default property can delete or replace the window during conversion.
+    it = m_MiniWindows.find (Name);
+    if (it == m_MiniWindows.end ())
+      return eNoSuchWindow;
+    }
+  return it->second->DrawImageAlpha (ImageId, Left, Top, Right, Bottom, Opacity,
+    SrcLeft, SrcTop, source_right, source_bottom, true);
 
 }  // end of CMUSHclientDoc::WindowDrawImageAlpha
 

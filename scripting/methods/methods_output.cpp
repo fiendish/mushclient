@@ -5,6 +5,7 @@
 #include "stdafx.h"
 #include <chrono>
 #include "..\..\MUSHclient.h"
+#include "..\..\image_loaders.h"
 #include "..\..\doc.h"
 #include "..\..\MUSHview.h"
 #include "..\..\mainfrm.h"
@@ -494,53 +495,16 @@ long CMUSHclientDoc::SetBackgroundImage(LPCTSTR FileName, short Mode)
   if (strFileName.IsEmpty ())
     return eOK;
 
-  // have to be long enough to have x.bmp
-  if (strFileName.GetLength () < 5)
-    return eBadParameter;
-
   HBITMAP hBmp;
+  const long result = LoadImageFile (FileName, hBmp);
+  if (result != eOK)
+    return result;
 
-  // handle PNG files separately
-  if (strFileName.Right (4).CompareNoCase (".png") == 0)
-    {
-    long result =  LoadPng (FileName, hBmp);
-
-    if (result != eOK) 
-      return result;
-
-    }    // png file
-  else
-    {
-
-    // must be .bmp or .png file
-    if (strFileName.Right (4).CompareNoCase (".bmp") != 0)
-      return eBadParameter;
-
-    hBmp = (HBITMAP)::LoadImage(
-                    NULL,
-                    FileName,
-                    IMAGE_BITMAP,
-                    0,
-                    0,
-                    LR_LOADFROMFILE|LR_CREATEDIBSECTION
-                    );
-    }  // bmp file
-
-   if (hBmp) 
-     {
-      m_BackgroundBitmap.Attach (hBmp);
-      m_iBackgroundMode = Mode;
-      m_strBackgroundImageName = FileName;
-    	return eOK;
-     }  // end of having a bitmap loaded
-
-
-   if (GetLastError () == 2)
-     return eFileNotFound;
-
-   return eCouldNotOpenFile;
-  
-  } // end of CMUSHclientDoc::SetBackgroundImage
+  m_BackgroundBitmap.Attach (hBmp);
+  m_iBackgroundMode = Mode;
+  m_strBackgroundImageName = FileName;
+  return eOK;
+}  // end of CMUSHclientDoc::SetBackgroundImage
 
 // set main window foreground image
 long CMUSHclientDoc::SetForegroundImage(LPCTSTR FileName, short Mode) 
@@ -564,53 +528,16 @@ long CMUSHclientDoc::SetForegroundImage(LPCTSTR FileName, short Mode)
   if (strFileName.IsEmpty ())
     return eOK;
 
-  // have to be long enough to have x.bmp
-  if (strFileName.GetLength () < 5)
-    return eBadParameter;
-
   HBITMAP hBmp;
+  const long result = LoadImageFile (FileName, hBmp);
+  if (result != eOK)
+    return result;
 
-  // handle PNG files separately
-  if (strFileName.Right (4).CompareNoCase (".png") == 0)
-    {
-    long result =  LoadPng (FileName, hBmp);
-
-    if (result != eOK) 
-      return result;
-
-    }    // png file
-  else
-    {
-
-    // must be .bmp or .png file
-    if (strFileName.Right (4).CompareNoCase (".bmp") != 0)
-      return eBadParameter;
-
-    hBmp = (HBITMAP)::LoadImage(
-                    NULL,
-                    FileName,
-                    IMAGE_BITMAP,
-                    0,
-                    0,
-                    LR_LOADFROMFILE|LR_CREATEDIBSECTION
-                    );
-    }  // bmp file
-
-   if (hBmp) 
-     {
-      m_ForegroundBitmap.Attach (hBmp);
-      m_iForegroundMode = Mode;
-      m_strForegroundImageName = FileName;
-    	return eOK;
-     }  // end of having a bitmap loaded
-
-
-   if (GetLastError () == 2)
-     return eFileNotFound;
-
-   return eCouldNotOpenFile;
-  
-}   // end of CMUSHclientDoc::SetForegroundImage
+  m_ForegroundBitmap.Attach (hBmp);
+  m_iForegroundMode = Mode;
+  m_strForegroundImageName = FileName;
+  return eOK;
+}  // end of CMUSHclientDoc::SetForegroundImage
 
 // set main window background colour
 long CMUSHclientDoc::SetBackgroundColour(long Colour) 

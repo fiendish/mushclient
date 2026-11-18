@@ -5,7 +5,8 @@ typedef map<string, CFont *> FontMap;
 typedef FontMap::iterator FontMapIterator;
 
 // images
-typedef map<string, CBitmap *> ImageMap;
+struct MiniWindowImage;
+typedef map<string, std::unique_ptr<MiniWindowImage> > ImageMap;
 typedef ImageMap::iterator ImageMapIterator;
 
 
@@ -183,7 +184,6 @@ class CMiniWindow
             long PenColour, long PenStyle, long PenWidth);
 
   long LoadImage (LPCTSTR ImageId, LPCTSTR FileName);
-  long LoadPngImage (LPCTSTR ImageId, LPCTSTR FileName);
 
   long Write (LPCTSTR FileName);
   long WritePng (LPCTSTR FileName, const BITMAPINFO * bmi, unsigned char * pData);
@@ -283,13 +283,14 @@ class CMiniWindow
   long LoadImageMemory(LPCTSTR ImageId, 
                        unsigned char * Buffer, 
                        const size_t Length,
-                       const bool bAlpha);
+                       const bool swap_alpha_endianness);
 
 
   long DrawImageAlpha(LPCTSTR ImageId, 
                       long Left, long Top, long Right, long Bottom, 
                       double Opacity, 
-                      long SrcLeft, long SrcTop); 
+                      long SrcLeft, long SrcTop,
+                      long SrcRight = 0, long SrcBottom = 0, bool Scale = false);
 
   long GetImageAlpha(LPCTSTR ImageId, 
                       long Left, long Top, long Right, long Bottom, 

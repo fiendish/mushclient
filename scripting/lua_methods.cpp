@@ -10,6 +10,7 @@
 #include "..\TextView.h"
 #include "..\sendvw.h"
 #include "..\dialogs\DebugLuaDlg.h"
+#include "..\blending.h"
 
 const char mushclient_typename[] = "mushclient.world";
 
@@ -6304,6 +6305,13 @@ static int L_WindowDrawImage (lua_State *L)
 static int L_WindowDrawImageAlpha (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
+  // Omit both source bounds to preserve unscaled drawing.
+  COleVariant source_right (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
+  COleVariant source_bottom (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
+  if (!lua_isnoneornil (L, 10))
+    source_right = COleVariant (static_cast<long> (my_checknumber (L, 10)), VT_I4);
+  if (!lua_isnoneornil (L, 11))
+    source_bottom = COleVariant (static_cast<long> (my_checknumber (L, 11)), VT_I4);
   lua_pushnumber (L, pDoc->WindowDrawImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
@@ -6313,7 +6321,9 @@ static int L_WindowDrawImageAlpha (lua_State *L)
             my_checknumber (L, 6),    // Bottom
             my_optnumber (L, 7, 1),   // Opacity
             my_optnumber (L, 8, 0),   // SrcLeft
-            my_optnumber (L, 9, 0)    // SrcTop
+            my_optnumber (L, 9, 0),   // SrcTop
+            source_right,           // SrcRight
+            source_bottom           // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowDrawImageAlpha
@@ -7928,70 +7938,9 @@ static flags_pair miniwindow_flags [] =
 
   // WindowBlendImage modes (argument 7)
 
-  {  "blend_normal",                                   1 },  
-  {  "blend_average",                                  2 },  
-  {  "blend_interpolate",                             3 },  
-  {  "blend_dissolve",                                 4 },  
-  {  "blend_darken",                                   5 },  
-  {  "blend_multiply",                                 6 },  
-  {  "blend_colour_burn",                              7 },  
-  {  "blend_linear_burn",                              8 },  
-  {  "blend_inverse_colour_burn",                      9 },  
-  {  "blend_subtract",                                10 },  
-  {  "blend_lighten",                                 11 },  
-  {  "blend_screen",                                  12 },  
-  {  "blend_colour_dodge",                            13 },  
-  {  "blend_linear_dodge",                            14 },  
-  {  "blend_inverse_colour_dodge",                    15 },  
-  {  "blend_add",                                     16 },  
-  {  "blend_overlay",                                 17 },  
-  {  "blend_soft_light",                              18 },  
-  {  "blend_hard_light",                              19 },  
-  {  "blend_vivid_light",                             20 },  
-  {  "blend_linear_light",                            21 },  
-  {  "blend_pin_light",                               22 },  
-  {  "blend_hard_mix",                                23 },  
-  {  "blend_difference",                              24 },  
-  {  "blend_exclusion",                               25 },  
-  {  "blend_reflect",                                 26 },  
-  {  "blend_glow",                                    27 },  
-  {  "blend_freeze",                                  28 },  
-  {  "blend_heat",                                    29 },  
-  {  "blend_negation",                                30 },  
-  {  "blend_phoenix",                                 31 },  
-  {  "blend_stamp",                                   32 },  
-  {  "blend_xor",                                     33 },  
-  {  "blend_and",                                     34 },  
-  {  "blend_or",                                      35 },  
-  {  "blend_red",                                     36 },  
-  {  "blend_green",                                   37 },  
-  {  "blend_blue",                                    38 },  
-  {  "blend_yellow",                                  39 },  
-  {  "blend_cyan",                                    40 },  
-  {  "blend_magenta",                                 41 },  
-  {  "blend_green_limited_by_red",                    42 },  
-  {  "blend_green_limited_by_blue",                   43 },  
-  {  "blend_green_limited_by_average_of_red_and_blue",44 },  
-  {  "blend_blue_limited_by_red",                     45 },  
-  {  "blend_blue_limited_by_green",                   46 },  
-  {  "blend_blue_limited_by_average_of_red_and_green",47 },  
-  {  "blend_red_limited_by_green",                    48 },  
-  {  "blend_red_limited_by_blue",                     49 },  
-  {  "blend_red_limited_by_average_of_green_and_blue",50 },  
-  {  "blend_red_only",                                51 },  
-  {  "blend_green_only",                              52 },  
-  {  "blend_blue_only",                               53 },  
-  {  "blend_discard_red",                             54 },  
-  {  "blend_discard_green",                           55 },  
-  {  "blend_discard_blue",                            56 },  
-  {  "blend_all_red",                                 57 },  
-  {  "blend_all_green",                               58 },  
-  {  "blend_all_blue",                                59 },  
-  {  "blend_hue_mode",                                60 },  
-  {  "blend_saturation_mode",                         61 },  
-  {  "blend_colour_mode",                             62 },  
-  {  "blend_luminance_mode",                          63 },  
-  {  "blend_hsl",                                     64 },
+#define LUA_BLEND_MODE(number, name, ...) { name, number },
+  MUSHCLIENT_BLEND_MODES (LUA_BLEND_MODE, LUA_BLEND_MODE, LUA_BLEND_MODE, LUA_BLEND_MODE)
+#undef LUA_BLEND_MODE
 
 
   // WindowAddHotspot cursor modes
