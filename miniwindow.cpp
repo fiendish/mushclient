@@ -1707,10 +1707,15 @@ long CMiniWindow::DrawImage(LPCTSTR ImageId,
 
   const COLORREF old_background = pdc->SetBkColor (RGB (255, 255, 255));
   const COLORREF old_text = pdc->SetTextColor (RGB (0, 0, 0));
-  const bool copied = old_background != CLR_INVALID && old_text != CLR_INVALID
-    && pdc->BitBlt (Left, Top, w, h, &source, SrcLeft, SrcTop, SRCINVERT)
-    && pdc->BitBlt (Left, Top, w, h, &mask, 0, 0, SRCAND)
-    && pdc->BitBlt (Left, Top, w, h, &source, SrcLeft, SrcTop, SRCINVERT);
+  bool copied = false;
+  if (old_background != CLR_INVALID && old_text != CLR_INVALID
+      && pdc->BitBlt (Left, Top, w, h, &source, SrcLeft, SrcTop, SRCINVERT))
+    {
+    const bool masked = pdc->BitBlt (Left, Top, w, h, &mask, 0, 0, SRCAND) != 0;
+    // The last XOR can undo the first if the mask copy fails before writing.
+    const bool finished = pdc->BitBlt (Left, Top, w, h, &source, SrcLeft, SrcTop, SRCINVERT) != 0;
+    copied = masked && finished;
+    }
 
   const bool restored_background = old_background != CLR_INVALID && pdc->SetBkColor (old_background) != CLR_INVALID;
   const bool restored_text = old_text != CLR_INVALID && pdc->SetTextColor (old_text) != CLR_INVALID;
@@ -4275,8 +4280,13 @@ long CMiniWindow::DrawImageAlpha(LPCTSTR ImageId,
 
   const bool resized = source_width != width || source_height != height;
   // Do not index a GDI crop until draw() flushes the pending pixel copies.
-  if (resized && !storage.pixels && image->PrepareRuns () && image->runs.empty ())
-    return eOK;
+  if (resized && !storage.pixels)
+    {
+    const bool indexed = image->PrepareRuns ();
+    if (indexed ? image->runs.empty ()
+                : !image->HasVisiblePixels (SrcLeft, SrcTop, source_width, source_height))
+      return eOK;
+    }
 
   const HDC destination = pdc->GetSafeHdc ();
   const auto draw = [&] (long x, long y, long w, long h) -> long

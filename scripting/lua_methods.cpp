@@ -6155,11 +6155,11 @@ static bool ReadImageCoordinates (lua_State * L, int first, long (&coordinates) 
 //----------------------------------------
 static int L_WindowBlendImage (lua_State *L)
   {
+  CMUSHclientDoc *pDoc = doc (L);
   long destination [4], source [4];
   if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 9, source, true))
     return 1;
 
-  CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowBlendImage (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
@@ -6303,11 +6303,11 @@ static int L_WindowDragHandler (lua_State *L)
 //----------------------------------------
 static int L_WindowDrawImage (lua_State *L)
   {
+  CMUSHclientDoc *pDoc = doc (L);
   long destination [4], source [4];
   if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 8, source, true))
     return 1;
 
-  CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowDrawImage (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
@@ -6329,11 +6329,11 @@ static int L_WindowDrawImage (lua_State *L)
 //----------------------------------------
 static int L_WindowDrawImageAlpha (lua_State *L)
   {
+  CMUSHclientDoc *pDoc = doc (L);
   long destination [4], source [2];
   if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 8, source, true))
     return 1;
 
-  CMUSHclientDoc *pDoc = doc (L);
   // Omit both source bounds to preserve unscaled drawing.
   COleVariant source_right (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
   COleVariant source_bottom (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
@@ -6427,11 +6427,11 @@ static int L_WindowFontList (lua_State *L)
 //----------------------------------------
 static int L_WindowGetImageAlpha (lua_State *L)
   {
+  CMUSHclientDoc *pDoc = doc (L);
   long destination [4], source [2];
   if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 7, source, true))
     return 1;
 
-  CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowGetImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
@@ -6733,11 +6733,11 @@ static int L_WindowMenu (lua_State *L)
 //----------------------------------------
 static int L_WindowMergeImageAlpha (lua_State *L)
   {
+  CMUSHclientDoc *pDoc = doc (L);
   long destination [4], source [4];
   if (!ReadImageCoordinates (L, 4, destination) || !ReadImageCoordinates (L, 10, source, true))
     return 1;
 
-  CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowMergeImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
