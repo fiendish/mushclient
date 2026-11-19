@@ -1134,8 +1134,17 @@ long rB = GetRValue (Base),
 
 long r, g, b;
 
-  if (Opacity < 0.0 || Opacity > 1.0)
+  if (!NormalizeBlendOpacity (Opacity))
     return -2;
+  if (Opacity == 0.0)
+    {
+    if (Mode < 1 || Mode > BlendModeCount)
+      return -1;
+    // Preserve the random sequence even when Dissolve leaves the pixel alone.
+    if (Mode == BlendDissolveMode)
+      genrand ();
+    return RGB (rB, gB, bB);
+    }
 
   // precompute cos table
   static unsigned char cos_table [256];
@@ -1321,6 +1330,28 @@ long CMUSHclientDoc::WindowHotspotTooltip(LPCTSTR Name, LPCTSTR HotspotId, LPCTS
   return it->second->HotspotTooltip (HotspotId, TooltipText);
 }    // end of CMUSHclientDoc::WindowHotspotTooltip
 
+static bool ReadAlphaSourceBound (const VARIANT & value, long & edge)
+  {
+  if (value.vt == VT_I4)
+    {
+    edge = value.lVal;
+    return true;
+    }
+
+  double number;
+  if (value.vt == VT_R8)
+    number = value.dblVal;
+  else
+    {
+    COleVariant converted;
+    if (FAILED (::VariantChangeType (&converted, const_cast<VARIANT *> (&value), 0, VT_R8)))
+      return false;
+    number = converted.dblVal;
+    }
+
+  return ReadImageCoordinate (number, edge);
+  }
+
 long CMUSHclientDoc::WindowDrawImageAlpha(LPCTSTR Name, LPCTSTR ImageId,
     long Left, long Top, long Right, long Bottom, double Opacity, long SrcLeft, long SrcTop,
     const VARIANT & SrcRight, const VARIANT & SrcBottom)
@@ -1337,23 +1368,11 @@ long CMUSHclientDoc::WindowDrawImageAlpha(LPCTSTR Name, LPCTSTR ImageId,
   if (right_missing || bottom_missing)
     return eBadParameter;
 
-  const auto source_edge = [] (const VARIANT & value, long & edge) -> bool
-    {
-    if (value.vt == VT_I4)
-      edge = value.lVal;
-    else
-      {
-      COleVariant converted;
-      if (FAILED (::VariantChangeType (&converted, const_cast<VARIANT *> (&value), 0, VT_I4)))
-        return false;
-      edge = converted.lVal;
-      }
-    return true;
-    };
-  const bool converting = SrcRight.vt != VT_I4 || SrcBottom.vt != VT_I4;
+  const bool converting = (SrcRight.vt != VT_I4 && SrcRight.vt != VT_R8)
+    || (SrcBottom.vt != VT_I4 && SrcBottom.vt != VT_R8);
   CWorldDocumentOperationGuard operationGuard (converting ? this : NULL);
   long source_right, source_bottom;
-  if (!source_edge (SrcRight, source_right) || !source_edge (SrcBottom, source_bottom))
+  if (!ReadAlphaSourceBound (SrcRight, source_right) || !ReadAlphaSourceBound (SrcBottom, source_bottom))
     return eBadParameter;
   if (converting)
     {

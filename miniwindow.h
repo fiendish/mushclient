@@ -1,8 +1,22 @@
 // for miniwindows
 
+#include <climits>
+
 // fonts
 typedef map<string, CFont *> FontMap;
 typedef FontMap::iterator FontMapIterator;
+
+// Truncate toward zero after checking the range, including in /fp:fast builds.
+#pragma float_control (precise, on, push)
+inline bool ReadImageCoordinate (double number, long & coordinate)
+  {
+  if (!(number > static_cast<double> (LONG_MIN) - 1.0
+        && number < static_cast<double> (LONG_MAX) + 1.0))
+    return false;
+  coordinate = static_cast<long> (number);
+  return true;
+  }
+#pragma float_control (pop)
 
 // images
 struct MiniWindowImage;

@@ -6133,25 +6133,46 @@ static int L_WindowBezier (lua_State *L)
   return 1;  // number of result fields
   } // end of L_WindowBezier
 
+// Invalid coordinates leave the same status on the stack as invalid source bounds.
+template<size_t Count>
+static bool ReadImageCoordinates (lua_State * L, int first, long (&coordinates) [Count], bool optional = false)
+  {
+  for (size_t i = 0; i < Count; ++i)
+    {
+    const int argument = first + static_cast<int> (i);
+    const double number = optional ? my_optnumber (L, argument, 0) : my_checknumber (L, argument);
+    if (!ReadImageCoordinate (number, coordinates [i]))
+      {
+      lua_pushnumber (L, eBadParameter);
+      return false;
+      }
+    }
+  return true;
+  }
+
 //----------------------------------------
 //  world.WindowBlendImage
 //----------------------------------------
 static int L_WindowBlendImage (lua_State *L)
   {
+  long destination [4], source [4];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 9, source, true))
+    return 1;
+
   CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowBlendImage (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_checknumber (L, 7),    // Mode
             my_optnumber (L, 8, 1),   // Opacity
-            my_optnumber (L, 9, 0),   // SrcLeft
-            my_optnumber (L, 10, 0),  // SrcTop
-            my_optnumber (L, 11, 0),  // SrcRight
-            my_optnumber (L, 12, 0)   // SrcBottom
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
+            source [2],  // SrcRight
+            source [3]  // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowBlendImage
@@ -6282,19 +6303,23 @@ static int L_WindowDragHandler (lua_State *L)
 //----------------------------------------
 static int L_WindowDrawImage (lua_State *L)
   {
+  long destination [4], source [4];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 8, source, true))
+    return 1;
+
   CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowDrawImage (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_optnumber (L, 7, 1),   // Mode
-            my_optnumber (L, 8, 0),   // SrcLeft
-            my_optnumber (L, 9, 0),   // SrcTop
-            my_optnumber (L, 10, 0),  // SrcRight
-            my_optnumber (L, 11, 0)   // SrcBottom
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
+            source [2],  // SrcRight
+            source [3]  // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowDrawImage
@@ -6304,24 +6329,28 @@ static int L_WindowDrawImage (lua_State *L)
 //----------------------------------------
 static int L_WindowDrawImageAlpha (lua_State *L)
   {
+  long destination [4], source [2];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 8, source, true))
+    return 1;
+
   CMUSHclientDoc *pDoc = doc (L);
   // Omit both source bounds to preserve unscaled drawing.
   COleVariant source_right (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
   COleVariant source_bottom (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
   if (!lua_isnoneornil (L, 10))
-    source_right = COleVariant (static_cast<long> (my_checknumber (L, 10)), VT_I4);
+    source_right = COleVariant (my_checknumber (L, 10));
   if (!lua_isnoneornil (L, 11))
-    source_bottom = COleVariant (static_cast<long> (my_checknumber (L, 11)), VT_I4);
+    source_bottom = COleVariant (my_checknumber (L, 11));
   lua_pushnumber (L, pDoc->WindowDrawImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_optnumber (L, 7, 1),   // Opacity
-            my_optnumber (L, 8, 0),   // SrcLeft
-            my_optnumber (L, 9, 0),   // SrcTop
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
             source_right,           // SrcRight
             source_bottom           // SrcBottom
             ));
@@ -6398,16 +6427,20 @@ static int L_WindowFontList (lua_State *L)
 //----------------------------------------
 static int L_WindowGetImageAlpha (lua_State *L)
   {
+  long destination [4], source [2];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 7, source, true))
+    return 1;
+
   CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowGetImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
-            my_optnumber (L, 7, 0),   // SrcLeft
-            my_optnumber (L, 8, 0)    // SrcTop
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
+            source [0],  // SrcLeft
+            source [1]  // SrcTop
             ));
   return 1;  // number of result fields
   } // end of L_WindowGetImageAlpha
@@ -6700,21 +6733,25 @@ static int L_WindowMenu (lua_State *L)
 //----------------------------------------
 static int L_WindowMergeImageAlpha (lua_State *L)
   {
+  long destination [4], source [4];
+  if (!ReadImageCoordinates (L, 4, destination) || !ReadImageCoordinates (L, 10, source, true))
+    return 1;
+
   CMUSHclientDoc *pDoc = doc (L);
   lua_pushnumber (L, pDoc->WindowMergeImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
             my_checkstring (L, 3),    // MaskId
-            my_checknumber (L, 4),    // Left
-            my_checknumber (L, 5),    // Top
-            my_checknumber (L, 6),    // Right
-            my_checknumber (L, 7),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_checknumber (L, 8),    // Mode
             my_optnumber (L, 9, 1),   // Opacity
-            my_optnumber (L, 10, 0),  // SrcLeft
-            my_optnumber (L, 11, 0),  // SrcTop
-            my_optnumber (L, 12, 0),  // SrcRight
-            my_optnumber (L, 13, 0)   // SrcBottom
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
+            source [2],  // SrcRight
+            source [3]  // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowMergeImageAlpha

@@ -4,6 +4,18 @@
 //  Defines for: CMiniWindow::BlendImage
 //    and        CMUSHclientDoc::BlendPixel
 
+// Match the original alpha draw rule for NaN, including in Release builds.
+#pragma float_control (precise, on, push)
+inline bool NormalizeBlendOpacity (double & opacity)
+  {
+  if (opacity < 0.0 || opacity > 1.0)
+    return false;
+  if (!(opacity >= 0.0))
+    opacity = 1.0;
+  return true;
+  }
+#pragma float_control (pop)
+
 // colour stuff
 
 #define CLAMP(x) (((x) < 0) ? 0 : (x > 255) ? 255 : (x))

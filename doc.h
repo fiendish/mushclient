@@ -1442,14 +1442,14 @@ public:
 
   // background image
   CString m_strBackgroundImageName;
-  CBitmap m_BackgroundBitmap;
+  std::unique_ptr<CBitmap> m_BackgroundBitmap;
   int  m_iBackgroundMode;
 
   COLORREF m_iBackgroundColour;
 
   // foreground image
   CString m_strForegroundImageName;
-  CBitmap m_ForegroundBitmap;
+  std::unique_ptr<CBitmap> m_ForegroundBitmap;
   int  m_iForegroundMode;
 
   // all our cute little miniwindows

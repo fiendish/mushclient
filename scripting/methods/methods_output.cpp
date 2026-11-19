@@ -472,72 +472,60 @@ long CMUSHclientDoc::AddFont(LPCTSTR PathName)
   */
 
 
-// set main window background image
-long CMUSHclientDoc::SetBackgroundImage(LPCTSTR FileName, short Mode) 
-{
-
+static long SetOutputImage (CMUSHclientDoc & doc, LPCTSTR FileName, short Mode,
+                            std::unique_ptr<CBitmap> & bitmap, CString & name, int & mode)
+  {
   if (Mode < 0 || Mode > 13)
-    return eBadParameter; 
+    return eBadParameter;
 
-  if ((HBITMAP) m_BackgroundBitmap)
-    m_BackgroundBitmap.DeleteObject ();
-
-  m_strBackgroundImageName.Empty ();
-
-  UpdateAllViews (NULL);
-
-  CString strFileName = FileName;
-
-  strFileName.TrimLeft ();
-  strFileName.TrimRight ();
-
-  // no file name means get rid of image
-  if (strFileName.IsEmpty ())
+  const CString requested (FileName);
+  CString trimmed = requested;
+  trimmed.TrimLeft ();
+  trimmed.TrimRight ();
+  if (trimmed.IsEmpty ())
+    {
+    bitmap.reset ();
+    name.Empty ();
+    doc.UpdateAllViews (NULL);
     return eOK;
+    }
 
-  HBITMAP hBmp;
-  const long result = LoadImageFile (FileName, hBmp);
+  auto replacement = std::make_unique<CBitmap> ();
+  HBITMAP handle;
+  const long result = LoadImageFile (FileName, handle);
   if (result != eOK)
     return result;
+  try
+    {
+    if (!replacement->Attach (handle))
+      {
+      ::DeleteObject (handle);
+      return eUnableToLoadImage;
+      }
+    }
+  catch (...)
+    {
+    if (!replacement->GetSafeHandle ())
+      ::DeleteObject (handle);
+    throw;
+    }
 
-  m_BackgroundBitmap.Attach (hBmp);
-  m_iBackgroundMode = Mode;
-  m_strBackgroundImageName = FileName;
+  name = requested;
+  mode = Mode;
+  bitmap = std::move (replacement);
+  doc.UpdateAllViews (NULL);
   return eOK;
-}  // end of CMUSHclientDoc::SetBackgroundImage
+  }
 
-// set main window foreground image
-long CMUSHclientDoc::SetForegroundImage(LPCTSTR FileName, short Mode) 
-{
-  if (Mode < 0 || Mode > 13)
-    return eBadParameter;  
+long CMUSHclientDoc::SetBackgroundImage (LPCTSTR FileName, short Mode)
+  {
+  return SetOutputImage (*this, FileName, Mode, m_BackgroundBitmap, m_strBackgroundImageName, m_iBackgroundMode);
+  }
 
-  if ((HBITMAP) m_ForegroundBitmap)
-    m_ForegroundBitmap.DeleteObject ();
-
-  m_strForegroundImageName.Empty ();
-
-  UpdateAllViews (NULL);
-
-  CString strFileName = FileName;
-
-  strFileName.TrimLeft ();
-  strFileName.TrimRight ();
-
-  // no file name means get rid of image
-  if (strFileName.IsEmpty ())
-    return eOK;
-
-  HBITMAP hBmp;
-  const long result = LoadImageFile (FileName, hBmp);
-  if (result != eOK)
-    return result;
-
-  m_ForegroundBitmap.Attach (hBmp);
-  m_iForegroundMode = Mode;
-  m_strForegroundImageName = FileName;
-  return eOK;
-}  // end of CMUSHclientDoc::SetForegroundImage
+long CMUSHclientDoc::SetForegroundImage (LPCTSTR FileName, short Mode)
+  {
+  return SetOutputImage (*this, FileName, Mode, m_ForegroundBitmap, m_strForegroundImageName, m_iForegroundMode);
+  }
 
 // set main window background colour
 long CMUSHclientDoc::SetBackgroundColour(long Colour) 

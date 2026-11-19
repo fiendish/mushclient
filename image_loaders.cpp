@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include <memory>
 #include <share.h>
 #include <vector>
@@ -49,10 +50,10 @@ struct BmpInput
     return position < length ? length - position : 0;
     }
 
-  bool Read (void * dest, size_t bytes, bool pad_file = false)
+  bool Read (void * dest, size_t bytes, bool pad = false)
     {
     const size_t available = static_cast<size_t> ((std::min<unsigned __int64>) (bytes, Remaining ()));
-    if (available < bytes && (!file || !pad_file)) return false;
+    if (available < bytes && !pad) return false;
     if (available)
       {
       if (file)
@@ -74,7 +75,6 @@ struct BmpInput
       {
       if (position != offset && _fseeki64 (file, offset, SEEK_SET) != 0) return false;
       }
-    else if (offset > length) return false;
     position = offset;
     return true;
     }
@@ -100,7 +100,7 @@ static bool ReadBitmapRle (BmpInput & input, unsigned char * pixels, size_t stri
       }
     if (!count && value == 2)
       {
-      if (input.Remaining () < sizeof command) return input.file != NULL;
+      if (input.Remaining () < sizeof command) return true;
       if (!input.Read (command, sizeof command)
           || command [0] > width - x || command [1] >= height - y) return false;
       x += command [0];
@@ -149,8 +149,8 @@ static bool ReadBitmapRle (BmpInput & input, unsigned char * pixels, size_t stri
       }
     x += run;
     }
-  // A short file leaves the rest of the bitmap at palette index zero.
-  return input.file != NULL;
+  // A short command stream leaves the remaining pixels at palette index zero.
+  return true;
   }
 
 static void CopyBottomUpRows (unsigned char * pixels, const unsigned char * source, size_t stride,
@@ -178,15 +178,21 @@ static void CopyBottomUpRows (unsigned char * pixels, const unsigned char * sour
 static bool ReadBitmapRows (BmpInput & input, unsigned char * pixels, size_t stride,
                             unsigned int height, bool top_down, bool swap_alpha_endianness)
   {
-  if (input.buffer)
+  const size_t bytes = stride * height;
+  if (input.buffer && bytes <= input.Remaining ())
     {
     const unsigned char * source = input.buffer + static_cast<size_t> (input.position);
     if (!top_down) CopyBottomUpRows (pixels, source, stride, height, swap_alpha_endianness);
-    else if (swap_alpha_endianness) CopyWithAlphaFirst (pixels, source, stride * height);
-    else memcpy (pixels, source, stride * height);
+    else if (swap_alpha_endianness) CopyWithAlphaFirst (pixels, source, bytes);
+    else memcpy (pixels, source, bytes);
     return true;
     }
-  if (top_down) return input.Read (pixels, stride * height, true);
+  if (top_down)
+    {
+    if (!input.Read (pixels, bytes, true)) return false;
+    if (swap_alpha_endianness) CopyWithAlphaFirst (pixels, pixels, bytes);
+    return true;
+    }
 
   const unsigned int rows_per_read = (std::max<unsigned int>) (1, BmpReadSize / stride);
   for (unsigned int remaining = height; remaining; )
@@ -198,11 +204,12 @@ static bool ReadBitmapRows (BmpInput & input, unsigned char * pixels, size_t str
     if (rows == 1)
       {
       if (!input.Read (dest, stride, true)) return false;
+      if (swap_alpha_endianness) CopyWithAlphaFirst (dest, dest, stride);
       }
     else
       {
       if (!input.Read (pixels, rows * stride, true)) return false;
-      CopyBottomUpRows (dest, pixels, stride, rows, false);
+      CopyBottomUpRows (dest, pixels, stride, rows, swap_alpha_endianness);
       }
     }
   return true;
@@ -211,7 +218,7 @@ static bool ReadBitmapRows (BmpInput & input, unsigned char * pixels, size_t str
 static bool ReadBitmapBitfields (BmpInput & input, HBITMAP bitmap, BITMAPINFO * source,
                                  size_t stride, unsigned int height, std::vector<unsigned char> & band)
   {
-  if (input.buffer)
+  if (band.empty ())
     return ::SetDIBits (NULL, bitmap, 0, height, input.buffer + static_cast<size_t> (input.position),
                         source, DIB_RGB_COLORS) == static_cast<int> (height) && ::GdiFlush ();
 
@@ -229,6 +236,9 @@ static bool ReadBitmapBitfields (BmpInput & input, HBITMAP bitmap, BITMAPINFO * 
   return true;
   }
 
+// LoadImage can return a bottom-up bitmap. Decode directly into a top-down
+// bitmap so drawing uses one row order. This avoids allocating a second
+// bitmap to reorder the rows.
 static long ReadBmpBitmap (LPCWSTR path, const unsigned char * buffer, size_t length,
                            HBITMAP & bitmap, bool swap_alpha_endianness)
   {
@@ -319,24 +329,20 @@ static long ReadBmpBitmap (LPCWSTR path, const unsigned char * buffer, size_t le
 
   // Older BMP files can omit the offset when the pixels follow the colour table.
   unsigned __int64 offset = file.bfOffBits;
-  if (input.file && !offset)
+  if (!offset)
     offset = input.position + (palette_size ? 0 : static_cast<unsigned __int64> (info.biClrUsed) * sizeof (RGBQUAD));
   if (offset < input.position || !input.Seek (offset)) return eUnableToLoadImage;
   if (rle)
     {
     if (info.biSizeImage)
-      {
-      if (!input.file && info.biSizeImage > input.Remaining ()) return eUnableToLoadImage;
       input.length = (std::min) (input.length, offset + info.biSizeImage);
-      }
     // Check the command stream before allocating a bitmap of the declared dimensions.
     if (!ReadBitmapRle (input, NULL, stride, info.biWidth, height, depth == 4)
         || !input.Seek (offset)) return eUnableToLoadImage;
     }
-  else if (!input.file && bytes > input.Remaining ()) return eUnableToLoadImage;
 
   std::vector<unsigned char> band;
-  if (input.file && fields)
+  if (fields && (input.file || bytes > input.Remaining ()))
     {
     const size_t rows = (std::min<size_t>) (height, (std::max<size_t>) (1, BmpReadSize / stride));
     band.resize (rows * stride);
@@ -386,8 +392,8 @@ static long ReadTgaBitmap (FILE * file, const unsigned char * buffer, size_t len
       return eUnableToLoadImage;
     length = static_cast<size_t> (file_length);
     }
-  if (length < 18) return eUnableToLoadImage;
   unsigned char header [18];
+  if (length < sizeof header) return eUnableToLoadImage;
   if (file)
     {
     if (fread (header, 1, sizeof header, file) != sizeof header) return eUnableToLoadImage;
@@ -403,8 +409,43 @@ static long ReadTgaBitmap (FILE * file, const unsigned char * buffer, size_t len
   const int width = header [12] | (header [13] << 8);
   const int height = header [14] | (header [15] << 8);
   const unsigned __int64 bytes = static_cast<unsigned __int64> (width) * height * 4;
-  if (!width || !height || bytes > MAXDWORD || bytes != length - 18)
+  if (!width || !height || bytes > MAXDWORD || bytes > length - sizeof header)
     return eUnableToLoadImage;
+
+  const size_t pixel_end = sizeof header + static_cast<size_t> (bytes);
+  const bool has_footer = length > pixel_end;
+  if (has_footer)
+    {
+    static const char signature [] = "TRUEVISION-XFILE.";
+    DWORD offsets [2];  // Extension area and developer directory, in that order.
+    unsigned char footer [sizeof offsets + sizeof signature];
+    if (length - pixel_end < sizeof footer) return eUnableToLoadImage;
+    const size_t footer_start = length - sizeof footer;
+    if (file)
+      {
+      if (_fseeki64 (file, footer_start, SEEK_SET) != 0
+          || fread (footer, 1, sizeof footer, file) != sizeof footer
+          || fgetc (file) != EOF || ferror (file)
+          || _fseeki64 (file, sizeof header, SEEK_SET) != 0)
+        return eUnableToLoadImage;
+      }
+    else
+      memcpy (footer, buffer + footer_start, sizeof footer);
+    if (memcmp (footer + sizeof offsets, signature, sizeof signature) != 0)
+      return eUnableToLoadImage;
+
+    // Optional metadata starts after the pixels and ends before the footer.
+    memcpy (offsets, footer, sizeof offsets);
+    const auto fits = [pixel_end, footer_start] (DWORD offset, size_t minimum_size)
+      {
+      return offset == 0 || (offset >= pixel_end && offset <= footer_start
+        && minimum_size <= footer_start - offset);
+      };
+    const size_t extension_size = 495;
+    if (!fits (offsets [0], extension_size) || !fits (offsets [1], sizeof (WORD))
+        || (footer_start != pixel_end && offsets [0] == 0 && offsets [1] == 0))
+      return eUnableToLoadImage;
+    }
 
   BITMAPINFO info = {};
   info.bmiHeader.biSize = sizeof (BITMAPINFOHEADER);
@@ -418,16 +459,17 @@ static long ReadTgaBitmap (FILE * file, const unsigned char * buffer, size_t len
   if (!loaded) return eUnableToLoadImage;
   if (file)
     {
-    if (fread (pixels, 1, static_cast<size_t> (bytes), file) != bytes || fgetc (file) != EOF || ferror (file))
+    if (fread (pixels, 1, static_cast<size_t> (bytes), file) != bytes
+        || (!has_footer && fgetc (file) != EOF) || ferror (file))
       {
       ::DeleteObject (loaded);
       return eUnableToLoadImage;
       }
     }
   else if (swap_alpha_endianness)
-    CopyWithAlphaFirst (static_cast<unsigned char *> (pixels), buffer + 18, static_cast<size_t> (bytes));
+    CopyWithAlphaFirst (static_cast<unsigned char *> (pixels), buffer + sizeof header, static_cast<size_t> (bytes));
   else
-    memcpy (pixels, buffer + 18, static_cast<size_t> (bytes));
+    memcpy (pixels, buffer + sizeof header, static_cast<size_t> (bytes));
   if (file && swap_alpha_endianness)
     CopyWithAlphaFirst (static_cast<unsigned char *> (pixels), static_cast<const unsigned char *> (pixels), static_cast<size_t> (bytes));
   bitmap = loaded;
@@ -643,9 +685,12 @@ long LoadImageFile (LPCTSTR filename, HBITMAP & bitmap)
   ImageFormat format = ImageFormat::Unknown;
   const long localResult = OpenImageStream (localPath.data (), file, format);
 
-  // PNG and TGA use the supplied path. A relative BMP name can resolve to a
-  // bitmap beside the executable or on PATH, even when a local file exists.
+  // Only legacy BMP requests search beside the executable or on PATH.
+  // The header still selects the decoder for every file at the supplied path.
+  const wchar_t * end = name.data () + chars - 1;
+  while (end != name.data () && std::iswspace (end [-1])) --end;
   if ((format == ImageFormat::Bmp || format == ImageFormat::Unknown)
+      && end - name.data () >= 4 && _wcsnicmp (end - 4, L".bmp", 4) == 0
       && wcscmp (name.data (), localPath.data ()) != 0)
     {
     std::vector<wchar_t> searched;

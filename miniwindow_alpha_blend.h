@@ -3,6 +3,7 @@
 #ifndef MUSHCLIENT_MINIWINDOW_ALPHA_BLEND_H
 #define MUSHCLIENT_MINIWINDOW_ALPHA_BLEND_H
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 class MiniWindowAlphaImage
@@ -33,22 +34,24 @@ class MiniWindowAlphaImage
   mutable std::vector<std::size_t> rows;
   mutable std::vector<Run> runs;
   mutable std::vector<Rect> rectangles;
-  mutable bool runs_ready, rectangles_ready, has_partial_alpha;
+  mutable bool runs_ready, runs_over_budget, rectangles_ready, has_partial_alpha;
 
   MiniWindowAlphaImage (const unsigned char * data, int w, int h, int bytes, bool opaque = false)
     : pixels (data), width (w), height (h), stride (bytes), ignore_alpha (opaque),
-      runs_ready (false), rectangles_ready (false), has_partial_alpha (false)
+      runs_ready (false), runs_over_budget (false), rectangles_ready (false), has_partial_alpha (false)
     { }
 
-  // Index visible source ranges once. Scaling and unscaled drawing share them.
-  void PrepareRuns () const;
+  // Return false when the source ranges exceed the cache budget.
+  bool PrepareRuns () const;
 
   // Destination-transfer rectangles are needed only for unscaled GDI drawing.
-  void PrepareRectangles () const;
+  bool PrepareRectangles () const;
+
+  bool HasVisiblePixels (int left, int top, int w, int h) const;
 
   const unsigned char * Row (int y) const
     {
-    return pixels + static_cast<std::size_t> (y) * stride;
+    return pixels + static_cast<std::int64_t> (y) * stride;
     }
 
   template<bool FullOpacity>
