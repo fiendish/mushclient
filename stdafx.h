@@ -881,9 +881,6 @@ int myAtoF(const char *z, double *pResult);
 
 
 
-long LoadPng (LPCTSTR FileName, HBITMAP & hbmp);  // load a PNG file into a bitmap
-long LoadPngMemory (unsigned char * Buffer, const size_t Length, HBITMAP & hbmp, const bool bAlpha);  // load a PNG from memory into a bitmap
-
 void ChangeToFileBrowsingDirectory ();
 void ChangeToStartupDirectory ();
 

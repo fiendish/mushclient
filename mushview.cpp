@@ -1014,8 +1014,8 @@ RECT r;
     pDC->FillRect (&r, &backbr);
 
   // background image 
-  if ((HBITMAP) pDoc->m_BackgroundBitmap)
-    DrawImage (pDC, pDoc->m_BackgroundBitmap, pDoc->m_iBackgroundMode); 
+  if (pDoc->m_BackgroundBitmap)
+    DrawImage (pDC, *pDoc->m_BackgroundBitmap, pDoc->m_iBackgroundMode);
 
   if (HaveTextRectangle ())
     {
@@ -1553,8 +1553,8 @@ double opacity;  // for fading lines
 
   // foreground image
 
-  if ((HBITMAP) pDoc->m_ForegroundBitmap)
-    DrawImage (pDC, pDoc->m_ForegroundBitmap, pDoc->m_iForegroundMode);
+  if (pDoc->m_ForegroundBitmap)
+    DrawImage (pDC, *pDoc->m_ForegroundBitmap, pDoc->m_iForegroundMode);
 
   Calculate_MiniWindow_Rectangles (pDoc, false);
 

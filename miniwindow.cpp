@@ -3,7 +3,6 @@
 // See: http://www.gammon.com.au/mw
 
 #include "stdafx.h"
-#include <tuple>
 #include "MUSHclient.h"
 #include "doc.h"
 #include "MUSHview.h"
@@ -11,6 +10,11 @@
 #include "color.h"
 #include "mainfrm.h"
 #include "blending.h"
+#include "miniwindow_alpha_blend.h"
+#include "image_loaders.h"
+#include <climits>
+#include <cmath>
+#include <new>
 
 #define PNG_NO_CONSOLE_IO
 #include "png\png.h"
@@ -34,6 +38,232 @@ class MiniWindowSelectedObject
     }
   bool Valid () const { return m_Previous && m_Previous != HGDI_ERROR; }
   };
+
+static BITMAPINFO TopDownBitmapInfo (int width, int height)
+  {
+  BITMAPINFO info = {};
+  info.bmiHeader.biSize = sizeof (BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = width;
+  info.bmiHeader.biHeight = -height;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  return info;
+  }
+
+class MiniWindowAlphaScratch
+  {
+  HDC m_DC;
+  HBITMAP m_Bitmap;
+  HGDIOBJ m_Previous;
+
+  public:
+  unsigned char * pixels;
+  int width, height;
+
+  MiniWindowAlphaScratch ()
+    : m_DC (NULL), m_Bitmap (NULL), m_Previous (NULL),
+      pixels (NULL), width (0), height (0)
+    { }
+
+  ~MiniWindowAlphaScratch ()
+    {
+    if (m_Previous)
+      ::SelectObject (m_DC, m_Previous);
+    if (m_Bitmap)
+      ::DeleteObject (m_Bitmap);
+    if (m_DC)
+      ::DeleteDC (m_DC);
+    }
+
+  HDC DC () const
+    {
+    return m_DC;
+    }
+
+  bool Ensure (int w, int h)
+    {
+    if (w <= width && h <= height)
+      return true;
+    // Allocate exactly the first rectangle. Round up only when a later rectangle grows.
+    if (m_Bitmap)
+      {
+      if (w > INT_MAX - 63 || h > INT_MAX - 63)
+        return false;
+      w = (w + 63) & ~63;
+      h = (h + 63) & ~63;
+      }
+
+    if (w > INT_MAX / 4)
+      return false;
+    if (static_cast<unsigned __int64> (w) * h * 4 > MAXDWORD)
+      return false;
+
+    if (!m_DC)
+      m_DC = ::CreateCompatibleDC (NULL);
+    if (!m_DC)
+      return false;
+
+    BITMAPINFO info = TopDownBitmapInfo (w, h);
+
+    void * data = NULL;
+    HBITMAP bitmap = ::CreateDIBSection (m_DC, &info, DIB_RGB_COLORS, &data, NULL, 0);
+    if (!bitmap)
+      return false;
+
+    HGDIOBJ previous = ::SelectObject (m_DC, bitmap);
+    if (!previous || previous == HGDI_ERROR)
+      {
+      ::DeleteObject (bitmap);
+      return false;
+      }
+
+    if (!m_Previous)
+      m_Previous = previous;
+    if (m_Bitmap)
+      ::DeleteObject (m_Bitmap);
+
+    m_Bitmap = bitmap;
+    pixels = static_cast<unsigned char *> (data);
+    width = w;
+    height = h;
+    return true;
+    }
+
+  // The caller flushes pending GDI copies before accessing pixel memory.
+  bool CopyFrom (HDC source, int x, int y, int w, int h)
+    {
+    return Ensure (w, h) && ::BitBlt (m_DC, 0, 0, w, h, source, x, y, SRCCOPY);
+    }
+  };
+
+struct MiniWindowImage : CBitmap
+  {
+  std::unique_ptr<MiniWindowAlphaImage> alpha;
+  // Window captures share their pixels with a view that ignores alpha when scaled.
+  std::unique_ptr<MiniWindowAlphaImage> opaque_alpha;
+  };
+
+static const MiniWindowAlphaImage * CacheAlphaImage (CDC * target, MiniWindowImage & bitmap,
+                                                      const BITMAP & bi)
+  {
+  // GetDIBits converts indexed and device-dependent bitmaps to top-down BGRA.
+  const int w = bi.bmWidth, h = bi.bmHeight;
+  if (w <= 0 || h <= 0 || w > INT_MAX / 4)
+    return NULL;
+  const unsigned __int64 bytes = static_cast<unsigned __int64> (w) * h * 4;
+  if (bytes > static_cast<size_t> (-1))
+    return NULL;
+
+  std::vector<unsigned char> data (static_cast<size_t> (bytes));
+  BITMAPINFO info = TopDownBitmapInfo (w, h);
+  if (::GetDIBits (target->GetSafeHdc (),
+                  reinterpret_cast<HBITMAP> (bitmap.GetSafeHandle ()), 0, h,
+                  data.data (), &info, DIB_RGB_COLORS) != h)
+    return NULL;
+
+  // Device-dependent bitmaps use the fourth byte as padding, not alpha.
+  // Treat those and bitmaps below 32 bits per pixel as opaque.
+  if (bi.bmBitsPixel != 32 || !bi.bmBits)
+    {
+    for (size_t i = 3; i < data.size (); i += 4)
+      data [i] = 255;
+    }
+
+  bitmap.alpha.reset (new MiniWindowAlphaImage (data.data (), w, h, w * 4));
+  bitmap.alpha->owned_pixels.swap (data);
+  return bitmap.alpha.get ();
+  }
+
+// Use indexed pixels when available. A first crop needs only its own rows.
+static const MiniWindowAlphaImage * AlphaSource (CDC * target, MiniWindowImage & bitmap,
+    const BITMAP & bi, bool scale,
+    long & x, long & y, MiniWindowAlphaImage & crop, MiniWindowAlphaScratch & storage)
+  {
+  const bool whole = crop.width == bi.bmWidth && crop.height == bi.bmHeight;
+  const MiniWindowAlphaImage * cached = scale && bitmap.opaque_alpha
+    ? bitmap.opaque_alpha.get () : bitmap.alpha.get ();
+  // Unscaled drawing must not use an opaque cache of a device-dependent bitmap.
+  if ((scale || bi.bmBits) && cached)
+    {
+    const MiniWindowAlphaImage & image = *cached;
+    if (whole || image.runs_ready || image.runs_over_budget)
+      return &image;
+
+    // Use the supplied pixels without indexing the entire image for a crop.
+    crop.stride = image.stride;
+    crop.pixels = image.Row (y) + static_cast<size_t> (x) * 4;
+    crop.ignore_alpha = image.ignore_alpha;
+    }
+  else
+    {
+    if (whole)
+      {
+      DIBSECTION section = {};
+      if (scale || (bi.bmBits
+          && ::GetObject (bitmap.GetSafeHandle (), sizeof section, &section) == sizeof section
+          && section.dsBmih.biCompression == BI_RGB && section.dsBmih.biBitCount == 32
+          && section.dsBmih.biPlanes == 1 && section.dsBm.bmWidthBytes > 0))
+        return CacheAlphaImage (target, bitmap, bi);
+      }
+
+    CDC source;
+    if (!source.CreateCompatibleDC (target))
+      return NULL;
+    MiniWindowSelectedObject selected (&source, &bitmap);
+    if (!selected.Valid () || !storage.CopyFrom (source.GetSafeHdc (), x, y, crop.width, crop.height))
+      return NULL;
+    crop.pixels = storage.pixels;
+    crop.stride = storage.width * 4;
+    if (scale && (!bi.bmBits || bi.bmBitsPixel != 32))
+      {
+      if (!::GdiFlush ())
+        return NULL;
+      for (int row = 0; row < crop.height; ++row)
+        {
+        unsigned char * p = storage.pixels + static_cast<size_t> (row) * crop.stride;
+        for (int col = 0; col < crop.width; ++col)
+          p [col * 4 + 3] = 255;
+        }
+      }
+    }
+  x = y = 0;
+  return &crop;
+  }
+
+static long StoreLoadedBitmap (ImageMap & images, LPCTSTR ImageId, HBITMAP hBmp)
+  {
+  try
+    {
+    std::unique_ptr<MiniWindowImage> pImage (new MiniWindowImage);
+    if (!pImage->Attach (hBmp))
+      {
+      DeleteObject (hBmp);
+      return eUnableToLoadImage;
+      }
+
+    hBmp = NULL;
+
+    BITMAP bi = {};
+    if (!pImage->GetBitmap (&bi))
+      AfxThrowResourceException ();
+    if (bi.bmBitsPixel == 32)
+      {
+      if (!bi.bmBits) AfxThrowResourceException ();
+      pImage->alpha.reset (new MiniWindowAlphaImage (static_cast<const unsigned char *> (bi.bmBits),
+                                                    bi.bmWidth, bi.bmHeight, bi.bmWidthBytes));
+      }
+    images [ImageId] = std::move (pImage);
+    }
+  catch (...)
+    {
+    if (hBmp)
+      DeleteObject (hBmp);
+    throw;
+    }
+
+  return eOK;
+  }
 
 // constructor
 CMiniWindow::CMiniWindow ()  :
@@ -78,14 +308,6 @@ CMiniWindow::~CMiniWindow ()  // destructor
          delete fit->second;
 
   m_Fonts.clear ();
-
-  // delete our images
-  for (ImageMapIterator it = m_Images.begin ();
-       it != m_Images.end ();
-       it++)
-         delete it->second;
-
-  m_Images.clear ();
 
   // delete our hotspots
   for (HotspotMapIterator hit = m_Hotspots.begin ();
@@ -1159,43 +1381,6 @@ void CMiniWindow::Info (long InfoType, VARIANT & vaResult)
   }  // end of CMiniWindow::Info
 
 
-static long StoreLoadedBitmap (ImageMap & images, LPCTSTR ImageId, HBITMAP hBmp)
-  {
-  CBitmap * pImage = NULL;
-
-  try
-    {
-    pImage = new CBitmap;
-    if (!pImage->Attach (hBmp))
-      {
-      delete pImage;
-      DeleteObject (hBmp);
-      return eUnableToLoadImage;
-      }
-
-    hBmp = NULL;
-
-    ImageMapIterator it = images.find (ImageId);
-    CBitmap * pOldImage = it == images.end () ? NULL : it->second;
-
-    images [ImageId] = pImage;
-    delete pOldImage;
-    }
-  catch (...)
-    {
-    if (pImage)
-      {
-      pImage->DeleteObject ();
-      delete pImage;
-      }
-    if (hBmp)
-      DeleteObject (hBmp);
-    throw;
-    }
-
-  return eOK;
-  }
-
 // loads an image file, ready for drawing into window
 long CMiniWindow::LoadImage (LPCTSTR ImageId, LPCTSTR FileName)
   {
@@ -1207,47 +1392,15 @@ long CMiniWindow::LoadImage (LPCTSTR ImageId, LPCTSTR FileName)
   // no file name means get rid of image
   if (strFileName.IsEmpty ())
     {
-    ImageMapIterator it = m_Images.find (ImageId);
-    if (it != m_Images.end ())
-      {
-      CBitmap * pOldImage = it->second;
-      m_Images.erase (it);
-      delete pOldImage;
-      }
+    m_Images.erase (ImageId);
     return eOK;
     }
 
-  // have to be long enough to have x.bmp
-  if (strFileName.GetLength () < 5)
-    return eBadParameter;
-
-  // handle PNG files separately
-  if (strFileName.Right (4).CompareNoCase (".png") == 0)
-    return LoadPngImage (ImageId, FileName);
-
-  // must be .bmp or .png file
-  if (strFileName.Right (4).CompareNoCase (".bmp") != 0)
-    return eBadParameter;
-
-
-  HBITMAP hBmp = (HBITMAP)::LoadImage(
-                  NULL,
-                  FileName,
-                  IMAGE_BITMAP,
-                  0,
-                  0,
-                  LR_LOADFROMFILE|LR_CREATEDIBSECTION
-                  );
-
-   if (hBmp)
-     return StoreLoadedBitmap (m_Images, ImageId, hBmp);
-
-
-   if (GetLastError () == 2)
-     return eFileNotFound;
-
-   return eUnableToLoadImage;
-
+  HBITMAP hBmp;
+  const long result = ::LoadImageFile (FileName, hBmp);
+  if (result != eOK)
+    return result;
+  return StoreLoadedBitmap (m_Images, ImageId, hBmp);
 
   } // end of CMiniWindow::LoadImage
 
@@ -1256,11 +1409,11 @@ long CMiniWindow::LoadImage (LPCTSTR ImageId, LPCTSTR FileName)
 long CMiniWindow::LoadImageMemory(LPCTSTR ImageId,
                                  unsigned char * Buffer,
                                  const size_t Length,
-                                 const bool bAlpha)
+                                 const bool swap_alpha_endianness)
   {
   HBITMAP hbmp;
 
-  long result =  LoadPngMemory (Buffer, Length, hbmp, bAlpha);
+  const long result = ::LoadImageMemory (Buffer, Length, hbmp, swap_alpha_endianness);
 
   if (result != eOK)
     return result;
@@ -1282,21 +1435,6 @@ static void user_warning_fn(png_structp png_ptr,
 //  AfxMessageBox (warning_msg);
 
   }
-
-
-long CMiniWindow::LoadPngImage (LPCTSTR ImageId, LPCTSTR FileName)
-  {
-
-  HBITMAP hbmp;
-
-  long result =  LoadPng (FileName, hbmp);
-
-  if (result != eOK)
-    return result;
-
-  return StoreLoadedBitmap (m_Images, ImageId, hbmp);
-  } // end of CMiniWindow::LoadPngImage
-
 
 
 // saves an image file
@@ -1507,87 +1645,81 @@ long CMiniWindow::DrawImage(LPCTSTR ImageId,
   {
 
   ImageMapIterator it = m_Images.find (ImageId);
-
   if (it == m_Images.end ())
     return eImageNotInstalled;
 
-  CBitmap * bitmap = it->second;
+  CBitmap * bitmap = it->second.get ();
+  BITMAP bi = {};
+  if (!bitmap->GetBitmap (&bi))
+    return eUnableToLoadImage;
 
-  pdc->SetBkMode (TRANSPARENT);
+  // Zero means the image edge. Negative bounds are offsets from the edge.
+  if (SrcRight <= 0) SrcRight += bi.bmWidth;
+  if (SrcBottom <= 0) SrcBottom += bi.bmHeight;
 
-  pdc->SetStretchBltMode (HALFTONE);  // looks better when squashed
-  SetBrushOrgEx(pdc->m_hDC, 0, 0, NULL);  // as recommended after  SetStretchBltMode
+  const __int64 source_width = static_cast<__int64> (SrcRight) - SrcLeft;
+  const __int64 source_height = static_cast<__int64> (SrcBottom) - SrcTop;
+  if (source_width <= 0 || source_height <= 0)
+    return eOK;
+  if (source_width > INT_MAX || source_height > INT_MAX || Mode < 1 || Mode > 3)
+    return eBadParameter;
+  const int w = static_cast<int> (source_width), h = static_cast<int> (source_height);
 
-  BITMAP  bi;
-  bitmap->GetBitmap(&bi);
+  CDC source;
+  if (!source.CreateCompatibleDC (pdc))
+    return eUnableToLoadImage;
+  MiniWindowSelectedObject selected (&source, bitmap);
+  if (!selected.Valid () || !pdc->SetBkMode (TRANSPARENT)
+      || !pdc->SetStretchBltMode (HALFTONE) || !::SetBrushOrgEx (pdc->GetSafeHdc (), 0, 0, NULL))
+    return eUnableToLoadImage;
 
-  CDC bmDC;
-  bmDC.CreateCompatibleDC(&(*pdc));
-  CBitmap *pOldbmp = bmDC.SelectObject(bitmap);
+  if (Mode == 1)
+    return pdc->BitBlt (Left, Top, w, h, &source, SrcLeft, SrcTop, SRCCOPY)
+      ? eOK : eUnableToLoadImage;
 
-  // adjust so that -1 means 1 from right
-  if (SrcRight <= 0)
-    SrcRight = bi.bmWidth + SrcRight;
+  if (Mode == 2)
+    {
+    const __int64 width = static_cast<__int64> (FixRight (Right)) - Left;
+    const __int64 height = static_cast<__int64> (FixBottom (Bottom)) - Top;
+    if (width == 0 || height == 0)
+      return eOK;
+    if (width < INT_MIN || width > INT_MAX || height < INT_MIN || height > INT_MAX)
+      return eBadParameter;
+    return pdc->StretchBlt (Left, Top, static_cast<int> (width), static_cast<int> (height), &source,
+                           SrcLeft, SrcTop, w, h, SRCCOPY) ? eOK : eUnableToLoadImage;
+    }
 
-  if (SrcBottom <= 0)
-    SrcBottom =  bi.bmHeight + SrcBottom;
+  CDC mask;
+  CBitmap mask_bitmap;
+  if (!mask.CreateCompatibleDC (pdc) || !mask_bitmap.CreateBitmap (w, h, 1, 1, NULL))
+    return eUnableToLoadImage;
+  MiniWindowSelectedObject selected_mask (&mask, &mask_bitmap);
+  // Use the top-left pixel of the original image as the colour key for any crop.
+  const COLORREF key = ::GetPixel (source.GetSafeHdc (), 0, 0);
+  if (!selected_mask.Valid () || key == CLR_INVALID)
+    return eUnableToLoadImage;
+  const COLORREF old_source_background = source.SetBkColor (key);
+  if (old_source_background == CLR_INVALID)
+    return eUnableToLoadImage;
+  const bool copied_mask = mask.BitBlt (0, 0, w, h, &source, SrcLeft, SrcTop, SRCCOPY) != 0;
+  if (source.SetBkColor (old_source_background) == CLR_INVALID || !copied_mask)
+    return eUnableToLoadImage;
 
-  // calculate size of desired rectangle
-  long iWidth = SrcRight - SrcLeft;
-  long iHeight = SrcBottom - SrcTop;
+  const COLORREF old_background = pdc->SetBkColor (RGB (255, 255, 255));
+  const COLORREF old_text = pdc->SetTextColor (RGB (0, 0, 0));
+  bool copied = false;
+  if (old_background != CLR_INVALID && old_text != CLR_INVALID
+      && pdc->BitBlt (Left, Top, w, h, &source, SrcLeft, SrcTop, SRCINVERT))
+    {
+    const bool masked = pdc->BitBlt (Left, Top, w, h, &mask, 0, 0, SRCAND) != 0;
+    // The last XOR can undo the first if the mask copy fails before writing.
+    const bool finished = pdc->BitBlt (Left, Top, w, h, &source, SrcLeft, SrcTop, SRCINVERT) != 0;
+    copied = masked && finished;
+    }
 
-  if (iWidth > 0 && iHeight > 0)   // sanity check
-    switch (Mode)
-      {
-      case 1: pdc->BitBlt (Left, Top, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCCOPY);
-              break;      // straight copy
-
-      case 2: pdc->StretchBlt (Left, Top, FixRight (Right) - Left, FixBottom (Bottom) - Top, &bmDC,
-                             SrcLeft, SrcTop, SrcRight - SrcLeft, SrcBottom - SrcTop, SRCCOPY);
-              break;      // stretch
-
-      case 3:        // transparency, och!
-        {
-        COLORREF crOldBack = pdc->SetBkColor (RGB (255, 255, 255));    // white
-        COLORREF crOldText = pdc->SetTextColor (RGB (0, 0, 0));        // black
-        CDC dcTrans;   // transparency mask
-
-
-        // Create a memory (*pdc) for the mask
-        dcTrans.CreateCompatibleDC(&(*pdc));
-
-        // Create the mask bitmap for the subset of the main image
-        CBitmap bitmapTrans;
-        bitmapTrans.CreateBitmap(iWidth, iHeight, 1, 1, NULL);
-
-        // Select the mask bitmap into the appropriate (*pdc)
-        CBitmap* pOldBitmapTrans = dcTrans.SelectObject(&bitmapTrans);
-
-        // Our transparent pixel will be at 0,0 (top left corner) of original image (not subimage)
-        COLORREF crOldBackground = bmDC.SetBkColor (::GetPixel (bmDC, 0, 0));
-
-        // Build mask based on transparent colour at location 0, 0
-        dcTrans.BitBlt (0, 0, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCCOPY);
-
-        // Do the work
-        pdc->BitBlt (Left, Top, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCINVERT);
-        pdc->BitBlt (Left, Top, iWidth, iHeight, &dcTrans, 0, 0, SRCAND);
-        pdc->BitBlt (Left, Top, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCINVERT);
-
-        // Restore settings
-        dcTrans.SelectObject(pOldBitmapTrans);
-        pdc->SetBkColor(crOldBack);
-        pdc->SetTextColor(crOldText);
-        bmDC.SetBkColor(crOldBackground);
-        }
-        break;
-
-      default: return eBadParameter;
-      } // end of switch
-
-  bmDC.SelectObject(pOldbmp);
-
-  return eOK;
+  const bool restored_background = old_background != CLR_INVALID && pdc->SetBkColor (old_background) != CLR_INVALID;
+  const bool restored_text = old_text != CLR_INVALID && pdc->SetTextColor (old_text) != CLR_INVALID;
+  return copied && restored_background && restored_text ? eOK : eUnableToLoadImage;
   }  // end of CMiniWindow::DrawImage
 
 
@@ -1629,7 +1761,7 @@ void CMiniWindow::ImageInfo (LPCTSTR ImageId, long InfoType, VARIANT & vaResult)
   if (it == m_Images.end ())
     return;   // no such Image
 
-  CBitmap * bitmap = it->second;
+  CBitmap * bitmap = it->second.get ();
 
   BITMAP  bi;
   bitmap->GetBitmap(&bi);
@@ -2069,7 +2201,7 @@ long CMiniWindow::ImageOp(short Action,
   if (it == m_Images.end ())
     return eImageNotInstalled;
 
-  CBitmap * bitmap = it->second;
+  CBitmap * bitmap = it->second.get ();
 
   pdc->SetBkMode (OPAQUE);
 
@@ -2130,9 +2262,7 @@ long CMiniWindow::ImageOp(short Action,
 long CMiniWindow::CreateImage(LPCTSTR ImageId, long Row1, long Row2, long Row3, long Row4, long Row5, long Row6, long Row7, long Row8)
   {
 
-  ImageMapIterator it = m_Images.find (ImageId);
-  CBitmap * pOldImage = it == m_Images.end () ? NULL : it->second;
-  std::unique_ptr<CBitmap> pImage (new CBitmap);
+  std::unique_ptr<MiniWindowImage> pImage (new MiniWindowImage);
 
   // bottom row comes first in a bitmap
   WORD    wBits[8] = { (WORD) Row8, (WORD) Row7, (WORD) Row6, (WORD) Row5,
@@ -2141,9 +2271,7 @@ long CMiniWindow::CreateImage(LPCTSTR ImageId, long Row1, long Row2, long Row3, 
   if (!pImage->CreateBitmap (8, 8, 1, 1, wBits))
     AfxThrowResourceException ();
 
-  m_Images [ImageId] = pImage.get ();
-  pImage.release ();
-  delete pOldImage;
+  m_Images [ImageId] = std::move (pImage);
   return eOK;
 
   }  // end of CMiniWindow::CreateImage
@@ -2151,24 +2279,24 @@ long CMiniWindow::CreateImage(LPCTSTR ImageId, long Row1, long Row2, long Row3, 
 // see: http://www.nathanm.com/photoshop-blending-math/
 // and: http://www.pegtop.net/delphi/articles/blendmodes/
 
-#define Blend_It(Op) \
-   do \
+#define Blend_It(mode, name, Op) \
+   case mode: \
       if (Opacity < 1.0) \
         for (i = 0; i < count; i++) \
           pB [i]     = Blend_Opacity (pA [i], pB [i], Op, Opacity);\
       else\
         for (i = 0; i < count; i ++)\
           pB [i]      = Op (pA [i], pB [i]);\
-   while (false)
+   break;
 
 // we have to do this a row at a time, because there might be a filler at the end of each row
 // and thus, a discontinuity which throws out the r/g/b sequence
-#define Colour_Op(fR,fG,fB) \
-   do \
+#define Colour_Op(mode, name, fR, fG, fB) \
+   case mode: \
      {  \
      for (row = 0; row < iHeight; row++)\
       {\
-      long base = row * perline;\
+      const size_t base = static_cast<size_t> (row) * perline;\
       unsigned char rA, gA, bA, rB, gB, bB; \
       if (Opacity < 1.0) \
         for (i = 0; i < perline - 2; ) \
@@ -2204,11 +2332,207 @@ long CMiniWindow::CreateImage(LPCTSTR ImageId, long Row1, long Row2, long Row3, 
           }\
         }\
        }\
-   while (false)
+   break;
 
 
 
 // see also: CMUSHclientDoc::BlendPixel
+
+class MiniWindowBlendTarget
+  {
+  HDC m_DC;
+  HBITMAP m_Bitmap;
+  HGDIOBJ m_Previous;
+
+  public:
+  unsigned char * pixels;
+  int stride;
+
+  MiniWindowBlendTarget ()
+    : m_DC (NULL), m_Bitmap (NULL), m_Previous (NULL), pixels (NULL), stride (0)
+    { }
+
+  MiniWindowBlendTarget (const MiniWindowBlendTarget &) = delete;
+  MiniWindowBlendTarget & operator= (const MiniWindowBlendTarget &) = delete;
+
+  ~MiniWindowBlendTarget ()
+    {
+    if (m_Previous) ::SelectObject (m_DC, m_Previous);
+    if (m_Bitmap) ::DeleteObject (m_Bitmap);
+    if (m_DC) ::DeleteDC (m_DC);
+    }
+
+  bool CopyFrom (HDC source, int x, int y, int width, int height, bool top_down = true)
+    {
+    if (width <= 0 || height <= 0) return false;
+    const unsigned __int64 bytes_per_row = (static_cast<unsigned __int64> (width) * 3 + 3) / 4 * 4;
+    if (bytes_per_row > INT_MAX || bytes_per_row * height > MAXDWORD)
+      return false;
+    stride = static_cast<int> (bytes_per_row);
+    m_DC = ::CreateCompatibleDC (source);
+    if (!m_DC) return false;
+
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof (BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = top_down ? -height : height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 24;
+    void * data = NULL;
+    m_Bitmap = ::CreateDIBSection (source, &info, DIB_RGB_COLORS, &data, NULL, 0);
+    if (!m_Bitmap) return false;
+    pixels = static_cast<unsigned char *> (data);
+    m_Previous = ::SelectObject (m_DC, m_Bitmap);
+    if (!m_Previous || m_Previous == HGDI_ERROR)
+      {
+      m_Previous = NULL;
+      return false;
+      }
+    return ::BitBlt (m_DC, 0, 0, width, height, source, x, y, SRCCOPY) != 0;
+    }
+
+  bool CopyFrom (CDC & source, CBitmap * bitmap, int x, int y, int width, int height)
+    {
+    MiniWindowSelectedObject selected (&source, bitmap);
+    return selected.Valid () && CopyFrom (source.GetSafeHdc (), x, y, width, height, false);
+    }
+
+  long Put (HDC target, int x, int y, int width, int height) const
+    {
+    return ::BitBlt (target, x, y, width, height, m_DC, 0, 0, SRCCOPY)
+      ? eOK : eUnableToLoadImage;
+    }
+  };
+
+// A 24-bit row with three padding bytes consumes one extra Dissolve sample.
+static bool DissolveHasPaddingPixel (long width)
+  {
+  return width % 4 == 3;
+  }
+
+#define BLEND_DIRECT_CHANNEL(mode, name, operation) \
+  case mode: \
+    for (int c = 0; c < 3; ++c) \
+      target [c] = FullOpacity ? operation (source [c], target [c]) \
+        : Blend_Opacity (source [c], target [c], operation, opacity); \
+    break;
+
+#define BLEND_DIRECT_COLOUR(mode, name, red, green, blue) \
+  case mode: \
+    target [0] = FullOpacity ? (blue) : Simple_Opacity (bB, blue, opacity); \
+    target [1] = FullOpacity ? (green) : Simple_Opacity (gB, green, opacity); \
+    target [2] = FullOpacity ? (red) : Simple_Opacity (rB, red, opacity); \
+    break;
+
+template<int Mode, bool FullOpacity>
+static void BlendDirectPixels (unsigned char * pixels, int stride,
+    const MiniWindowAlphaImage & image, int left, int top, int width, int height,
+    double opacity, const unsigned char * cos_table)
+  {
+  for (int y = 0; y < height; ++y)
+    {
+    // Dissolve assigns random values from the bottom row up.
+    const int row = Mode == BlendDissolveMode ? height - 1 - y : y;
+    const unsigned char * source = image.Row (top + row) + static_cast<size_t> (left) * 4;
+    unsigned char * target = pixels + static_cast<size_t> (row) * stride;
+    for (int x = 0; x < width; ++x, source += 4, target += 3)
+      {
+      const unsigned char bA = source [0], gA = source [1], rA = source [2];
+      const unsigned char bB = target [0], gB = target [1], rB = target [2];
+      switch (Mode)
+        {
+        MUSHCLIENT_BLEND_MODES (BLEND_DIRECT_CHANNEL, BLEND_DIRECT_CHANNEL, SKIP_BLEND_MODE, SKIP_BLEND_MODE)
+
+        case BlendDissolveMode:
+          if (genrand () < opacity)
+            {
+            target [0] = bA;
+            target [1] = gA;
+            target [2] = rA;
+            }
+          break;
+
+        MUSHCLIENT_BLEND_MODES (SKIP_BLEND_MODE, SKIP_BLEND_MODE, BLEND_DIRECT_COLOUR, SKIP_BLEND_MODE)
+
+        default:  // Keep rounding the HSL result at full opacity.
+          {
+          CColor a, b;
+          a.SetRGB (rA, gA, bA);
+          b.SetRGB (rB, gB, bB);
+          if (Mode == BlendHueMode || Mode == BlendColourMode) b.SetHue (a.GetHue ());
+          if (Mode == BlendSaturationMode || Mode == BlendColourMode) b.SetSaturation (a.GetSaturation ());
+          if (Mode == BlendLuminanceMode) b.SetLuminance (a.GetLuminance ());
+          if (Mode == BlendHslMode)
+            {
+            target [0] = Simple_Opacity (bB, a.GetLuminance () * 255, opacity);
+            target [1] = Simple_Opacity (gB, a.GetSaturation () * 255, opacity);
+            target [2] = Simple_Opacity (rB, (a.GetHue () / 360.0) * 255, opacity);
+            }
+          else
+            {
+            target [0] = Simple_Opacity (bB, b.GetBlue (), opacity);
+            target [1] = Simple_Opacity (gB, b.GetGreen (), opacity);
+            target [2] = Simple_Opacity (rB, b.GetRed (), opacity);
+            }
+          }
+          break;
+        }
+      }
+    if (Mode == BlendDissolveMode && DissolveHasPaddingPixel (width))
+      genrand ();
+    }
+  }
+
+#undef BLEND_DIRECT_CHANNEL
+#undef BLEND_DIRECT_COLOUR
+
+template<int Mode>
+static void BlendDirectMode (MiniWindowBlendTarget & target, const MiniWindowAlphaImage & image,
+                            int left, int top, int width, int height, double opacity,
+                            const unsigned char * cos_table)
+  {
+  if (opacity < 1.0)
+    BlendDirectPixels<Mode, false> (target.pixels, target.stride, image,
+      left, top, width, height, opacity, cos_table);
+  else
+    BlendDirectPixels<Mode, true> (target.pixels, target.stride, image,
+      left, top, width, height, opacity, cos_table);
+  }
+
+static void BlendDirectImage (MiniWindowBlendTarget & target, const MiniWindowAlphaImage & image,
+                             int left, int top, int width, int height, int mode, double opacity,
+                             const unsigned char * cos_table)
+  {
+#define BLEND_DIRECT_MODE(number, ...) \
+    case number: BlendDirectMode<number> (target, image, left, top, width, height, opacity, cos_table); break;
+  switch (mode)
+    {
+    MUSHCLIENT_BLEND_MODES (BLEND_DIRECT_MODE, BLEND_DIRECT_MODE, BLEND_DIRECT_MODE, BLEND_DIRECT_MODE)
+    }
+#undef BLEND_DIRECT_MODE
+  }
+
+template<bool FullOpacity>
+static void MergeDirectPixels (MiniWindowBlendTarget & target, const MiniWindowAlphaImage & image,
+                               const MiniWindowAlphaImage & mask, int left, int top,
+                               int width, int height, int mode, double opacity)
+  {
+  const unsigned char * key = image.Row (top) + static_cast<size_t> (left) * 4;
+  for (int y = 0; y < height; ++y)
+    {
+    const unsigned char * source = image.Row (top + y) + static_cast<size_t> (left) * 4;
+    const unsigned char * alpha = mask.Row (top + y) + static_cast<size_t> (left) * 4;
+    unsigned char * pixels = target.pixels + static_cast<size_t> (y) * target.stride;
+    for (int x = 0; x < width; ++x, source += 4, alpha += 4, pixels += 3)
+      {
+      if (mode == 1 && source [0] == key [0] && source [1] == key [1] && source [2] == key [2])
+        continue;
+      for (int c = 0; c < 3; ++c)
+        pixels [c] = MiniWindowAlphaImage::BlendChannel<FullOpacity>
+          (source [c], pixels [c], alpha [c], opacity);
+      }
+    }
+  }
 
 long CMiniWindow::BlendImage(LPCTSTR ImageId,
                   long Left, long Top, long Right, long Bottom,
@@ -2231,17 +2555,17 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
   if (it == m_Images.end ())
     return eImageNotInstalled;
 
-  if (Opacity < 0.0 || Opacity > 1.0)
+  if (!NormalizeBlendOpacity (Opacity))
     return eBadParameter;
 
-  CBitmap * bitmap = it->second;
+  CBitmap * bitmap = it->second.get ();
 
-  BITMAP  bi;
-  bitmap->GetBitmap(&bi);
+  BITMAP bi;
+  if (!bitmap->GetBitmap (&bi))
+    return eUnableToLoadImage;
 
-  // calculate size of desired rectangle
-  long iWidth = FixRight (Right) - Left;
-  long iHeight = FixBottom (Bottom) - Top;
+  const long right = FixRight (Right);
+  const long bottom = FixBottom (Bottom);
 
   // constrain to what we actually have
   if (SrcLeft < 0)
@@ -2260,79 +2584,27 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
   if (SrcBottom <= 0)
     SrcBottom =  bi.bmHeight + SrcBottom;
 
-  // width and height are the smaller of the two rectangles
-  iWidth = min (iWidth, SrcRight - SrcLeft);
-  iHeight = min (iHeight, SrcBottom - SrcTop);
-
-  if (iWidth <= 0 || iHeight <= 0)   // sanity check
+  // Check for empty rectangles before subtracting to avoid signed overflow.
+  if (right <= Left || bottom <= Top || SrcRight <= SrcLeft || SrcBottom <= SrcTop)
     return eOK;
 
-  if (Mode < 1 || Mode > 64)
+  // Both starts are nonnegative, so these positive differences fit in a long.
+  const long iWidth = min (right - Left, SrcRight - SrcLeft);
+  const long iHeight = min (bottom - Top, SrcBottom - SrcTop);
+
+  if (Mode < 1 || Mode > BlendModeCount)
     return eUnknownOption;
-
-  BITMAPINFO bmi;
-  ZeroMemory (&bmi, sizeof bmi);
-
-  bmi.bmiHeader.biSize = sizeof bmi;
-  bmi.bmiHeader.biWidth =          iWidth;
-  bmi.bmiHeader.biHeight =         iHeight;
-  bmi.bmiHeader.biPlanes =         1;
-  bmi.bmiHeader.biBitCount =       24;
-  bmi.bmiHeader.biCompression =    BI_RGB;
-  bmi.bmiHeader.biSizeImage =      iHeight * BytesPerLine (iWidth, 24);
-
-  // upper layer (from image id)
-  CDC A_DC;
-  A_DC.CreateCompatibleDC(&(*pdc));
-
-  unsigned char * pA = NULL;
-
-  HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
-
-  if (!hbmA)
-    return eUnableToLoadImage;
-
-  HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
-
-  //copy part from image to upper layer
-  CDC bmDC;
-  bmDC.CreateCompatibleDC(&(*pdc));
-  CBitmap *pOldbmp = bmDC.SelectObject(bitmap);
-
-  A_DC.BitBlt (0, 0, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCCOPY);
-  bmDC.SelectObject(pOldbmp);
-
-
-  // base image (from miniwindow)
-
-  CDC B_DC;
-  B_DC.CreateCompatibleDC(&(*pdc));
-  CBitmap B_bmp;
-
-  unsigned char * pB = NULL;
-
-  HBITMAP hbmB = CreateDIBSection(pdc->m_hDC, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
-
-  if (!hbmB)
+  if (Opacity == 0.0)
     {
-    SelectObject(A_DC.m_hDC, hOldAbmp);
-    DeleteObject (hbmA);
-    return eUnableToLoadImage;
+    if (Mode == BlendDissolveMode)
+      {
+      const size_t samples = static_cast<size_t> (iWidth) + DissolveHasPaddingPixel (iWidth);
+      for (long y = 0; y < iHeight; ++y)
+        for (size_t x = 0; x < samples; ++x)
+          genrand ();
+      }
+    return eOK;
     }
-
-  HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
-
-  // copy base image from miniwindow to bitmap
-  B_DC.BitBlt (0, 0, iWidth, iHeight, &(*pdc), Left, Top, SRCCOPY);
-
-
-  // manipulate image here   A = blend, B = base
-
-
-  long count = bmi.bmiHeader.biSizeImage;
-  long perline = BytesPerLine (iWidth, 24);
-
-  long i, row;
 
   // precompute cos table
   static unsigned char cos_table [256];
@@ -2341,7 +2613,7 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
   if (!bTableComputed)
     {
     double pi_div255 = 3.1415926535898 / 255.0;
-    for (i = 0; i < 256; i++)
+    for (int i = 0; i < 256; i++)
       {
       double a = 64.0 - cos ((double) i * pi_div255) * 64.0;
       cos_table [i] = (uint8) (a + 0.5);  // round
@@ -2349,20 +2621,41 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
     bTableComputed = true;
     } // table needs computing
 
+  if (it->second->alpha && it->second->alpha->owned_pixels.empty ())
+    {
+    MiniWindowBlendTarget target;
+    if (!target.CopyFrom (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight) || !::GdiFlush ())
+      return eUnableToLoadImage;
+    BlendDirectImage (target, *it->second->alpha, SrcLeft, SrcTop, iWidth, iHeight,
+      Mode, Opacity, cos_table);
+    return target.Put (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight);
+    }
+
+  CDC source_dc;
+  MiniWindowBlendTarget source, target;
+  if (!source_dc.CreateCompatibleDC (pdc)
+      || !source.CopyFrom (source_dc, bitmap, SrcLeft, SrcTop, iWidth, iHeight)
+      || !target.CopyFrom (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight, false)
+      || !::GdiFlush ())
+    return eUnableToLoadImage;
+
+  const unsigned char * pA = source.pixels;
+  unsigned char * pB = target.pixels;
+  const size_t perline = target.stride;
+  const size_t count = perline * iHeight;
+  size_t i;
+  long row;
   switch (Mode)
     {
 
-    // normal modes
-    case  1: Blend_It (Blend_Normal);       break;
-    case  2: Blend_It (Blend_Average);      break;
-    case  3: Blend_It (Blend_Interpolate);  break;
+    MUSHCLIENT_BLEND_MODES (Blend_It, SKIP_BLEND_MODE, SKIP_BLEND_MODE, SKIP_BLEND_MODE)
 
-     case  4:  // dissolve - randomly choose pixels based on opacity
+    case BlendDissolveMode:
        {
 
        for (row = 0; row < iHeight; row++)
         {
-        long base = row * perline;
+        const size_t base = static_cast<size_t> (row) * perline;
         unsigned char rA, gA, bA, rB, gB, bB;
         for (i = 0; i < perline - 2; )
           {
@@ -2375,7 +2668,7 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
           gB = pB [base + i + 1];
           rB = pB [base + i + 2];
 
-          pB [base + i] = (rnd < Opacity) ? bA : bB;;
+          pB [base + i] = (rnd < Opacity) ? bA : bB;
           i++;
           pB [base + i] = (rnd < Opacity) ? gA : gB;
           i++;
@@ -2388,95 +2681,13 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
        }
       break;
 
-    // darkening modes
-    case  5: Blend_It (Blend_Darken);     break;
-    case  6: Blend_It (Blend_Multiply);   break;
-    case  7: Blend_It (Blend_ColorBurn);  break;
-    case  8: Blend_It (Blend_LinearBurn); break;
-    case  9: Blend_It (Blend_InverseColorBurn);  break;
-    case 10: Blend_It (Blend_Subtract);   break;
+    MUSHCLIENT_BLEND_MODES (SKIP_BLEND_MODE, Blend_It, Colour_Op, SKIP_BLEND_MODE)
 
-    // lightening modes
-    case 11: Blend_It (Blend_Lighten);    break;
-    case 12: Blend_It (Blend_Screen);     break;
-    case 13: Blend_It (Blend_ColorDodge); break;
-    case 14: Blend_It (Blend_LinearDodge);break;
-    case 15: Blend_It (Blend_InverseColorDodge);  break;
-    case 16: Blend_It (Blend_Add);        break;
-
-    // soft/hard light etc.
-    case 17: Blend_It (Blend_Overlay);    break;
-    case 18: Blend_It (Blend_SoftLight);  break;
-    case 19: Blend_It (Blend_HardLight);  break;
-    case 20: Blend_It (Blend_VividLight); break;
-    case 21: Blend_It (Blend_LinearLight);break;
-    case 22: Blend_It (Blend_PinLight);   break;
-    case 23: Blend_It (Blend_HardMix);    break;
-
-    // difference modes
-    case 24: Blend_It (Blend_Difference); break;
-    case 25: Blend_It (Blend_Exclusion);  break;
-
-    // glow modes
-    case 26: Blend_It (Blend_Reflect);    break;
-    case 27: Blend_It (Blend_Glow);       break;
-    case 28: Blend_It (Blend_Freeze);     break;
-    case 29: Blend_It (Blend_Heat);       break;
-
-    case 30: Blend_It (Blend_Negation);   break;
-    case 31: Blend_It (Blend_Phoenix);    break;
-    case 32: Blend_It (Blend_Stamp);      break;
-
-    // logical modes
-    case 33: Blend_It (Blend_Xor);      break;
-    case 34: Blend_It (Blend_And);      break;
-    case 35: Blend_It (Blend_Or);       break;
-
-    // the follow modes take one colour from the blend and retain 2 from the base
-    case 36: Colour_Op (rA, gB, bB); break;  // red
-    case 37: Colour_Op (rB, gA, bB); break;  // green
-    case 38: Colour_Op (rB, gB, bA); break;  // blue
-
-    // the follow modes take two colours from the blend and retain 1 from the base
-    case 39: Colour_Op (rA, gA, bB); break;  // yellow
-    case 40: Colour_Op (rB, gA, bA); break;  // cyan
-    case 41: Colour_Op (rA, gB, bA); break;  // magenta
-
-    // limit green
-    case 42: Colour_Op (rA, (gA > rA) ? rA : gA, bA); break;  // green limited by red
-    case 43: Colour_Op (rA, (gA > bA) ? bA : gA, bA); break;  // green limited by blue
-    case 44: Colour_Op (rA, (gA > ((rA + bA) / 2)) ? ((rA + bA) / 2) : gA, bA); break;  // green limited by average of red and blue
-
-    // limit blue
-    case 45: Colour_Op (rA, gA, (bA > rA) ? rA : bA); break;  // blue limited by red
-    case 46: Colour_Op (rA, gA, (bA > gA) ? gA : bA); break;  // blue limited by green
-    case 47: Colour_Op (rA, gA, (bA > ((rA + gA) / 2)) ? ((rA + gA) / 2) : bA); break; // blue limited by average of red and green
-
-    // limit red
-    case 48: Colour_Op ((rA > gA) ? gA : rA, gA, bA); break;  // red limited by green
-    case 49: Colour_Op ((rA > bA) ? bA : rA, gA, bA); break;  // red limited by blue
-    case 50: Colour_Op ((rA > ((gA + bA) / 2)) ? ((gA + bA) / 2) : rA, gA, bA); break;  // red limited by average of green and blue
-
-    // select single colour
-    case 51: Colour_Op (rA, 0, 0); break;  // red only       (looks red)
-    case 52: Colour_Op (0, gA, 0); break;  // green only     (looks green)
-    case 53: Colour_Op (0, 0, bA); break;  // blue only      (looks blue)
-
-    // discard single colour
-    case 54: Colour_Op (0, gA, bA); break;  // discard red    (looks cyan)
-    case 55: Colour_Op (rA, 0, bA); break;  // discard green  (looks magenta)
-    case 56: Colour_Op (rA, gA, 0); break;  // discard blue   (looks yellow)
-
-    // one colour to all channels  (ie. it looks grey)
-    case 57: Colour_Op (rA, rA, rA); break;  // all red
-    case 58: Colour_Op (gA, gA, gA); break;  // all green
-    case 59: Colour_Op (bA, bA, bA); break;  // all blue
-
-    case 60:           // Hue mode
+    case BlendHueMode:
       {
        for (row = 0; row < iHeight; row++)
         {
-        long base = row * perline;
+        const size_t base = static_cast<size_t> (row) * perline;
         unsigned char rA, gA, bA, rB, gB, bB;
         for (i = 0; i < perline - 2; )
           {
@@ -2503,11 +2714,11 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
        }
       break;
 
-    case 61:           // Saturation mode
+    case BlendSaturationMode:
       {
        for (row = 0; row < iHeight; row++)
         {
-        long base = row * perline;
+        const size_t base = static_cast<size_t> (row) * perline;
         unsigned char rA, gA, bA, rB, gB, bB;
         for (i = 0; i < perline - 2; )
           {
@@ -2534,11 +2745,11 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
        }
       break;
 
-    case 62:           // Colour mode
+    case BlendColourMode:
       {
        for (row = 0; row < iHeight; row++)
         {
-        long base = row * perline;
+        const size_t base = static_cast<size_t> (row) * perline;
         unsigned char rA, gA, bA, rB, gB, bB;
         for (i = 0; i < perline - 2; )
           {
@@ -2580,11 +2791,11 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
 
     */
 
-    case 63:           // Luminance mode
+    case BlendLuminanceMode:
       {
        for (row = 0; row < iHeight; row++)
         {
-        long base = row * perline;
+        const size_t base = static_cast<size_t> (row) * perline;
         unsigned char rA, gA, bA, rB, gB, bB;
         for (i = 0; i < perline - 2; )
           {
@@ -2622,11 +2833,11 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
        }
       break;
 
-    case 64:           // HSL (hue to red, saturation to green, luminance to blue)
+    case BlendHslMode:  // Store hue in red, saturation in green and luminance in blue.
       {
        for (row = 0; row < iHeight; row++)
         {
-        long base = row * perline;
+        const size_t base = static_cast<size_t> (row) * perline;
         unsigned char rA, gA, bA, rB, gB, bB;
         for (i = 0; i < perline - 2; )
           {
@@ -2679,67 +2890,56 @@ long CMiniWindow::BlendImage(LPCTSTR ImageId,
     default: return eUnknownOption;
     }
 
-  // copy result back
-
-  pdc->BitBlt (Left, Top, iWidth, iHeight, &B_DC, 0, 0, SRCCOPY);
-
-
-  SelectObject(A_DC.m_hDC, hOldAbmp);
-  SelectObject(B_DC.m_hDC, hOldBbmp);
-
-  DeleteObject (hbmA);
-  DeleteObject (hbmB);
-
-  return eOK;
-
-
+  return target.Put (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight);
 
   }   // end of CMiniWindow::BlendImage
+
+#undef Blend_It
+#undef Colour_Op
 
 
 // copies one miniwindow image as a stand-alone image
 long CMiniWindow::ImageFromWindow(LPCTSTR ImageId, CMiniWindow * pSrcWindow)
   {
 
-  ImageMapIterator it = m_Images.find (ImageId);
-  CBitmap * pOldImage = it == m_Images.end () ? NULL : it->second;
-
-  // make new bitmap of appropriate size to hold image from other miniwindow
-  CBitmap * pImage = new CBitmap;
-  CBitmap *pOldbmp = NULL;
-
-  CDC bmDC;
-  try
+  std::unique_ptr<MiniWindowImage> image (new MiniWindowImage);
+  const int w = pSrcWindow->m_iWidth, h = pSrcWindow->m_iHeight;
+  BITMAP surface = {};
+  const bool direct = w > 0 && h > 0 && w <= INT_MAX / 4
+    && static_cast<unsigned __int64> (w) * h * 4 <= MAXDWORD
+    && ::GetObject (::GetCurrentObject (pdc->GetSafeHdc (), OBJ_BITMAP), sizeof surface, &surface) == sizeof surface
+    && !surface.bmBits && surface.bmBitsPixel == 32 && surface.bmPlanes == 1
+    && ::GetDeviceCaps (pdc->GetSafeHdc (), BITSPIXEL) == 32;
+  if (direct)
     {
-    if (!pImage->CreateCompatibleBitmap (&(*pdc), pSrcWindow->m_iWidth, pSrcWindow->m_iHeight))
+    // Keep the captured fourth byte for unscaled drawing. The scaled view
+    // treats these same pixels as opaque without changing their alpha bytes.
+    BITMAPINFO info = TopDownBitmapInfo (w, h);
+    void * pixels = NULL;
+    HBITMAP bitmap = ::CreateDIBSection (pdc->GetSafeHdc (), &info, DIB_RGB_COLORS, &pixels, NULL, 0);
+    if (!bitmap)
       AfxThrowResourceException ();
-    if (!bmDC.CreateCompatibleDC(&(*pdc)))
+    if (!image->Attach (bitmap))
+      {
+      ::DeleteObject (bitmap);
       AfxThrowResourceException ();
-    pOldbmp = bmDC.SelectObject(pImage);
-    if (!pOldbmp)
-      AfxThrowResourceException ();
-
-    // copy into our bitmap
-    if (!bmDC.BitBlt (0, 0, pSrcWindow->m_iWidth, pSrcWindow->m_iHeight,
-                      pSrcWindow->pdc, 0, 0, SRCCOPY))
-      AfxThrowResourceException ();
-
-    if (!bmDC.SelectObject(pOldbmp))
-      AfxThrowResourceException ();
-    pOldbmp = NULL;
-
-    // save in map
-    m_Images [ImageId] = pImage;
+      }
+    const unsigned char * data = static_cast<const unsigned char *> (pixels);
+    image->alpha.reset (new MiniWindowAlphaImage (data, w, h, w * 4));
+    image->opaque_alpha.reset (new MiniWindowAlphaImage (data, w, h, w * 4, true));
     }
-  catch (...)
-    {
-    if (pOldbmp)
-      bmDC.SelectObject (pOldbmp);
-    delete pImage;
-    throw;
-    }
-
-  delete pOldImage;
+  else if (!image->CreateCompatibleBitmap (pdc, w, h))
+    AfxThrowResourceException ();
+  CDC dc;
+  if (!dc.CreateCompatibleDC (pdc))
+    AfxThrowResourceException ();
+  {
+  MiniWindowSelectedObject selected (&dc, image.get ());
+  if (!selected.Valid () || !dc.BitBlt (0, 0, w, h, pSrcWindow->pdc, 0, 0, SRCCOPY)
+      || (direct && !::GdiFlush ()))
+    AfxThrowResourceException ();
+  }
+  m_Images [ImageId] = std::move (image);
   return eOK;
 
   } // end of CMiniWindow::ImageFromWindow
@@ -3511,6 +3711,29 @@ long CMiniWindow::GetPixel(long x, long y)
   } // end of CMiniWindow::GetPixel
 
 
+template<bool FullOpacity>
+static void MergeMaskedPixels (unsigned char * target, const unsigned char * source,
+                               const unsigned char * mask, int width, int height, int stride,
+                               double opacity, COLORREF colourKey)
+  {
+  for (int y = 0; y < height; ++y)
+    {
+    for (int i = 0; i < width * 3; i += 3)
+      {
+      const unsigned char b = source [i], g = source [i + 1], r = source [i + 2];
+      if (RGB (r, g, b) == colourKey)
+        continue;
+      const unsigned char db = target [i], dg = target [i + 1], dr = target [i + 2];
+      target [i] = MiniWindowAlphaImage::BlendChannel<FullOpacity> (b, db, mask [i], opacity);
+      target [i + 1] = MiniWindowAlphaImage::BlendChannel<FullOpacity> (g, dg, mask [i + 1], opacity);
+      target [i + 2] = MiniWindowAlphaImage::BlendChannel<FullOpacity> (r, dr, mask [i + 2], opacity);
+      }
+    target += stride;
+    source += stride;
+    mask += stride;
+    }
+  }
+
 long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
                                   long Left, long Top, long Right, long Bottom,
                                   short Mode, double Opacity,
@@ -3527,7 +3750,7 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
   if (Bottom > m_iHeight)
     Bottom = m_iHeight;
 
-  if (Opacity < 0.0 || Opacity > 1.0)
+  if (!NormalizeBlendOpacity (Opacity))
     return eBadParameter;
 
   // image to be merged
@@ -3536,7 +3759,7 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
   if (it == m_Images.end ())
     return eImageNotInstalled;
 
-  CBitmap * bitmap = it->second;
+  MiniWindowImage * bitmap = it->second.get ();
 
   // mask image
   it = m_Images.find (MaskId);
@@ -3544,14 +3767,14 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
   if (it == m_Images.end ())
     return eImageNotInstalled;
 
-  CBitmap * mask_bitmap = it->second;
+  MiniWindowImage * mask_bitmap = it->second.get ();
 
-  BITMAP  bi;
-  bitmap->GetBitmap(&bi);
+  BITMAP bi;
+  if (!bitmap->GetBitmap (&bi))
+    return eUnableToLoadImage;
 
-  // calculate size of desired rectangle
-  long iWidth = FixRight (Right) - Left;
-  long iHeight = FixBottom (Bottom) - Top;
+  const long right = FixRight (Right);
+  const long bottom = FixBottom (Bottom);
 
   // constrain to what we actually have
   if (SrcLeft < 0)
@@ -3570,14 +3793,16 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
   if (SrcBottom <= 0)
     SrcBottom =  bi.bmHeight + SrcBottom;
 
-  // width and height are the smaller of the two rectangles
-  iWidth = min (iWidth, SrcRight - SrcLeft);
-  iHeight = min (iHeight, SrcBottom - SrcTop);
-
-  if (iWidth <= 0 || iHeight <= 0)   // sanity check
+  // Check for empty rectangles before subtracting to avoid signed overflow.
+  if (right <= Left || bottom <= Top || SrcRight <= SrcLeft || SrcBottom <= SrcTop)
     return eOK;
 
-  mask_bitmap->GetBitmap(&bi);
+  // Both starts are nonnegative, so these positive differences fit in a long.
+  const long iWidth = min (right - Left, SrcRight - SrcLeft);
+  const long iHeight = min (bottom - Top, SrcBottom - SrcTop);
+
+  if (!mask_bitmap->GetBitmap (&bi))
+    return eUnableToLoadImage;
 
   // adjust down in case we don't use whole image
   SrcRight = SrcLeft + iWidth;
@@ -3591,182 +3816,64 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
 
   if (Mode < 0 || Mode > 1)
     return eUnknownOption;
+  if (Opacity == 0.0)
+    return eOK;
 
 
-  // merge layer (from image id)
-  CDC A_DC;
-  A_DC.CreateCompatibleDC(&(*pdc));
-
-  BITMAPINFO bmi;
-  ZeroMemory (&bmi, sizeof bmi);
-
-  bmi.bmiHeader.biSize = sizeof bmi;
-  bmi.bmiHeader.biWidth =          iWidth;
-  bmi.bmiHeader.biHeight =         iHeight;
-  bmi.bmiHeader.biPlanes =         1;
-  bmi.bmiHeader.biBitCount =       24;
-  bmi.bmiHeader.biCompression =    BI_RGB;
-  bmi.bmiHeader.biSizeImage =      iHeight * BytesPerLine (iWidth, 24);
-
-  unsigned char * pA = NULL;
-
-  HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
-
-  if (!hbmA)
-    return eUnableToLoadImage;
-
-  HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
-
-  CDC bmDC;   // for loading bitmaps into
-  bmDC.CreateCompatibleDC(&(*pdc));
-
-  //copy part from image to upper layer
-  CBitmap *pOldbmp = bmDC.SelectObject(bitmap);
-  A_DC.BitBlt (0, 0, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCCOPY);
-  bmDC.SelectObject(pOldbmp);
-
-
-  // base image (from miniwindow)
-
-  CDC B_DC;
-  B_DC.CreateCompatibleDC(&(*pdc));
-  CBitmap B_bmp;
-
-  unsigned char * pB = NULL;
-
-  HBITMAP hbmB = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
-
-  if (!hbmB)
+  if (bitmap->alpha && bitmap->alpha->owned_pixels.empty ()
+      && mask_bitmap->alpha && mask_bitmap->alpha->owned_pixels.empty ())
     {
-    SelectObject(A_DC.m_hDC, hOldAbmp);
-    DeleteObject (hbmA);
-    return eUnableToLoadImage;
+    MiniWindowBlendTarget target;
+    if (!target.CopyFrom (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight) || !::GdiFlush ())
+      return eUnableToLoadImage;
+    if (Opacity < 1.0)
+      MergeDirectPixels<false> (target, *bitmap->alpha, *mask_bitmap->alpha,
+        SrcLeft, SrcTop, iWidth, iHeight, Mode, Opacity);
+    else
+      MergeDirectPixels<true> (target, *bitmap->alpha, *mask_bitmap->alpha,
+        SrcLeft, SrcTop, iWidth, iHeight, Mode, Opacity);
+    return target.Put (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight);
     }
 
-  HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
-
-  // copy base image from miniwindow to bitmap
-  B_DC.BitBlt (0, 0, iWidth, iHeight, &(*pdc), Left, Top, SRCCOPY);
-
-
-  // mask image
-
-  CDC M_DC;
-  M_DC.CreateCompatibleDC(&(*pdc));
-  CBitmap M_bmp;
-
-  unsigned char * pM = NULL;
-
-  HBITMAP hbmM = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pM, NULL, 0);
-
-  if (!hbmM)
-    {
-    SelectObject(A_DC.m_hDC, hOldAbmp);
-    SelectObject(B_DC.m_hDC, hOldBbmp);
-    DeleteObject (hbmA);
-    DeleteObject (hbmB);
+  CDC source_dc;
+  MiniWindowBlendTarget source, target, mask;
+  if (!source_dc.CreateCompatibleDC (pdc)
+      || !source.CopyFrom (source_dc, bitmap, SrcLeft, SrcTop, iWidth, iHeight)
+      || !target.CopyFrom (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight, false)
+      || !mask.CopyFrom (source_dc, mask_bitmap, SrcLeft, SrcTop, iWidth, iHeight)
+      || !::GdiFlush ())
     return eUnableToLoadImage;
-    }
 
-  HBITMAP hOldMbmp = (HBITMAP) SelectObject(M_DC.m_hDC, hbmM);
-
-  // copy mask image from image to bitmap
-  pOldbmp = bmDC.SelectObject(mask_bitmap);
-  M_DC.BitBlt (0, 0, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCCOPY);
-  bmDC.SelectObject(pOldbmp);
-
-  long count = bmi.bmiHeader.biSizeImage;
-  long perline = BytesPerLine (iWidth, 24);
-
-  long i;
-
-  // do the merge
-
-#define Blend_Mask(A,B,M) ((uint8) ((A * M + B * (255 - M)) / 255) )
+  const unsigned char * pA = source.pixels, * pM = mask.pixels;
+  unsigned char * pB = target.pixels;
+  const int perline = target.stride;
+  const size_t count = static_cast<size_t> (perline) * iHeight;
 
   switch (Mode)
     {
     case 0:     // normal
       if (Opacity < 1.0)
         {
-        for (i = 0; i < count; i++)
+        for (size_t i = 0; i < count; i++)
           {
-          pB [i] = Simple_Opacity (pB [i], Blend_Mask (pA [i], pB [i], pM [i]), Opacity);
+          pB [i] = MiniWindowAlphaImage::BlendChannel<false> (pA [i], pB [i], pM [i], Opacity);
           }
         }
       else
         {
-        for (i = 0; i < count; i ++)
-          pB [i]  = Blend_Mask (pA [i], pB [i], pM [i]);
+        for (size_t i = 0; i < count; i ++)
+          pB [i]  = MiniWindowAlphaImage::BlendChannel<true> (pA [i], pB [i], pM [i], Opacity);
         }
       break;  // end of mode 0
 
     case 1:  // transparent on pixel at 0,0
       {
-      COLORREF opaque = ::GetPixel (A_DC, 0, 0);
-
-      long row;
-     for (row = 0; row < iHeight; row++)
-      {
-      long base = row * perline;
-      unsigned char rA, gA, bA, rB, gB, bB;
+      const unsigned char * key = pA + static_cast<size_t> (iHeight - 1) * perline;
+      const COLORREF colourKey = RGB (key [2], key [1], key [0]);
       if (Opacity < 1.0)
-        for (i = 0; i < perline - 2; )
-          {
-          bA = pA [base + i];
-          gA = pA [base + i + 1];
-          rA = pA [base + i + 2];
-          bB = pB [base + i];
-          gB = pB [base + i + 1];
-          rB = pB [base + i + 2];
-
-          // if this pixel is the opaque one, take the base pixel instead
-          if (RGB (rA, gA, bA) == opaque)
-            {
-            rA = rB;
-            gA = gB;
-            bA = bB;
-            }
-
-          pB [base + i] = Simple_Opacity (bB, Blend_Mask (bA, bB, pM [base + i]), Opacity);
-          i++;
-
-          pB [base + i] = Simple_Opacity (gB, Blend_Mask (gA, gB, pM [base + i]), Opacity);
-          i++;
-
-          pB [base + i] = Simple_Opacity (rB, Blend_Mask (rA, rB, pM [base + i]), Opacity);
-          i++;
-          }
+        MergeMaskedPixels<false> (pB, pA, pM, iWidth, iHeight, perline, Opacity, colourKey);
       else
-        for (i = 0; i < perline - 2;)
-          {
-          bA = pA [base + i];
-          gA = pA [base + i + 1];
-          rA = pA [base + i + 2];
-          bB = pB [base + i];
-          gB = pB [base + i + 1];
-          rB = pB [base + i + 2];
-
-          // if this pixel is the opaque one, take the base pixel instead
-          if (RGB (rA, gA, bA) == opaque)
-            {
-            rA = rB;
-            gA = gB;
-            bA = bB;
-            }
-
-          pB [base + i] = Blend_Mask (bA, bB, pM [base + i]);
-          i++;
-
-          pB [base + i] = Blend_Mask (gA, gB, pM [base + i]);
-          i++;
-
-          pB [base + i] = Blend_Mask (rA, rB, pM [base + i]);
-          i++;
-          }   // end Opacity == 1
-        }     // end for loop
-
-
+        MergeMaskedPixels<true> (pB, pA, pM, iWidth, iHeight, perline, Opacity, colourKey);
       }
       break;    // end of mode 1
 
@@ -3775,20 +3882,7 @@ long CMiniWindow::MergeImageAlpha(LPCTSTR ImageId, LPCTSTR MaskId,
     } // end of switch on Mode
 
 
-  // copy result back
-
-  pdc->BitBlt (Left, Top, iWidth, iHeight, &B_DC, 0, 0, SRCCOPY);
-
-
-  SelectObject(A_DC.m_hDC, hOldAbmp);
-  SelectObject(B_DC.m_hDC, hOldBbmp);
-  SelectObject(M_DC.m_hDC, hOldMbmp);
-
-  DeleteObject (hbmA);
-  DeleteObject (hbmB);
-  DeleteObject (hbmM);
-
-  return eOK;
+  return target.Put (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight);
 
   } // end of CMiniWindow::MergeImageAlpha
 
@@ -4114,149 +4208,245 @@ long CMiniWindow::HotspotTooltip(LPCTSTR HotspotId,
 long CMiniWindow::DrawImageAlpha(LPCTSTR ImageId,
                     long Left, long Top, long Right, long Bottom,
                     double Opacity,
-                    long SrcLeft, long SrcTop)
+                    long SrcLeft, long SrcTop,
+                    long SrcRight, long SrcBottom, bool Scale)
   {
-
-  // constrain to what we actually have
-  if (Left < 0)
-    Left = 0;
-  if (Top < 0)
-    Top = 0;
-  if (Right > m_iWidth)
-    Right = m_iWidth;
-  if (Bottom > m_iHeight)
-    Bottom = m_iHeight;
-
-  if (Opacity < 0.0 || Opacity > 1.0)
+  if (!NormalizeBlendOpacity (Opacity))
     return eBadParameter;
-
-  // image to be merged
   ImageMapIterator it = m_Images.find (ImageId);
-
   if (it == m_Images.end ())
     return eImageNotInstalled;
-
-  CBitmap * bitmap = it->second;
-
-
-  BITMAP  bi;
-  bitmap->GetBitmap(&bi);
-
-  // can't do it unless we have alpha channel
-  if (bi.bmBitsPixel != 32)
-    return eImageNotInstalled;
-
-  // calculate size of desired rectangle
-  long iWidth = FixRight (Right) - Left;
-  long iHeight = FixBottom (Bottom) - Top;
-
-  // constrain to what we actually have
-  if (SrcLeft < 0)
-    SrcLeft = 0;
-  if (SrcTop < 0)
-    SrcTop = 0;
-
-  if (iWidth <= 0 || iHeight <= 0)   // sanity check
-    return eOK;
-
-  // merge layer (from image id)
-  CDC A_DC;
-  A_DC.CreateCompatibleDC(&(*pdc));
-
-  BITMAPINFO bmi;
-  ZeroMemory (&bmi, sizeof bmi);
-
-  bmi.bmiHeader.biSize = sizeof bmi;
-  bmi.bmiHeader.biWidth =          iWidth;
-  bmi.bmiHeader.biHeight =         iHeight;
-  bmi.bmiHeader.biPlanes =         1;
-  bmi.bmiHeader.biBitCount =       32;
-  bmi.bmiHeader.biCompression =    BI_RGB;
-  bmi.bmiHeader.biSizeImage =      iHeight * BytesPerLine (iWidth, 32);
-
-  unsigned char * pA = NULL;
-
-  HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
-
-  if (!hbmA)
+  CBitmap * bitmap = it->second.get ();
+  BITMAP bi = {};
+  if (!bitmap->GetBitmap (&bi))
     return eUnableToLoadImage;
 
-  HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
-
-  CDC bmDC;   // for loading bitmaps into
-  bmDC.CreateCompatibleDC(&(*pdc));
-
-  //copy part from image to upper layer
-  CBitmap *pOldbmp = bmDC.SelectObject(bitmap);
-  A_DC.BitBlt (0, 0, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCCOPY);
-  bmDC.SelectObject(pOldbmp);
-
-
-  // base image (from miniwindow)
-
-  CDC B_DC;
-  B_DC.CreateCompatibleDC(&(*pdc));
-  CBitmap B_bmp;
-
-  unsigned char * pB = NULL;
-
-  HBITMAP hbmB = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
-
-  if (!hbmB)
+  long width, height, source_width, source_height;
+  long left, top, visible_width, visible_height;
+  if (Scale)
     {
-    SelectObject(A_DC.m_hDC, hOldAbmp);
-    DeleteObject (hbmA);
-    return eUnableToLoadImage;
-    }
+    if (SrcRight <= 0)
+      SrcRight = bi.bmWidth + SrcRight;
+    if (SrcBottom <= 0)
+      SrcBottom = bi.bmHeight + SrcBottom;
+    if (SrcLeft < 0 || SrcTop < 0 || SrcRight > bi.bmWidth || SrcBottom > bi.bmHeight
+        || SrcLeft >= SrcRight || SrcTop >= SrcBottom)
+      return eBadParameter;
+    source_width = SrcRight - SrcLeft;
+    source_height = SrcBottom - SrcTop;
 
-  HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
-
-  // copy base image from miniwindow to bitmap
-  B_DC.BitBlt (0, 0, iWidth, iHeight, &(*pdc), Left, Top, SRCCOPY);
-
-
-  long count = bmi.bmiHeader.biSizeImage;
-
-  long i;
-
-  // do the merge
-
-#define Blend_Mask(A,B,M) ((uint8) ((A * M + B * (255 - M)) / 255) )
-
-  if (Opacity < 1.0)
-    {
-    for (i = 0; i < count; i += 4)
-      {
-      pB [i]     = Simple_Opacity (pB [i], Blend_Mask (pA [i], pB [i], pA [i + 3]), Opacity);
-      pB [i + 1] = Simple_Opacity (pB [i + 1], Blend_Mask (pA [i + 1], pB [i + 1], pA [i + 3]), Opacity);
-      pB [i + 2] = Simple_Opacity (pB [i + 2], Blend_Mask (pA [i + 2], pB [i + 2], pA [i + 3]), Opacity);
-      }
+    const long right = FixRight (Right), bottom = FixBottom (Bottom);
+    const __int64 w = static_cast<__int64> (right) - Left;
+    const __int64 h = static_cast<__int64> (bottom) - Top;
+    if (w <= 0 || h <= 0)
+      return eOK;
+    if (w > INT_MAX || h > INT_MAX)
+      return eBadParameter;
+    width = static_cast<long> (w);
+    height = static_cast<long> (h);
+    left = max (Left, 0L);
+    top = max (Top, 0L);
+    const long clipped_right = min (right, static_cast<long> (m_iWidth));
+    const long clipped_bottom = min (bottom, static_cast<long> (m_iHeight));
+    if (clipped_right <= left || clipped_bottom <= top)
+      return eOK;
+    visible_width = clipped_right - left;
+    visible_height = clipped_bottom - top;
     }
   else
     {
-    for (i = 0; i < count; i += 4)
+    if (bi.bmBitsPixel != 32)
+      return eImageNotInstalled;
+    left = Left = max (Left, 0L);
+    top = Top = max (Top, 0L);
+    SrcLeft = max (SrcLeft, 0L);
+    SrcTop = max (SrcTop, 0L);
+    const long right = min (FixRight (Right), static_cast<long> (m_iWidth));
+    const long bottom = min (FixBottom (Bottom), static_cast<long> (m_iHeight));
+    if (left >= right || top >= bottom || SrcLeft >= bi.bmWidth || SrcTop >= bi.bmHeight)
+      return eOK;
+    width = source_width = visible_width = min (right - left, bi.bmWidth - SrcLeft);
+    height = source_height = visible_height = min (bottom - top, bi.bmHeight - SrcTop);
+    }
+  if (Opacity == 0.0)
+    return eOK;
+
+  MiniWindowAlphaScratch storage, target;
+  MiniWindowAlphaImage crop (NULL, source_width, source_height, 0);
+  const MiniWindowAlphaImage * image = AlphaSource (pdc, *it->second,
+    bi, Scale, SrcLeft, SrcTop, crop, storage);
+  if (!image)
+    return eUnableToLoadImage;
+
+  const bool resized = source_width != width || source_height != height;
+  // Do not index a GDI crop until draw() flushes the pending pixel copies.
+  if (resized && !storage.pixels)
+    {
+    const bool indexed = image->PrepareRuns ();
+    if (indexed ? image->runs.empty ()
+                : !image->HasVisiblePixels (SrcLeft, SrcTop, source_width, source_height))
+      return eOK;
+    }
+
+  const HDC destination = pdc->GetSafeHdc ();
+  const auto draw = [&] (long x, long y, long w, long h) -> long
+    {
+    if (!target.CopyFrom (destination, x, y, w, h) || !::GdiFlush ())
+      return eUnableToLoadImage;
+    image->BlendScaled (target.pixels, target.width * 4, SrcLeft, SrcTop,
+      source_width, source_height, width, height, x - Left, y - Top, w, h, Opacity);
+    return ::BitBlt (destination, x, y, w, h, target.DC (), 0, 0, SRCCOPY)
+      ? eOK : eUnableToLoadImage;
+    };
+
+  if (resized)
+    return draw (left, top, visible_width, visible_height);
+
+  const long sx = SrcLeft + (left - Left), sy = SrcTop + (top - Top);
+  // At 1:1, transfer only visible rectangles when the index fits.
+  if (image == &crop || !image->PrepareRectangles ())
+    {
+    if (!image->ignore_alpha)
       {
-      pB [i]      = Blend_Mask (pA [i], pB [i], pA [i + 3]);
-      pB [i + 1]  = Blend_Mask (pA [i + 1], pB [i + 1], pA [i + 3]);
-      pB [i + 2]  = Blend_Mask (pA [i + 2], pB [i + 2], pA [i + 3]);
+      if (storage.pixels && !::GdiFlush ())
+        return eUnableToLoadImage;
+      if (!image->HasVisiblePixels (sx, sy, visible_width, visible_height))
+        return eOK;
+      }
+    return draw (left, top, visible_width, visible_height);
+    }
+
+  struct Transfer
+    {
+    long x, y, width, height;
+    MiniWindowAlphaScratch * scratch;
+    int scratch_y;
+    size_t backup_offset;
+    };
+  const bool multiple = image->rectangles.size () > 1;
+  std::vector<Transfer> transfers;
+  if (multiple) transfers.reserve (image->rectangles.size ());
+  for (const MiniWindowAlphaImage::Rect & r : image->rectangles)
+    {
+    const long x = max (sx, static_cast<long> (r.left));
+    const long y = max (sy, static_cast<long> (r.top));
+    const long right = min (sx + visible_width, static_cast<long> (r.right));
+    const long bottom = min (sy + visible_height, static_cast<long> (r.bottom));
+    if (x < right && y < bottom)
+      {
+      const Transfer transfer = {left + (x - sx), top + (y - sy), right - x, bottom - y, NULL, 0, 0};
+      if (!multiple)
+        return image->HasVisiblePixels (x, y, transfer.width, transfer.height)
+          ? draw (transfer.x, transfer.y, transfer.width, transfer.height) : eOK;
+      transfers.push_back (transfer);
       }
     }
 
+  if (transfers.empty ()) return eOK;
+  if (transfers.size () == 1)
+    {
+    const Transfer & transfer = transfers.front ();
+    return draw (transfer.x, transfer.y, transfer.width, transfer.height);
+    }
 
-  // copy result back
+  // Stack rectangles so the drawing bitmap needs at most twice the area
+  // it contains. Keep a compact backup of only the pixels to be painted.
+  std::sort (transfers.begin (), transfers.end (), [] (const Transfer & a, const Transfer & b)
+    { return a.width > b.width; });
+  size_t backup_bytes = 0;
+  std::vector<std::unique_ptr<MiniWindowAlphaScratch>> extra_scratch;
+  for (size_t first = 0; first < transfers.size (); )
+    {
+    const long stack_width = transfers [first].width;
+    const size_t max_height = MAXDWORD / (static_cast<unsigned __int64> (stack_width) * 4);
+    size_t last = first, stack_height = 0;
+    unsigned __int64 stack_pixels = 0;
+    for (; last < transfers.size (); ++last)
+      {
+      Transfer & t = transfers [last];
+      const unsigned __int64 pixels = static_cast<unsigned __int64> (t.width) * t.height;
+      if (static_cast<size_t> (t.height) > max_height - stack_height
+          || stack_width * (stack_height + t.height) > 2 * (stack_pixels + pixels))
+        break;
+      if (pixels * 4 > static_cast<size_t> (-1) - backup_bytes)
+        return eUnableToLoadImage;
+      t.scratch_y = static_cast<int> (stack_height);
+      t.backup_offset = backup_bytes;
+      stack_height += t.height;
+      stack_pixels += pixels;
+      backup_bytes += static_cast<size_t> (pixels * 4);
+      }
+    if (first == last)
+      return eUnableToLoadImage;
 
-  pdc->BitBlt (Left, Top, iWidth, iHeight, &B_DC, 0, 0, SRCCOPY);
+    MiniWindowAlphaScratch * scratch = &target;
+    if (first != 0)
+      {
+      extra_scratch.push_back (std::make_unique<MiniWindowAlphaScratch> ());
+      scratch = extra_scratch.back ().get ();
+      }
+    if (!scratch->Ensure (stack_width, static_cast<int> (stack_height)))
+      return eUnableToLoadImage;
+    for (; first < last; ++first)
+      transfers [first].scratch = scratch;
+    }
+  std::unique_ptr<unsigned char[]> backup (new (std::nothrow) unsigned char [backup_bytes]);
+  if (!backup)
+    return eUnableToLoadImage;
 
+  // Finish every read before changing the window.
+  for (const Transfer & t : transfers)
+    if (!::BitBlt (t.scratch->DC (), 0, t.scratch_y, t.width, t.height, destination, t.x, t.y, SRCCOPY))
+      return eUnableToLoadImage;
+  if (!::GdiFlush ())
+    return eUnableToLoadImage;
 
-  SelectObject(A_DC.m_hDC, hOldAbmp);
-  SelectObject(B_DC.m_hDC, hOldBbmp);
+  const auto copy_pixels = [] (unsigned char * destination, int destination_stride,
+                               const unsigned char * source, int source_stride, int width, int height)
+    {
+    const size_t row_bytes = static_cast<size_t> (width) * 4;
+    if (row_bytes == static_cast<size_t> (destination_stride) && row_bytes == static_cast<size_t> (source_stride))
+      {
+      memcpy (destination, source, row_bytes * height);
+      return;
+      }
+    for (int y = 0; y < height; ++y)
+      memcpy (destination + static_cast<size_t> (y) * destination_stride,
+              source + static_cast<size_t> (y) * source_stride, row_bytes);
+    };
+  for (const Transfer & t : transfers)
+    {
+    const int stride = t.scratch->width * 4;
+    unsigned char * pixels = t.scratch->pixels + static_cast<size_t> (t.scratch_y) * stride;
+    copy_pixels (backup.get () + t.backup_offset, t.width * 4, pixels, stride, t.width, t.height);
+    image->Blend (pixels, stride, sx + (t.x - left), sy + (t.y - top), t.width, t.height, Opacity);
+    }
 
-  DeleteObject (hbmA);
-  DeleteObject (hbmB);
+  const auto put = [&] (const Transfer & t)
+    {
+    return ::BitBlt (destination, t.x, t.y, t.width, t.height, t.scratch->DC (), 0, t.scratch_y, SRCCOPY);
+    };
+  size_t written = 0;
+  for (; written < transfers.size (); ++written)
+    if (!put (transfers [written]))
+      break;
+  const bool flushed = ::GdiFlush ();
+  if (written == transfers.size () && flushed)
+    return eOK;
 
-  return eOK;
-
-
+  // Restore every attempted rectangle, including the one whose write failed.
+  const size_t restore = min (written + 1, transfers.size ());
+  for (size_t i = 0; i < restore; ++i)
+    {
+    const Transfer & t = transfers [i];
+    const int stride = t.scratch->width * 4;
+    unsigned char * pixels = t.scratch->pixels + static_cast<size_t> (t.scratch_y) * stride;
+    copy_pixels (pixels, stride, backup.get () + t.backup_offset, t.width * 4, t.width, t.height);
+    }
+  for (size_t i = 0; i < restore; ++i)
+    put (transfers [i]);
+  ::GdiFlush ();
+  return eUnableToLoadImage;
   } // end of  CMiniWindow::DrawImageAlpha
 
 long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
@@ -4280,19 +4470,22 @@ long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
   if (it == m_Images.end ())
     return eImageNotInstalled;
 
-  CBitmap * bitmap = it->second;
+  CBitmap * bitmap = it->second.get ();
 
 
-  BITMAP  bi;
-  bitmap->GetBitmap(&bi);
+  BITMAP bi = {};
+  if (!bitmap->GetBitmap (&bi))
+    return eUnableToLoadImage;
 
   // can't do it unless we have alpha channel
   if (bi.bmBitsPixel != 32)
     return eImageNotInstalled;
 
   // calculate size of desired rectangle
-  long iWidth = FixRight (Right) - Left;
-  long iHeight = FixBottom (Bottom) - Top;
+  const long right = FixRight (Right), bottom = FixBottom (Bottom);
+  if (right <= Left || bottom <= Top)
+    return eOK;
+  const long iWidth = right - Left, iHeight = bottom - Top;
 
   // constrain to what we actually have
   if (SrcLeft < 0)
@@ -4300,90 +4493,34 @@ long CMiniWindow::GetImageAlpha(LPCTSTR ImageId,
   if (SrcTop < 0)
     SrcTop = 0;
 
-  if (iWidth <= 0 || iHeight <= 0)   // sanity check
-    return eOK;
-
-  // merge layer (from image id)
-  CDC A_DC;
-  A_DC.CreateCompatibleDC(&(*pdc));
-
-  BITMAPINFO bmi;
-  ZeroMemory (&bmi, sizeof bmi);
-
-  bmi.bmiHeader.biSize = sizeof bmi;
-  bmi.bmiHeader.biWidth =          iWidth;
-  bmi.bmiHeader.biHeight =         iHeight;
-  bmi.bmiHeader.biPlanes =         1;
-  bmi.bmiHeader.biBitCount =       32;
-  bmi.bmiHeader.biCompression =    BI_RGB;
-  bmi.bmiHeader.biSizeImage =      iHeight * BytesPerLine (iWidth, 32);
-
-  unsigned char * pA = NULL;
-
-  HBITMAP hbmA = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pA, NULL, 0);
-
-  if (!hbmA)
+  CDC source;
+  if (!source.CreateCompatibleDC (pdc))
+    return eUnableToLoadImage;
+  MiniWindowSelectedObject selected (&source, bitmap);
+  MiniWindowAlphaScratch scratch;
+  if (!selected.Valid () || !scratch.Ensure (iWidth, iHeight))
     return eUnableToLoadImage;
 
-  HBITMAP hOldAbmp = (HBITMAP) SelectObject(A_DC.m_hDC, hbmA);
-
-  CDC bmDC;   // for loading bitmaps into
-  bmDC.CreateCompatibleDC(&(*pdc));
-
-  //copy part from image to upper layer
-  CBitmap *pOldbmp = bmDC.SelectObject(bitmap);
-  A_DC.BitBlt (0, 0, iWidth, iHeight, &bmDC, SrcLeft, SrcTop, SRCCOPY);
-  bmDC.SelectObject(pOldbmp);
-
-
-  // base image (from miniwindow)
-
-  CDC B_DC;
-  B_DC.CreateCompatibleDC(&(*pdc));
-  CBitmap B_bmp;
-
-  unsigned char * pB = NULL;
-
-  HBITMAP hbmB = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void**) &pB, NULL, 0);
-
-  if (!hbmB)
+  // A fresh DIB is black outside the source crop.
+  const long w = min (iWidth, bi.bmWidth - SrcLeft);
+  const long h = min (iHeight, bi.bmHeight - SrcTop);
+  if (w > 0 && h > 0)
     {
-    SelectObject(A_DC.m_hDC, hOldAbmp);
-    DeleteObject (hbmA);
-    return eUnableToLoadImage;
+    if (!::BitBlt (scratch.DC (), 0, 0, w, h, source.GetSafeHdc (), SrcLeft, SrcTop, SRCCOPY)
+        || !::GdiFlush ())
+      return eUnableToLoadImage;
+    for (int y = 0; y < h; ++y)
+      {
+      unsigned char * pixel = scratch.pixels + static_cast<size_t> (y) * scratch.width * 4;
+      for (int x = 0; x < w; ++x, pixel += 4)
+        {
+        pixel [0] = pixel [1] = pixel [2] = pixel [3];
+        pixel [3] = 0;
+        }
+      }
     }
-
-  HBITMAP hOldBbmp = (HBITMAP) SelectObject(B_DC.m_hDC, hbmB);
-
-
-  long count = bmi.bmiHeader.biSizeImage;
-
-  long i;
-
-  // copy alpha channel into window
-
-  for (i = 0; i < count; i += 4)
-    {
-    pB [i]      = pA [i + 3];
-    pB [i + 1]  = pA [i + 3];
-    pB [i + 2]  = pA [i + 3];
-    }
-
-
-  // copy result back
-
-  pdc->BitBlt (Left, Top, iWidth, iHeight, &B_DC, 0, 0, SRCCOPY);
-
-
-  SelectObject(A_DC.m_hDC, hOldAbmp);
-  SelectObject(B_DC.m_hDC, hOldBbmp);
-
-  DeleteObject (hbmA);
-  DeleteObject (hbmB);
-
-  return eOK;
-
-
+  return ::BitBlt (pdc->GetSafeHdc (), Left, Top, iWidth, iHeight,
+                   scratch.DC (), 0, 0, SRCCOPY) ? eOK : eUnableToLoadImage;
   } // end of  CMiniWindow::GetImageAlpha
 
 
@@ -4541,7 +4678,7 @@ long CMiniWindow::TransformImage(LPCTSTR ImageId, float Left, float Top, short M
   if (it == m_Images.end ())
     return eImageNotInstalled;
 
-  CBitmap * bitmap = it->second;
+  CBitmap * bitmap = it->second.get ();
 
   pdc->SetBkMode (TRANSPARENT);
 

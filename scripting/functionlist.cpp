@@ -406,7 +406,7 @@ tInternalFunctionsTable InternalFunctionsTable [] = {
 { "WindowDeleteHotspot" ,        "( WindowName , HotspotId )" } ,
 { "WindowDragHandler" ,          "( WindowName , HotspotId , MoveCallback , ReleaseCallback , Flags )" } ,
 { "WindowDrawImage" ,            "( WindowName , ImageId , Left , Top , Right , Bottom , Mode , SrcLeft , SrcTop , SrcRight , SrcBottom )" } ,
-{ "WindowDrawImageAlpha" ,       "( WindowName , ImageId , Left , Top , Right , Bottom , Opacity , SrcLeft , SrcTop )" } ,
+{ "WindowDrawImageAlpha" ,       "( WindowName , ImageId , Left , Top , Right , Bottom , Opacity , SrcLeft , SrcTop , SrcRight , SrcBottom )" } ,
 { "WindowFilter" ,               "( WindowName , Left , Top , Right , Bottom , Operation , Options )" } ,
 { "WindowFont" ,                 "( WindowName , FontId , FontName , Size , Bold , Italic , Underline , Strikeout , Charset , PitchAndFamily )" } ,
 { "WindowFontInfo" ,             "( WindowName , FontId , InfoType )" } ,

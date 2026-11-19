@@ -10,6 +10,7 @@
 #include "..\TextView.h"
 #include "..\sendvw.h"
 #include "..\dialogs\DebugLuaDlg.h"
+#include "..\blending.h"
 
 const char mushclient_typename[] = "mushclient.world";
 
@@ -6132,25 +6133,46 @@ static int L_WindowBezier (lua_State *L)
   return 1;  // number of result fields
   } // end of L_WindowBezier
 
+// Invalid coordinates leave the same status on the stack as invalid source bounds.
+template<size_t Count>
+static bool ReadImageCoordinates (lua_State * L, int first, long (&coordinates) [Count], bool optional = false)
+  {
+  for (size_t i = 0; i < Count; ++i)
+    {
+    const int argument = first + static_cast<int> (i);
+    const double number = optional ? my_optnumber (L, argument, 0) : my_checknumber (L, argument);
+    if (!ReadImageCoordinate (number, coordinates [i]))
+      {
+      lua_pushnumber (L, eBadParameter);
+      return false;
+      }
+    }
+  return true;
+  }
+
 //----------------------------------------
 //  world.WindowBlendImage
 //----------------------------------------
 static int L_WindowBlendImage (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
+  long destination [4], source [4];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 9, source, true))
+    return 1;
+
   lua_pushnumber (L, pDoc->WindowBlendImage (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_checknumber (L, 7),    // Mode
             my_optnumber (L, 8, 1),   // Opacity
-            my_optnumber (L, 9, 0),   // SrcLeft
-            my_optnumber (L, 10, 0),  // SrcTop
-            my_optnumber (L, 11, 0),  // SrcRight
-            my_optnumber (L, 12, 0)   // SrcBottom
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
+            source [2],  // SrcRight
+            source [3]  // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowBlendImage
@@ -6282,18 +6304,22 @@ static int L_WindowDragHandler (lua_State *L)
 static int L_WindowDrawImage (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
+  long destination [4], source [4];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 8, source, true))
+    return 1;
+
   lua_pushnumber (L, pDoc->WindowDrawImage (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_optnumber (L, 7, 1),   // Mode
-            my_optnumber (L, 8, 0),   // SrcLeft
-            my_optnumber (L, 9, 0),   // SrcTop
-            my_optnumber (L, 10, 0),  // SrcRight
-            my_optnumber (L, 11, 0)   // SrcBottom
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
+            source [2],  // SrcRight
+            source [3]  // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowDrawImage
@@ -6304,16 +6330,29 @@ static int L_WindowDrawImage (lua_State *L)
 static int L_WindowDrawImageAlpha (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
+  long destination [4], source [2];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 8, source, true))
+    return 1;
+
+  // Omit both source bounds to preserve unscaled drawing.
+  COleVariant source_right (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
+  COleVariant source_bottom (static_cast<long> (DISP_E_PARAMNOTFOUND), VT_ERROR);
+  if (!lua_isnoneornil (L, 10))
+    source_right = COleVariant (my_checknumber (L, 10));
+  if (!lua_isnoneornil (L, 11))
+    source_bottom = COleVariant (my_checknumber (L, 11));
   lua_pushnumber (L, pDoc->WindowDrawImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_optnumber (L, 7, 1),   // Opacity
-            my_optnumber (L, 8, 0),   // SrcLeft
-            my_optnumber (L, 9, 0)    // SrcTop
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
+            source_right,           // SrcRight
+            source_bottom           // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowDrawImageAlpha
@@ -6389,15 +6428,19 @@ static int L_WindowFontList (lua_State *L)
 static int L_WindowGetImageAlpha (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
+  long destination [4], source [2];
+  if (!ReadImageCoordinates (L, 3, destination) || !ReadImageCoordinates (L, 7, source, true))
+    return 1;
+
   lua_pushnumber (L, pDoc->WindowGetImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
-            my_checknumber (L, 3),    // Left
-            my_checknumber (L, 4),    // Top
-            my_checknumber (L, 5),    // Right
-            my_checknumber (L, 6),    // Bottom
-            my_optnumber (L, 7, 0),   // SrcLeft
-            my_optnumber (L, 8, 0)    // SrcTop
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
+            source [0],  // SrcLeft
+            source [1]  // SrcTop
             ));
   return 1;  // number of result fields
   } // end of L_WindowGetImageAlpha
@@ -6691,20 +6734,24 @@ static int L_WindowMenu (lua_State *L)
 static int L_WindowMergeImageAlpha (lua_State *L)
   {
   CMUSHclientDoc *pDoc = doc (L);
+  long destination [4], source [4];
+  if (!ReadImageCoordinates (L, 4, destination) || !ReadImageCoordinates (L, 10, source, true))
+    return 1;
+
   lua_pushnumber (L, pDoc->WindowMergeImageAlpha (
             my_checkstring (L, 1),    // Name
             my_checkstring (L, 2),    // ImageId
             my_checkstring (L, 3),    // MaskId
-            my_checknumber (L, 4),    // Left
-            my_checknumber (L, 5),    // Top
-            my_checknumber (L, 6),    // Right
-            my_checknumber (L, 7),    // Bottom
+            destination [0],  // Left
+            destination [1],  // Top
+            destination [2],  // Right
+            destination [3],  // Bottom
             my_checknumber (L, 8),    // Mode
             my_optnumber (L, 9, 1),   // Opacity
-            my_optnumber (L, 10, 0),  // SrcLeft
-            my_optnumber (L, 11, 0),  // SrcTop
-            my_optnumber (L, 12, 0),  // SrcRight
-            my_optnumber (L, 13, 0)   // SrcBottom
+            source [0],  // SrcLeft
+            source [1],  // SrcTop
+            source [2],  // SrcRight
+            source [3]  // SrcBottom
             ));
   return 1;  // number of result fields
   } // end of L_WindowMergeImageAlpha
@@ -7928,70 +7975,9 @@ static flags_pair miniwindow_flags [] =
 
   // WindowBlendImage modes (argument 7)
 
-  {  "blend_normal",                                   1 },  
-  {  "blend_average",                                  2 },  
-  {  "blend_interpolate",                             3 },  
-  {  "blend_dissolve",                                 4 },  
-  {  "blend_darken",                                   5 },  
-  {  "blend_multiply",                                 6 },  
-  {  "blend_colour_burn",                              7 },  
-  {  "blend_linear_burn",                              8 },  
-  {  "blend_inverse_colour_burn",                      9 },  
-  {  "blend_subtract",                                10 },  
-  {  "blend_lighten",                                 11 },  
-  {  "blend_screen",                                  12 },  
-  {  "blend_colour_dodge",                            13 },  
-  {  "blend_linear_dodge",                            14 },  
-  {  "blend_inverse_colour_dodge",                    15 },  
-  {  "blend_add",                                     16 },  
-  {  "blend_overlay",                                 17 },  
-  {  "blend_soft_light",                              18 },  
-  {  "blend_hard_light",                              19 },  
-  {  "blend_vivid_light",                             20 },  
-  {  "blend_linear_light",                            21 },  
-  {  "blend_pin_light",                               22 },  
-  {  "blend_hard_mix",                                23 },  
-  {  "blend_difference",                              24 },  
-  {  "blend_exclusion",                               25 },  
-  {  "blend_reflect",                                 26 },  
-  {  "blend_glow",                                    27 },  
-  {  "blend_freeze",                                  28 },  
-  {  "blend_heat",                                    29 },  
-  {  "blend_negation",                                30 },  
-  {  "blend_phoenix",                                 31 },  
-  {  "blend_stamp",                                   32 },  
-  {  "blend_xor",                                     33 },  
-  {  "blend_and",                                     34 },  
-  {  "blend_or",                                      35 },  
-  {  "blend_red",                                     36 },  
-  {  "blend_green",                                   37 },  
-  {  "blend_blue",                                    38 },  
-  {  "blend_yellow",                                  39 },  
-  {  "blend_cyan",                                    40 },  
-  {  "blend_magenta",                                 41 },  
-  {  "blend_green_limited_by_red",                    42 },  
-  {  "blend_green_limited_by_blue",                   43 },  
-  {  "blend_green_limited_by_average_of_red_and_blue",44 },  
-  {  "blend_blue_limited_by_red",                     45 },  
-  {  "blend_blue_limited_by_green",                   46 },  
-  {  "blend_blue_limited_by_average_of_red_and_green",47 },  
-  {  "blend_red_limited_by_green",                    48 },  
-  {  "blend_red_limited_by_blue",                     49 },  
-  {  "blend_red_limited_by_average_of_green_and_blue",50 },  
-  {  "blend_red_only",                                51 },  
-  {  "blend_green_only",                              52 },  
-  {  "blend_blue_only",                               53 },  
-  {  "blend_discard_red",                             54 },  
-  {  "blend_discard_green",                           55 },  
-  {  "blend_discard_blue",                            56 },  
-  {  "blend_all_red",                                 57 },  
-  {  "blend_all_green",                               58 },  
-  {  "blend_all_blue",                                59 },  
-  {  "blend_hue_mode",                                60 },  
-  {  "blend_saturation_mode",                         61 },  
-  {  "blend_colour_mode",                             62 },  
-  {  "blend_luminance_mode",                          63 },  
-  {  "blend_hsl",                                     64 },
+#define LUA_BLEND_MODE(number, name, ...) { name, number },
+  MUSHCLIENT_BLEND_MODES (LUA_BLEND_MODE, LUA_BLEND_MODE, LUA_BLEND_MODE, LUA_BLEND_MODE)
+#undef LUA_BLEND_MODE
 
 
   // WindowAddHotspot cursor modes

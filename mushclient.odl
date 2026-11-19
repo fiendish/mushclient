@@ -428,7 +428,7 @@ library MUSHclient
 			[id(394)] long DatabaseReset(BSTR Name);
 			[id(395)] void FlashIcon();
 			[id(396)] long WindowHotspotTooltip(BSTR Name, BSTR HotspotId, BSTR TooltipText);
-			[id(397)] long WindowDrawImageAlpha(BSTR Name, BSTR ImageId, long Left, long Top, long Right, long Bottom, double Opacity, long SrcLeft, long SrcTop);
+			[id(397)] long WindowDrawImageAlpha(BSTR Name, BSTR ImageId, long Left, long Top, long Right, long Bottom, double Opacity, long SrcLeft, long SrcTop, [optional] VARIANT SrcRight, [optional] VARIANT SrcBottom);
 			[id(398)] long WindowGetImageAlpha(BSTR Name, BSTR ImageId, long Left, long Top, long Right, long Bottom, long SrcLeft, long SrcTop);
 			[id(399)] long WindowScrollwheelHandler(BSTR Name, BSTR HotspotId, BSTR MoveCallback);
 			[id(400)] long WindowResize(BSTR Name, long Width, long Height, long BackgroundColour);

@@ -1442,14 +1442,14 @@ public:
 
   // background image
   CString m_strBackgroundImageName;
-  CBitmap m_BackgroundBitmap;
+  std::unique_ptr<CBitmap> m_BackgroundBitmap;
   int  m_iBackgroundMode;
 
   COLORREF m_iBackgroundColour;
 
   // foreground image
   CString m_strForegroundImageName;
-  CBitmap m_ForegroundBitmap;
+  std::unique_ptr<CBitmap> m_ForegroundBitmap;
   int  m_iForegroundMode;
 
   // all our cute little miniwindows
@@ -2420,7 +2420,7 @@ public:
                              LPCTSTR ImageId, 
                              unsigned char * Buffer, 
                              const size_t Length,
-                             const bool bAlpha);
+                             const bool swap_alpha_endianness);
 
   void EditFileWithEditor (CString strName);
 
@@ -2986,7 +2986,7 @@ public:
 	afx_msg long DatabaseReset(LPCTSTR Name);
 	afx_msg void FlashIcon();
 	afx_msg long WindowHotspotTooltip(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR TooltipText);
-	afx_msg long WindowDrawImageAlpha(LPCTSTR Name, LPCTSTR ImageId, long Left, long Top, long Right, long Bottom, double Opacity, long SrcLeft, long SrcTop);
+	afx_msg long WindowDrawImageAlpha(LPCTSTR Name, LPCTSTR ImageId, long Left, long Top, long Right, long Bottom, double Opacity, long SrcLeft, long SrcTop, const VARIANT & SrcRight, const VARIANT & SrcBottom);
 	afx_msg long WindowGetImageAlpha(LPCTSTR Name, LPCTSTR ImageId, long Left, long Top, long Right, long Bottom, long SrcLeft, long SrcTop);
 	afx_msg long WindowScrollwheelHandler(LPCTSTR Name, LPCTSTR HotspotId, LPCTSTR MoveCallback);
 	afx_msg long WindowResize(LPCTSTR Name, long Width, long Height, long BackgroundColour);
